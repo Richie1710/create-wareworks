@@ -16,6 +16,7 @@ import dev.wareworks.content.crane.CraneTrafficClaim;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.KeeperRule;
+import dev.wareworks.content.station.SelectorHold;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.BranchGeometry;
 import dev.wareworks.core.address.Heading;
@@ -120,6 +121,21 @@ final class ControllerPersistence {
     static final String CRANES_TAG = "Cranes";
     /** The Warehouse Optimizer orders, running and finished (issue #46, ADR-079). */
     static final String OPTIMIZER_ORDERS_TAG = "OptimizerOrders";
+    /**
+     * Recipe Selector holds armed while their station was not loaded (ADR-085, I5, review fix); written only while
+     * there is one.
+     */
+    static final String SELECTOR_HOLDS_TAG = "SelectorHolds";
+    private static final String HOLD = "Hold";
+    /**
+     * What was last seen of each Recipe Selector station: its return input and its selection (ADR-085, I7, re-review
+     * fix); written only while the aisle has a selector station.
+     */
+    static final String SELECTOR_LAST_SEEN_TAG = "SelectorLastSeen";
+    private static final String RETURN_INPUT = "Return";
+    private static final String SELECTION = "Selection";
+    /** Bound on the pending holds one save may contain: one per production station at most. */
+    private static final int MAX_SAVED_HOLDS = 256;
     private static final String OPTIMIZER_RACK = "Rack";
     private static final String TRIPS = "Trips";
     private static final String MOVED = "Moved";
@@ -170,6 +186,10 @@ final class ControllerPersistence {
      * ({@code ProductionOrder#parentLine}).
      */
     private static final String PARENT = "Parent";
+    /** A Recipe Selector order's return input (ADR-085, {@code ProductionOrder#selectorReturn}); only when it has one. */
+    private static final String SELECTOR_RETURN = "SelectorReturn";
+    /** A Recipe Selector order's runs ({@code ProductionOrder#selectorRuns}); only for a bound order. */
+    private static final String SELECTOR_RUNS = "SelectorRuns";
     /** Bound on the production orders one save may contain, whatever {@code maxProductionOrders} allows. */
     private static final int MAX_SAVED_ORDERS = 256;
     private static final String REQUESTED = "Requested";
@@ -662,6 +682,12 @@ final class ControllerPersistence {
                 // Only for a step of a plan, for the same reason: every order that is not one saves exactly what it
                 // always saved (M20).
                 order.parentLine().ifPresent(parent -> entry.putUUID(PARENT, parent));
+                // Only for a Recipe Selector order (ADR-085, design §5.4): every other order saves what it always saved,
+                // and an older save reads back as "not bound".
+                if (order.selectorBound()) {
+                    entry.putInt(SELECTOR_RUNS, order.selectorRuns());
+                    order.selectorReturn().ifPresent(input -> entry.put(SELECTOR_RETURN, writeRack(input)));
+                }
                 entry.put(LINES, lines);
                 list.add(entry);
             } catch (RuntimeException e) {
@@ -725,9 +751,14 @@ final class ControllerPersistence {
         // A Parent that names no line of any restored order is not repaired here: reading stays a pure decode, and
         // ProductionOrders#validatePlans ends such a step once, after the whole list is back.
         Optional<UUID> parent = entry.hasUUID(PARENT) ? Optional.of(entry.getUUID(PARENT)) : Optional.empty();
+        // No SelectorRuns means "not bound to a Recipe Selector", which is what every save before ADR-085 says. A bound
+        // order without a readable return input waits for one, as it did before the input was bound.
+        int selectorRuns = Math.max(0, entry.getInt(SELECTOR_RUNS));
+        Optional<RackPosition> selectorReturn = entry.contains(SELECTOR_RETURN, Tag.TAG_COMPOUND)
+                ? readRack(entry.getCompound(SELECTOR_RETURN)) : Optional.empty();
         return Optional.of(new ProductionOrder<>(entry.getUUID(ID), station.get(), result.get(), resultAmount, lines,
                 state, 0L, Math.max(0L, entry.getLong(PRODUCED)), Math.max(0L, entry.getLong(STOCK_SEEN)), request,
-                promised, entry.getBoolean(RESTOCK), parent));
+                promised, entry.getBoolean(RESTOCK), parent, selectorReturn, selectorRuns));
     }
 
     /**
@@ -800,6 +831,111 @@ final class ControllerPersistence {
             }
         }
         return perKeeper;
+    }
+
+    /**
+     * Writes the Recipe Selector holds that wait for their station to load (ADR-085, I5):
+     * {@code SelectorHolds: [ { Station: <rack>, Hold: <SelectorHold> } ]}, and nothing at all while there is none, so
+     * every other controller saves what it did. Never throws; an entry that cannot be written is skipped.
+     */
+    static void writeSelectorHolds(CompoundTag tag, Map<RackPosition, SelectorHold> holds,
+                                   HolderLookup.Provider registries) {
+        if (holds.isEmpty())
+            return;
+        ListTag list = new ListTag();
+        for (Map.Entry<RackPosition, SelectorHold> entry : holds.entrySet()) {
+            if (list.size() >= MAX_SAVED_HOLDS)
+                break;
+            try {
+                CompoundTag holdTag = new CompoundTag();
+                holdTag.put(STATION, writeRack(entry.getKey()));
+                holdTag.put(HOLD, entry.getValue().save(registries));
+                list.add(holdTag);
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Could not save the Recipe Selector hold of the station at {}", entry.getKey(), e);
+            }
+        }
+        tag.put(SELECTOR_HOLDS_TAG, list);
+    }
+
+    /**
+     * Reads the holds written by {@link #writeSelectorHolds}. Never throws; an entry whose station or hold cannot be
+     * read is skipped ({@link SelectorHold#load} already reads what it can as a hold), bounded by
+     * {@value #MAX_SAVED_HOLDS}.
+     */
+    static Map<RackPosition, SelectorHold> readSelectorHolds(CompoundTag tag, HolderLookup.Provider registries) {
+        Map<RackPosition, SelectorHold> holds = new LinkedHashMap<>();
+        ListTag list = tag.getList(SELECTOR_HOLDS_TAG, Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size() && holds.size() < MAX_SAVED_HOLDS; i++) {
+            CompoundTag holdTag = list.getCompound(i);
+            try {
+                Optional<RackPosition> station = readRack(holdTag.getCompound(STATION));
+                Optional<SelectorHold> hold = SelectorHold.load(holdTag.getCompound(HOLD), registries);
+                if (station.isPresent() && hold.isPresent())
+                    holds.putIfAbsent(station.get(), hold.get());
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Skipping unreadable Recipe Selector hold {}", holdTag, e);
+            }
+        }
+        return holds;
+    }
+
+    /**
+     * Writes what was last seen of each Recipe Selector station (ADR-085, I7):
+     * {@code SelectorLastSeen: [ { Station: <rack>, Return: <rack>?, Selection: <ItemKey>? } ]}, and nothing at all
+     * while there is none. Never throws; an entry that cannot be written is skipped, and an unencodable selection is
+     * left out (the return input then stores nothing until the station is seen again, the safe direction).
+     */
+    static void writeSelectorLastSeen(CompoundTag tag, Map<RackPosition, SelectorStations.LastSeen> seen,
+                                      HolderLookup.Provider registries) {
+        if (seen.isEmpty())
+            return;
+        ListTag list = new ListTag();
+        for (Map.Entry<RackPosition, SelectorStations.LastSeen> entry : seen.entrySet()) {
+            if (list.size() >= MAX_SAVED_HOLDS)
+                break;
+            try {
+                CompoundTag seenTag = new CompoundTag();
+                seenTag.put(STATION, writeRack(entry.getKey()));
+                entry.getValue().returnRack().ifPresent(rack -> seenTag.put(RETURN_INPUT, writeRack(rack)));
+                entry.getValue().selection().ifPresent(key -> {
+                    Tag keyTag = key.save(registries);
+                    if (!(keyTag instanceof CompoundTag compound && compound.isEmpty()))
+                        seenTag.put(SELECTION, keyTag);
+                });
+                list.add(seenTag);
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Could not save what was last seen of the Recipe Selector station at {}",
+                        entry.getKey(), e);
+            }
+        }
+        tag.put(SELECTOR_LAST_SEEN_TAG, list);
+    }
+
+    /**
+     * Reads what {@link #writeSelectorLastSeen} wrote. Never throws; an entry whose station cannot be read is skipped,
+     * bounded by {@value #MAX_SAVED_HOLDS}.
+     */
+    static Map<RackPosition, SelectorStations.LastSeen> readSelectorLastSeen(CompoundTag tag,
+                                                                             HolderLookup.Provider registries) {
+        Map<RackPosition, SelectorStations.LastSeen> seen = new LinkedHashMap<>();
+        ListTag list = tag.getList(SELECTOR_LAST_SEEN_TAG, Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size() && seen.size() < MAX_SAVED_HOLDS; i++) {
+            CompoundTag seenTag = list.getCompound(i);
+            try {
+                Optional<RackPosition> station = readRack(seenTag.getCompound(STATION));
+                if (station.isEmpty())
+                    continue;
+                Optional<RackPosition> returnRack = seenTag.contains(RETURN_INPUT, Tag.TAG_COMPOUND)
+                        ? readRack(seenTag.getCompound(RETURN_INPUT)) : Optional.empty();
+                Optional<ItemKey> selection = seenTag.contains(SELECTION)
+                        ? ItemKey.load(registries, seenTag.get(SELECTION)) : Optional.empty();
+                seen.putIfAbsent(station.get(), new SelectorStations.LastSeen(returnRack, selection));
+            } catch (RuntimeException e) {
+                Wareworks.LOGGER.warn("Skipping unreadable Recipe Selector station memory {}", seenTag, e);
+            }
+        }
+        return seen;
     }
 
     /**

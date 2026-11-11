@@ -96,8 +96,11 @@ public final class PonderVisualScenario implements VisualScenario {
             // M31 (issue #21) adds asking for fluid, which the terminal shows beside both fluid bays.
             new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 6),
             // Issue #34 adds the Crafter Feeder scene, which the station shows as well: the feeder is its machine.
-            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 4),
+            // ADR-085 adds both Recipe Selector scenes, which the station shows as well: they set its machine.
+            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 6),
             new Subject("feeder", WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, 1),
+            new Subject("selector", WareworksBlocks.RECIPE_SELECTOR, 1),
+            new Subject("ender-selector", WareworksBlocks.ENDER_RECIPE_SELECTOR, 1),
             new Subject("keeper", WareworksBlocks.WAREHOUSE_STOCK_KEEPER, 3),
             // M28 (issue #20): all three tiers carry the same three scenes, and all three are toured rather than only
             // the wooden one. The tier is the block, so three registrations can be lost independently — and the tour

@@ -34,6 +34,7 @@ class StockRulePauseTest {
     void onlyAnAutomaticOrdersPauseBelongsToARule() {
         assertTrue(Cause.TIMED_OUT.isRuleBorn());
         assertTrue(Cause.CANCELLED.isRuleBorn());
+        assertTrue(Cause.DIVERTED.isRuleBorn(), "only an automatic order is paused for a diverted product");
         assertFalse(Cause.ORDER_TIMED_OUT.isRuleBorn());
         assertFalse(Cause.ORDER_CANCELLED.isRuleBorn());
         assertTrue(StockRulePause.timedOut(3L).isRuleBorn());
@@ -49,7 +50,7 @@ class StockRulePauseTest {
             assertTrue(keys.add(cause.langKey()), cause + " has a text of its own");
             assertEquals(Optional.of(cause), Cause.byName(cause.name()), "the save name reads back");
         }
-        assertEquals(4, keys.size(), "four kinds of loss, no more");
+        assertEquals(5, keys.size(), "five kinds of stop, no more");
         assertEquals(Optional.empty(), Cause.byName("PLAN_TIMED_OUT"), "an unknown name reads as nothing");
         assertEquals(Optional.empty(), Cause.byName(null));
     }

@@ -14,6 +14,7 @@ import dev.wareworks.client.render.WarehouseInterfaceRenderer;
 import dev.wareworks.client.render.WarehouseOutputRenderer;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.crane.StackerCraneBlockEntity;
+import dev.wareworks.content.selector.RecipeSelectorBlockEntity;
 import dev.wareworks.content.requester.SchematicannonRequesterBlockEntity;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlockEntity;
 import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
@@ -197,6 +198,15 @@ public final class WareworksBlockEntityTypes {
             .blockEntity("schematicannon_requester", SchematicannonRequesterBlockEntity::new)
             .validBlocks(WareworksBlocks.SCHEMATICANNON_REQUESTER)
             .renderer(() -> SchematicannonRequesterRenderer::new)
+            .register();
+
+    /**
+     * Recipe Selector and Ender Recipe Selector (ADR-085): one type for both tiers; no renderer (the machine's own value box shows what it is set to), no tick and no
+     * capability.
+     */
+    public static final BlockEntityEntry<RecipeSelectorBlockEntity> RECIPE_SELECTOR = REGISTRATE
+            .blockEntity("recipe_selector", RecipeSelectorBlockEntity::new)
+            .validBlocks(WareworksBlocks.RECIPE_SELECTOR, WareworksBlocks.ENDER_RECIPE_SELECTOR)
             .register();
 
     private WareworksBlockEntityTypes() {

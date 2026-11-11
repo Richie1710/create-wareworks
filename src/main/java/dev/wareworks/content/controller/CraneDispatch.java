@@ -935,6 +935,9 @@ final class CraneDispatch {
                 // A stock rule's maximum decides even earlier, per item type instead of per location: one lookup that
                 // costs nothing while no rule governs the key (M15, issue #3).
                 .storeHeadroom(controller::storeHeadroom)
+                // Recipe Selector quarantine (ADR-085, I7): a selector station's own return input stores only what the
+                // station makes; anything else stays in it for the player to see. Free without a selector station.
+                .storeHeld(controller::selectorStoreHeld)
                 .insertRefused((rack, key) -> insertRefusals.isRefused(rack, key, now))
                 .extractRefused((rack, key) -> extractRefusals.isRefused(rack, key, now))
                 .liveExtract((rack, key, max) -> simulate(level, layout, rack, true, key, max, now))

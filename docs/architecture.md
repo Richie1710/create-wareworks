@@ -209,7 +209,9 @@ dev.wareworks
 │   │                          the crafter feeder (issue #34, ADR-067): CrafterGrid (pattern cell i is Crafter slot
 │   │                          i; runs in a grid), CrafterFeedPlan (which slot an order belongs to, the batch),
 │   │                          CrafterPatternCheck (the recipe check's verdict, by ordinal on the wire), FeederCycle
-│   │                          (the pulse: one rising edge per run, the pace), FeederStatus (what the goggles say)
+│   │                          (the pulse: one rising edge per run, the pace), FeederStatus (what the goggles say);
+│   │                          the Recipe Selector's gate (ADR-085): SelectorGate (which orders of a selector station
+│   │                          may fetch, why the others wait, whose deadline is paused), SelectorMode, SelectorWait
 │   ├── port                   the policy of one warehouse port (M17, issue #12, ADR-029): PortDirection (request /
 │   │                          accept, derived from the sign of the rank; since M18 also collect, from one sentinel
 │   │                          rank), PortRedstone (on a pulse / while powered /
@@ -387,7 +389,11 @@ dev.wareworks
 │   │                          CraneMember (one crane of a warehouse with several: number, dock, dock site, stranded),
 │   │                          CraneTraffic (the warehouse's crane list, track graph and ledger, the per-tick pass at
 │   │                          first access), CraneCounts / CraneRoster / CraneRosters (what the goggles, the terminal
-│   │                          and the displays say about every crane) (M33, issue #14, ADR-075)
+│   │                          and the displays say about every crane) (M33, issue #14, ADR-075);
+│   │                          SelectorStations (the controller side of the Recipe Selector, ADR-085: the views of the
+│   │                          selector stations, the gate per station and tick, arming and read-back, the quarantine
+│   │                          of the return inputs, the pending holds and what was last seen of an unloaded station,
+│   │                          both saved as SelectorHolds and SelectorLastSeen)
 │   ├── crane                  StackerCraneBlock / BlockEntity, WarehouseRailBlock (since M21 four derived cosmetic
 │   │   │                      connection booleans and a CLOSED state the topology really reads; the wrench toggles
 │   │   │                      CLOSED instead of turning the now cosmetic AXIS), RailNetworkScan (M2 as RailScan,
@@ -536,6 +542,11 @@ dev.wareworks
 │   │                          door tables), ComputerItemSelector (the item argument and its stable SHA-1 fingerprint),
 │   │                          ComputerReplies (the reply words: lowercase enum names) and ComputerArgumentException
 │   │                          (a Lua error's message)
+│   ├── selector               the Recipe Selector (ADR-085): RecipeSelectorBlock / BlockEntity / BlockItem (both
+│   │                          tiers), SelectorMachine (the saw or basin and its filter), LocalSelectorLink,
+│   │                          SelectorLink, SelectorRecipeCheck (the pattern check), RecipeSlip (the slip on a box),
+│   │                          SelectorPackagerItemHandler / SlipVeto / EnderSelectorHooks (the veto at the factory's
+│   │                          Packager), RecipeSelectorStatus, RecipeSelectorGoggleSummary, SelectorTexts
 │   └── display                the seven Create display link sources a player may read off a Wareworks block
 │                              (M14, ADR-026): WarehouseDisplays (shared plumbing: the controller behind a source
 │                              block, the row limit), AisleSummaryDisplaySource, StockListDisplaySource,
@@ -611,9 +622,11 @@ dev.wareworks
 │   │                          payload belongs to, also while a recipe viewer's screen covers it, ADR-063);
 │   │                          WarehouseOptimizerScreen (the item rows with Best, Below and Move, the status pips,
 │   │                          Optimise and the cancel mark), ClientOptimizers, OptimizerScreenUpdates (issue #46,
-│   │                          ADR-079)
+│   │                          ADR-079); OrderRowWidths (how a terminal order row splits its width between the item
+│   │                          name and the state, so a Recipe Selector wait does not hide the name, ADR-085)
 │   ├── handtruck              HandTruckClientEvents (issue #37, ADR-070: the slow walk and the sprint cap, applied to
 │   │                          the movement input like sneaking)
+│   ├── selector               RecipeSlipTooltip (a package's recipe slip in its tooltip, ADR-085)
 │   ├── input                  StorageFilterPressGuard (issue #30, ADR-028: only the first use of a press sets a
 │   │                          store filter, so a held button that slides onto a slot sets none, and while the
 │   │                          button that set one stays down, its repeats do nothing on any storage filter slot)
@@ -965,6 +978,16 @@ dev.wareworks
 │                              a List Filter configured in Create's own screen keeping the dark oak out, kinds mixed in
 │                              whole runs and laid in segments by a Crafter Feeder, a chain made from a log, the
 │                              refusal, the 320 x 240 floor, a census around every act, English and German, ADR-082),
+│                              RoboBeeVisualScenario (production in two remote factories reached by Create Mobile
+│                              Packages' Robo Bees, by reflection only) with RoboBeeLedger (every bee trip, sums per
+│                              address), MultiSiteCensus (an item census over several sites, the player and the boxes
+│                              in flight) and ServerTickWatch (a per-tick server check that survives a rejoin),
+│                              SelectorVisualScenario (a saw line and a Basin under a Mixer, each behind a Recipe
+│                              Selector: stairs, slabs and walls back to back, a hand change set back, a filter item
+│                              left alone, a cancel trimmed, a quarantine taken out and released, a rejoin mid run,
+│                              English and German, ADR-085) and SelectorRemoteVisualScenario (one remote saw fed by
+│                              Robo Bees through an Ender Recipe Selector: three products back to back by recipe slip,
+│                              a rejoin with boxes in flight, paused deadlines, ADR-085),
 │                              CameraView, VisualShotIndex, VisualWatchdog, VisualTestException; inactive unless the
 │                              system property wareworks.visualTest is set, referenced only from WareworksClient
 └── util                       WareworksLang (runtime LangBuilder helper for goggle/tooltip lines),
@@ -6212,6 +6235,9 @@ that teaches the whole of it. With this milestone issue #18 is done: M26 built t
   `PackageItem.setOrder` or `addAddress`, no `attemptToSend`, `activate` or `updateSignAddress`, and no Create
   logistics network: the player's own redstone fires the Packager, exactly as in ADR-040. A stored Create package
   that is retrieved to a door is forwarded by the Packager as itself, with its own order data, and only re-addressed.
+  *(Amended by ADR-085, M36: a production station in slip mode writes its own recipe slip into `custom_data` of a
+  box Create has just packed, and the Ender Recipe Selector may refuse a box; both exceptions are pinned to one file
+  each by `PackageOrderBoundaryTest`, and everything else in this rule stands.)*
 * **D4. Two layers of validation, and the controller's comes first (G-dest).** `WarehouseControllerBlockEntity` asks
   `isRequestDestination` (until now `isOutputStation`), which adds one rule to the same single block entity lookup: a
   member that is a `WarehouseOutputBlockEntity` must request. So
@@ -8875,6 +8901,146 @@ overload of `spawn`; `RackBayBlockEntity#storeFilterAllows`; `HandTruckItem#pall
 players, one load per player, protection, death, tipping over, the slot guard, save and wire with a forged count, the
 size budget, the penalty, bay and buffer handlers). Ponder: `hand_truck` gains a closing pallet beat (`text_6`,
 `text_7`). Network version 26 (with ADR-083).
+
+### ADR-085 — A Recipe Selector sets a saw's or basin's recipe per order; far factories get the recipe as a slip in the package (amends ADR-065 D3)
+
+*Context:* one Mechanical Saw cuts every stonecutting recipe of its input in turn (`SawBlockEntity#start` cycles the
+candidates), so a station with patterns for deepslate tile stairs, slabs and walls gets a mix back. A player fixes it
+by setting the saw's filter by hand; the warehouse cannot, and a factory 100 blocks away fed by Robo Bees, trains or
+frogports even less. The owner's decisions of 2026-11-11 are binding: the recipe travels as a slip in the package
+(not a wireless pair), the far tier is an Ender block linked to the station, every selector station has a return input
+of its own with a quarantine, a far factory is probed while untrusted, and a hold stops the whole station until the
+player confirms it.
+
+*Decision:*
+
+* **D1 Two tiers, one block class.** `content.selector.RecipeSelectorBlock` / `RecipeSelectorBlockEntity` with a
+  tier: the **Recipe Selector** (local, placed against a Mechanical Saw facing up or a Basin under a Mixer or Press,
+  linked to its station by a sneak-click, at most `selector.localRange` blocks away) and the **Ender Recipe Selector**
+  (the machine is linked first, at most `selector.machineRange` away, then the station, which switches it to slip mode,
+  then the return input; it is sneak-placed on the factory's unpacking Packager). One selector or slip mode per
+  station, one selector per machine (I8).
+* **D2 The gate sits at supply, not at the hand-over.** `core.production.SelectorGate#decide` answers per station and
+  tick which open orders may fetch (`supplyNeeds`), with a run cap for a probe, why the others wait (`SelectorWait`,
+  shown in the terminal, the station screen and the goggles) and whose deadline is paused. Nothing is ever taken back
+  from a machine; the line simply gets nothing it may not process.
+* **D3 Switch only when drained; complete only on arrival; whole runs.** The line's result changes only when no order
+  of another result has handed something over, the buffer is empty, no crane trip is inbound, no Packager of the
+  station holds or queues a box, the machine is idle and its filter reads back (local), there is no hold and the return
+  input holds nothing unexpected. A selector order completes only by arrivals out of its station's own return input
+  (`ProductionOrders#observeStored` with the source), and `resultAmount` is the full yield of whole runs (the pattern
+  check, D14). COMPLETE therefore means every handed-over ingredient has been through the machine.
+* **D4 FIFO between results, engaged orders sticky.** Orders of the current result run together; another result waits
+  `BEHIND` the head in creation order. An order that has handed something over keeps the line until it is done; a
+  station that registers again mid-run goes back to the oldest engaged result (gate step 0).
+* **D5 Fail closed, mutual links, no station id.** A missing, unloaded or unreadable selector, machine, Packager or
+  return input fetches nothing (`SELECTOR_NOT_LOADED`, `NO_MACHINE`, ...). The selector and the station each store the
+  other's position; a link that does not point back is no link.
+* **D6 Controller-push arming.** The controller's selector pass (`content.controller.SelectorStations`, run at the
+  dispatch cadence) arms the local selector for the target and reads the filter back; the pending selection is written
+  before `FilteringBehaviour#setFilter`, a change of the filter by anybody else is set back in the same tick (re-entry
+  guard, a cap per tick), there is one writer per filter, a filter **item** (List, Attribute, Package Filter) is never
+  overwritten (Create does not refund it) and nothing is restored when a selector is removed.
+* **D7 The slip is data on the box.** `content.selector.RecipeSlip` in `minecraft:custom_data` of the package: the
+  result, the origin station as a `GlobalPos` and a sequence number from the game time of the line's last switch.
+  It is stamped in Create's `notifyUpdate()` of the sending Packager, the one moment a box exists and has not moved;
+  `PACKAGE_ORDER_CONTEXT` was rejected, because Create's own logistics rewrite it. Linked and Repackager packagers are
+  not stamped. **This amends ADR-065 D3 with exactly two exceptions:** a station in slip mode writes its own slip into
+  `custom_data` of a box Create has just packed (stamped only in `WarehouseProductionBlock`, `custom_data` touched only
+  in `RecipeSlip`), and the Ender selector may refuse a box, never change one (its hand path asks Create's read-only
+  `unwrapBox(copy, true)` in `SlipVeto`, never a real unpack). Still never: Create's order components, addresses,
+  `PackageItem` helpers, writing the Packager's fields, `attemptToSend`. `PackageOrderBoundaryTest` pins both
+  exceptions to those files.
+* **D8 The Ender selector vetoes at the Packager.** It sits on the unpacking Packager (geometry decides which machine
+  it serves) and replaces the Packager's item capability at `HIGH` priority with
+  `SelectorPackagerItemHandler` (a `PackagerItemHandler` subclass), plus a `RightClickBlock` listener for the hand
+  path. A box is accepted only when its slip names the selector's origin, its sequence is not older than the last one,
+  the machine can make it, and, for another result, the saw, the unpack target and the feed are empty; the filter is set
+  inside `insertItem`, before `unwrapBox`. A refused box stays where it was (port, bee, hand). Rejected: Create's
+  `UnpackingHandler` (runs after the box is opened), observing after the unpack (too late), a mixin (not needed).
+* **D9 Return input and quarantine.** Every selector station binds one Warehouse Input of its aisle as its return
+  input (one station per input; an unloaded station's last seen input stays reserved). It stores only the station's
+  selection and the results of its engaged orders (`PlannerInput#storeHeld`); anything else stays in the input, holds
+  the station and is taken out with an empty-hand click on the input. What was last seen of each selector station
+  (return input and selection) is saved with the controller and carried through a remap, so the guard holds while the
+  station is unloaded, across a restart.
+* **D10 Holds stop the station.** An order that ends after handing ingredients over without completing, or an
+  unexpected return, arms a `SelectorHold`: nothing fetches, nothing switches, no deadline runs, the selection is kept.
+  Only the player releases it (empty-hand sneak-click on the station or Resume), and only once the buffer, the return
+  input and the Packagers are clear. A hold armed while the station was unloaded waits in the controller
+  (`SelectorHolds`, saved, remapped). Switching the selector off is refused while a controller can release the hold.
+* **D11 Trim on cancel.** Cancelling an engaged selector order keeps it open with what was handed over in whole runs
+  (`ProductionOrder#trimmedToDelivered`), so the line drains and the switch waits for it; an order with no whole run in
+  the line is cancelled.
+* **D12 The probe.** In slip mode the head order after a switch fetches one run while the line is untrusted
+  (`selector.remoteProbe`: `UNTRUSTED`, `EVERY_SWITCH`, `OFF`); the right product back through the return input makes
+  the line trusted. A factory without a working selector costs one run of junk, which the quarantine keeps out.
+* **D13 Deadlines.** Queued and held orders do not time out (`ProductionOrders#timeOut` with the gate's paused set);
+  an order that leaves the pause starts over with a whole deadline. Orders of an unloaded station are paused too.
+* **D14 Pattern check.** `content.selector.SelectorRecipeCheck` checks each pattern against the machine's real recipes
+  (one output, no chance outputs, no fluids, the yield in whole runs, Create's `allowStonecuttingOnSaw` and the
+  automation filter per machine); an ambiguous or unmakeable pattern is refused for selector orders. The boundary tests
+  pin the Create recipe shapes it relies on.
+* **D15 Limits** (`warehouse-system.md` §3.5.9): see *Limitations accepted*.
+* **Diverted products** (re-review fix): a product that comes back through the return input and goes on to a diversion
+  or an overflow port completes its selector order, so the line may switch; the request it was made for is reduced by
+  it, and a Stock Keeper rule's own order pauses its rule (`StockRulePause.Cause.DIVERTED`), as a timed-out refill did
+  before (M17, ADR-027).
+
+*Decided while building* (where the implementation differs from the design or fills a gap in it):
+
+* **Binding.** An order is selector-bound when it has selector runs (`selectorRuns > 0`), not when it has a return
+  input: orders created before the input is bound are already gated and credited by nothing until it is filled in. The
+  station keeps its return input as a world `BlockPos`, the orders as a `RackPosition` (remapped with the rest), because
+  a warehouse rebuild renames rack positions but not blocks.
+* **Cancel and deadlines.** A trimmed order's deadline is never earlier than before; an order with no whole run in the
+  line is cancelled (its lost ingredients arm the hold). A removed station's selector orders end outright
+  (`cancelOutright`), they are not trimmed. A finished order that handed nothing over is not engaged.
+* **Arming.** A filter found out of step with the selection while the machine is busy (after a crash) stops the lane
+  like an arm in progress, so no ingredient goes into a machine set to something else; a busy machine otherwise only
+  delays a switch. Placement against the machine's top face is refused. A station with a Crafter Feeder is refused
+  either tier, and an Ender item on a station with a local selector links but changes nothing.
+* **Pattern check.** A pattern with List or Attribute Filter cells (ADR-082) is refused at a selector station, and
+  sequenced-assembly cutting is no candidate. The candidates are cached per recipe manager, machine kind and Create's
+  server `Options`, so a `/reload` or a config change is seen at once. The automation filter follows each machine
+  (Create's saw filters every recipe, the Mixer and the Press only the crafting recipes they borrow).
+* **At the factory.** `canMake` checks that every item kind in a box is an ingredient of a usable recipe, not the
+  counts (the station's pattern check did). The unpack target counts as empty when it has no item handler; it is read
+  with the Packager's facing as side, at most 256 slots. The selector's counters are updated where a box is accepted,
+  not on the Packager's `notifyUpdate`. A refusal is counted once per box and reason. The veto fails closed when the
+  selector has been removed and its chunk is unloaded, and asks the selector standing there now when it is loaded.
+* **Holds.** Any inventory touching a station Packager that holds a box with this station's origin refuses the release
+  (`REFUSED_PORT`), not only a package port. The quarantine is taken out by an empty-hand click on the input, which now
+  needs an empty main hand on both sides; the client answers every empty-hand click on an input with success (it has
+  no flag for a quarantine), so a block in the off hand is no longer placed against an input.
+* **Screens.** An order blocked by an earlier step of its own chain shows the chain's text, not a selector wait. A
+  terminal row that waits at a selector gives the item name priority over the wait text, which keeps at least 30 px;
+  the full wait is in the tooltip.
+
+*Alternatives rejected:* a wireless sender/receiver pair (owner), a station id (positions are enough and survive a
+copy), a timer that releases holds, restoring a machine's old filter when a selector is removed, several selectors per
+station, deferring a far switch until the factory confirms, receipt slips sent back by the factory.
+
+*Limitations accepted:* a change of result costs a full round trip for a far factory; results that come back anywhere
+but the return input never complete a selector order (they are stored, the order times out); a player who puts the
+very product of an open order into the station's own return input is credited; the feed path between the unpack
+target and the machine is not inspected beyond its first chest and chute; fluid recipes, Deployers and presses on belts
+are out of scope; the hooks read public `PackagerBlockEntity` fields that are not Create API (`heldBox`,
+`previouslyUnwrapped`, `animationTicks`, `queuedExitingPackages`, `CYCLE`), pinned by GameTests and noted in
+`docs/api/_gaps-and-corrections.md`; another mod that also overrides the Packager's item capability above `NORMAL`
+bypasses the veto, and so does a fresh capability lookup made while the Ender selector's chunk is unloaded (Create's
+own handler answers it; refusing there would block every Packager beside an unloaded chunk, which is why the selector
+must stand in the Packager's chunk); a diverted product completes its order although it never entered stock; two
+different but equal boxes refused back to back for the same reason count as one refusal.
+
+*Consequences:* `core.production` gains `SelectorGate`, `SelectorMode`, `SelectorWait` and the selector fields of
+`ProductionOrder` (`selectorReturn`, `selectorRuns`); `content.selector` is new; `content.controller.SelectorStations`
+runs the controller side; `client.selector.RecipeSlipTooltip` shows the slip. Persistence: the station's
+`RecipeSelector` tag, the orders' selector fields, the controller's `SelectorHolds` and `SelectorLastSeen` (only while
+there is one). Network version 27 (`ProductionSelectorPayload`, the selector views of the station screen, the order
+rows' wait). Tests: JUnit `SelectorGateTest`, `ProductionOrdersTest`, the boundary tests; GameTests
+`RecipeSelectorGameTests`, `RecipeSelectorBlockGameTests`, `RecipeSlipGameTests`,
+`WarehouseNetworkGameTests#networkremapkeepsselectorstate`; visual scenarios `selector` and `selector-remote`.
 
 ## Persistence & sync
 

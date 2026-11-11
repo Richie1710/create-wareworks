@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -872,5 +873,237 @@ class ProductionOrdersTest {
         assertTrue(orders.touch(UUID.randomUUID(), START, TIMEOUT).isEmpty(), "an unknown order is no change");
         orders.cancel(order.id(), START + 50L);
         assertTrue(orders.touch(order.id(), START + 90L, TIMEOUT).isEmpty(), "a finished order keeps its end");
+    }
+
+    // --- Recipe Selector (ADR-085) -------------------------------------------------------------------------------
+
+    private static final String RETURN = "return";
+
+    private ProductionOrder<String, String> selectorOrder(String station, int runs, String returnInput) {
+        return newOrder(station, runs).withSelector(returnInput, runs);
+    }
+
+    @Test
+    void ordersHeldBackByTheCallerDoNotTimeOutAndStartOverWhenReleased() {
+        ProductionOrder<String, String> held = newOrder(STATION_A, 1);
+        ProductionOrder<String, String> free = newOrder(STATION_B, 1);
+        plans.add(held);
+        plans.add(free);
+        long late = START + TIMEOUT + 10L;
+        assertEquals(List.of(free.id()), ids(plans.timeOut(late, TIMEOUT, Set.of(held.id()))));
+        assertTrue(plans.get(held.id()).orElseThrow().isOpen(), "a queue never times out");
+        assertTrue(plans.timeOut(late + 5L, TIMEOUT, Set.of(held.id(), UUID.randomUUID())).isEmpty());
+
+        assertTrue(plans.timeOut(late + 10L, TIMEOUT).isEmpty(), "released: not timed out in the same call");
+        assertEquals(late + 10L + TIMEOUT, plans.get(held.id()).orElseThrow().deadlineTick(), "a fresh deadline");
+        assertEquals(List.of(held.id()), ids(plans.timeOut(late + 10L + TIMEOUT, TIMEOUT)));
+    }
+
+    @Test
+    void aSelectorOrderIsCreditedOnlyFromItsOwnReturnInputAndFirst() {
+        ProductionOrder<String, String> restock = restocking(STATION_A, 2);
+        ProductionOrder<String, String> selector = selectorOrder(STATION_B, 1, RETURN);
+        ProductionOrder<String, String> noReturnYet = newOrder(STATION_B, 1).withSelector(null, 1);
+        plans.add(restock);
+        plans.add(selector);
+        plans.add(noReturnYet);
+        for (ProductionOrder<String, String> order : List.of(restock, selector, noReturnYet))
+            plans.deliver(order.lines().getFirst().id(), 1, START, TIMEOUT);
+
+        ProductionOrders.Observation<String, String> other = plans.observeStored(PLANK, 4L, START + 1L, TIMEOUT,
+                Optional.of("another input"));
+        assertEquals(List.of(restock.id()), ids(other.changed()), "another input never completes a selector order");
+        assertEquals(0L, plans.get(selector.id()).orElseThrow().produced());
+
+        ProductionOrders.Observation<String, String> own = plans.observeStored(PLANK, 4L, START + 2L, TIMEOUT,
+                Optional.of(RETURN));
+        assertEquals(List.of(selector.id()), ids(own.changed()), "offered before the older restock order");
+        assertEquals(ProductionOrderState.COMPLETE, plans.get(selector.id()).orElseThrow().state());
+
+        ProductionOrders.Observation<String, String> unknown = plans.observeStored(PLANK, 4L, START + 3L, TIMEOUT);
+        assertEquals(List.of(restock.id()), ids(unknown.changed()), "no source: never a selector order");
+        assertEquals(0L, plans.get(noReturnYet.id()).orElseThrow().produced(),
+                "an order without a return input is credited by nothing");
+        assertEquals(0L, plans.observeStored(PLANK, 4L, START + 4L, TIMEOUT, Optional.empty()).credited());
+    }
+
+    /**
+     * Review fix (conservation 1): a product that came back through a selector order's return input and went straight
+     * to an accepting port completes that order, and only that order: no ordinary or restock order counts a diverted
+     * item, and an arrival out of another input credits nothing.
+     */
+    @Test
+    void aDivertedArrivalCreditsOnlyTheSelectorOrderOfItsReturnInput() {
+        ProductionOrder<String, String> plain = newOrder(STATION_A, 1);
+        ProductionOrder<String, String> restock = restocking(STATION_A, 1);
+        ProductionOrder<String, String> selector = selectorOrder(STATION_B, 2, RETURN);
+        plans.add(plain);
+        plans.add(restock);
+        plans.add(selector);
+        for (ProductionOrder<String, String> order : List.of(plain, restock, selector))
+            plans.deliver(order.lines().getFirst().id(), 1, START, TIMEOUT);
+
+        assertTrue(plans.observeDiverted(PLANK, 8L, START + 1L, TIMEOUT, "another input").isEmpty(),
+                "out of another input: nobody");
+        ProductionOrders.Observation<String, String> own = plans.observeDiverted(PLANK, 12L, START + 2L, TIMEOUT,
+                RETURN);
+        assertEquals(List.of(selector.id()), ids(own.changed()));
+        assertEquals(8L, own.credited(), "what the selector order still waited for, nothing more");
+        assertEquals(ProductionOrderState.COMPLETE, plans.get(selector.id()).orElseThrow().state());
+        assertEquals(0L, plans.get(plain.id()).orElseThrow().produced(), "a diverted item is never stock");
+        assertEquals(0L, plans.get(restock.id()).orElseThrow().produced(), "and never a restock order's product");
+    }
+
+    @Test
+    void anArrivalNoSelectorOrderWantsFallsThroughToTheOthers() {
+        ProductionOrder<String, String> plain = newOrder(STATION_A, 1);
+        ProductionOrder<String, String> selector = selectorOrder(STATION_B, 1, RETURN);
+        plans.add(plain);
+        plans.add(selector);
+        plans.deliver(selector.lines().getFirst().id(), 1, START, TIMEOUT);
+        ProductionOrders.Observation<String, String> arrival = plans.observeStored(PLANK, 6L, START + 1L, TIMEOUT,
+                Optional.of(RETURN));
+        assertEquals(List.of(selector.id(), plain.id()), ids(arrival.changed()));
+        assertEquals(6L, arrival.credited());
+        assertEquals(2L, plans.get(plain.id()).orElseThrow().produced());
+    }
+
+    @Test
+    void cancellingAnEngagedSelectorOrderTrimsIt() {
+        ProductionOrder<String, String> order = selectorOrder(STATION_A, 4, RETURN);
+        plans.add(order);
+        plans.deliver(order.lines().getFirst().id(), 2, START, TIMEOUT);
+        ProductionOrder<String, String> trimmed = plans.cancel(order.id(), START + 10L, TIMEOUT).orElseThrow();
+        assertTrue(trimmed.isOpen(), "still open: the caller tells a trim from an ending by that");
+        assertEquals(8, trimmed.resultAmount(), "two whole runs of four planks");
+        assertEquals(2, trimmed.selectorRuns());
+        assertEquals(0L, plans.outstandingIngredient(LOG), "nothing more is fetched");
+        assertEquals(START + 10L + TIMEOUT, trimmed.deadlineTick());
+
+        plans.observeStored(PLANK, 8L, START + 20L, TIMEOUT, Optional.of(RETURN));
+        assertEquals(ProductionOrderState.COMPLETE, plans.get(order.id()).orElseThrow().state());
+    }
+
+    @Test
+    void aTrimmedOrderThatAlreadyMadeEnoughCompletesAtOnce() {
+        ProductionOrder<String, String> order = selectorOrder(STATION_A, 4, RETURN);
+        plans.add(order);
+        plans.deliver(order.lines().getFirst().id(), 2, START, TIMEOUT);
+        plans.observeStored(PLANK, 8L, START + 5L, TIMEOUT, Optional.of(RETURN));
+        assertTrue(plans.get(order.id()).orElseThrow().isOpen());
+        ProductionOrder<String, String> trimmed = plans.cancel(order.id(), START + 10L, TIMEOUT).orElseThrow();
+        assertEquals(ProductionOrderState.COMPLETE, trimmed.state());
+        assertEquals(START + 10L, trimmed.deadlineTick());
+    }
+
+    @Test
+    void cancellingASelectorOrderThatHandedNothingOverEndsIt() {
+        ProductionOrder<String, String> order = selectorOrder(STATION_A, 4, RETURN);
+        plans.add(order);
+        ProductionOrder<String, String> cancelled = plans.cancel(order.id(), START + 10L, TIMEOUT).orElseThrow();
+        assertEquals(ProductionOrderState.CANCELLED, cancelled.state());
+        assertFalse(cancelled.endedWithLostIngredients());
+    }
+
+    @Test
+    void theTwoArgumentCancelNeverShortensATrimmedDeadline() {
+        ProductionOrder<String, String> order = selectorOrder(STATION_A, 4, RETURN);
+        plans.add(order);
+        plans.deliver(order.lines().getFirst().id(), 1, START + 30L, TIMEOUT);
+        ProductionOrder<String, String> trimmed = plans.cancel(order.id(), START + 40L).orElseThrow();
+        assertTrue(trimmed.isOpen());
+        assertEquals(START + 30L + TIMEOUT, trimmed.deadlineTick());
+    }
+
+    @Test
+    void aRemovedStationEndsItsSelectorOrdersOutright() {
+        ProductionOrder<String, String> order = selectorOrder(STATION_A, 4, RETURN);
+        plans.add(order);
+        plans.deliver(order.lines().getFirst().id(), 2, START, TIMEOUT);
+        List<ProductionOrder<String, String>> cancelled = plans.cancelFor(STATION_A, START + 10L);
+        assertEquals(List.of(order.id()), ids(cancelled));
+        assertEquals(ProductionOrderState.CANCELLED, cancelled.getFirst().state());
+        assertTrue(cancelled.getFirst().endedWithLostIngredients());
+    }
+
+    @Test
+    void aFailingPlanTrimsAnEngagedSelectorAncestorAndLeavesItRunning() {
+        ProductionOrder<String, String> parent = selectorOrder(STATION_A, 2, RETURN);
+        ProductionOrder<String, String> child = stepOf(parent, 0, STATION_B, 1);
+        assertTrue(plans.addAll(List.of(child, parent)));
+        plans.deliver(parent.lines().getFirst().id(), 1, START, TIMEOUT);
+        plans.cancel(child.id(), START + 5L);
+
+        ProductionOrders.PlanFailure<String, String> failure = plans.failPlan(child.id(), START + 5L);
+        assertEquals(List.of(), failure.cancelled());
+        assertEquals(List.of(parent.id()), ids(failure.detached()));
+        ProductionOrder<String, String> trimmed = plans.get(parent.id()).orElseThrow();
+        assertTrue(trimmed.isOpen());
+        assertEquals(4, trimmed.resultAmount(), "the one run its log pays for");
+        assertEquals(0, trimmed.outstandingIngredients());
+    }
+
+    @Test
+    void bindingAReturnInputReachesTheSelectorOrdersThatHandedNothingOver() {
+        ProductionOrder<String, String> waiting = newOrder(STATION_A, 2).withSelector(null, 2);
+        ProductionOrder<String, String> engaged = selectorOrder(STATION_A, 2, RETURN);
+        ProductionOrder<String, String> plain = newOrder(STATION_A, 1);
+        ProductionOrder<String, String> elsewhere = newOrder(STATION_B, 1).withSelector(null, 1);
+        plans.add(waiting);
+        plans.add(engaged);
+        plans.add(plain);
+        plans.add(elsewhere);
+        plans.deliver(engaged.lines().getFirst().id(), 1, START, TIMEOUT);
+
+        List<ProductionOrder<String, String>> changed = plans.bindSelectorReturn(STATION_A, "new input");
+        assertEquals(List.of(waiting.id()), ids(changed), "an engaged order keeps its input, a plain one has none");
+        assertEquals(Optional.of("new input"), plans.get(waiting.id()).orElseThrow().selectorReturn());
+        assertEquals(Optional.of(RETURN), plans.get(engaged.id()).orElseThrow().selectorReturn());
+        assertTrue(plans.get(plain.id()).orElseThrow().selectorReturn().isEmpty());
+        assertTrue(plans.get(elsewhere.id()).orElseThrow().selectorReturn().isEmpty(), "another station's order");
+        assertEquals(List.of(), plans.bindSelectorReturn(STATION_A, "new input"), "binding twice changes nothing");
+    }
+
+    @Test
+    void switchingASelectorOffTurnsItsOrdersBackIntoOrdinaryOnes() {
+        ProductionOrder<String, String> bound = selectorOrder(STATION_A, 2, RETURN);
+        ProductionOrder<String, String> elsewhere = selectorOrder(STATION_B, 1, RETURN);
+        plans.add(bound);
+        plans.add(elsewhere);
+        assertEquals(List.of(bound.id()), ids(plans.unbindSelector(STATION_A)));
+        ProductionOrder<String, String> plain = plans.get(bound.id()).orElseThrow();
+        assertFalse(plain.selectorBound());
+        assertTrue(plain.selectorReturn().isEmpty());
+        assertTrue(plain.countsStockLevels(), "an ordinary order again");
+        assertTrue(plans.get(elsewhere.id()).orElseThrow().selectorBound());
+        assertEquals(List.of(), plans.unbindSelector(STATION_A));
+    }
+
+    /**
+     * Review fix (conservation 3): an order that was bound kept its creation baseline, because a bound order never
+     * observes a stock level. Unbound with that baseline, it counted every rise since its creation as its own product,
+     * including planks another selector order had already been credited with, and completed with nothing made.
+     */
+    @Test
+    void anUnboundSelectorOrderCountsOnlyRisesAfterTheSwitchOff() {
+        ProductionOrder<String, String> queued = selectorOrder(STATION_A, 2, RETURN);
+        ProductionOrder<String, String> other = selectorOrder(STATION_B, 2, RETURN);
+        plans.add(queued);
+        plans.add(other);
+        plans.deliver(other.lines().getFirst().id(), 2, START, TIMEOUT);
+        plans.observeStored(PLANK, 8L, START + 1L, TIMEOUT, Optional.of(RETURN));
+        assertEquals(ProductionOrderState.COMPLETE, plans.get(other.id()).orElseThrow().state());
+        assertTrue(plans.observeResult(PLANK, 8L, START + 2L, TIMEOUT, 8L).isEmpty(),
+                "a bound order observes no stock level");
+
+        plans.unbindSelector(STATION_A);
+        plans.observeResult(PLANK, 8L, START + 3L, TIMEOUT);
+        ProductionOrder<String, String> plain = plans.get(queued.id()).orElseThrow();
+        assertEquals(0L, plain.produced(), "the planks stored before the switch-off are not its product");
+        assertTrue(plain.isOpen());
+        assertEquals(8L, plain.resultStockSeen(), "it adopted the level that was there");
+
+        plans.observeResult(PLANK, 12L, START + 4L, TIMEOUT);
+        assertEquals(4L, plans.get(queued.id()).orElseThrow().produced(), "a rise after the switch-off counts");
     }
 }

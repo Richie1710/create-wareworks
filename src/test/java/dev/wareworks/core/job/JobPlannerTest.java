@@ -3024,4 +3024,39 @@ class JobPlannerTest {
         assertEquals(STACK, planner.plan(doorInput().requests(List.of(request(id(2), DIAMOND, STACK, DOOR))).build())
                 .job().orElseThrow().job().plannedAmount(), "with room for both trips the second one goes");
     }
+
+    // --- Recipe Selector quarantine (ADR-085) ---------------------------------------------------------------------
+
+    @Test
+    void storeHeldKeepsAKeyInItsInputOnly() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        Map<RackPosition, InventorySnapshot<String>> buffers = Map.of(IN_A, slots(0, DIAMOND, 2, IRON, 5), IN_B,
+                slots(0, DIAMOND, 3));
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A, IN_B))
+                .storageLocations(List.of(chest)).inputBuffers(buffers::get)
+                .storeHeld((location, key) -> location.equals(IN_A) && key.equals(DIAMOND));
+
+        TransportJob<String, RackPosition> first = planner.plan(base.inputCursor(0).build()).job().orElseThrow().job();
+        assertEquals(IN_A, first.source());
+        assertEquals(IRON, first.key(), "the held diamonds stay, the input's other items are stored");
+        TransportJob<String, RackPosition> second = planner.plan(base.inputCursor(1).build()).job().orElseThrow()
+                .job();
+        assertEquals(IN_B, second.source());
+        assertEquals(DIAMOND, second.key(), "the same key in another input is stored as always");
+    }
+
+    @Test
+    void anInputHoldingOnlyHeldItemsIsNoWork() {
+        RackPosition chest = rack(1, 0, Side.LEFT);
+        stock.update(chest, slots(27));
+        live.insertable.put(chest, STACK);
+        PlanResult<String, RackPosition> result = planner.plan(input().inputs(List.of(IN_A))
+                .storageLocations(List.of(chest)).inputBuffers(location -> slots(0, DIAMOND, 2))
+                .storeHeld((location, key) -> true).build());
+        assertFalse(result.hasJob());
+        assertEquals(Set.of(NoJobReason.NO_WORK), result.reasons(), "no reason a player could misread as full");
+        assertEquals(List.of(), live.insertCalls, "a held key costs no live call");
+    }
 }

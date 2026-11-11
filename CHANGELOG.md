@@ -23,6 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at once. A bay that already holds something, is too small, or is about to receive goods from a crane refuses with a
   line over the hotbar. A player who dies with a pallet on the truck leaves the pallet where they died. Pallets still
   never despawn.
+- **Recipe Selector.** Sneak-click a Production Station with it, place it against a Mechanical Saw facing up or
+  against a Basin, and sneak-click the Warehouse Input the products come back through: the station sets the machine's
+  recipe filter before each order, so one saw line makes Deepslate Tile Stairs, Slabs and Walls in turn instead of
+  cycling through every stonecutting recipe. A filter item in the machine is never overwritten.
+- **Ender Recipe Selector.** For a factory far away: sneak-click the factory's saw or basin with it, then the
+  Production Station (this switches on recipe slips) and the return input, then sneak-place it on the factory's
+  unpacking Packager. Every package the station's Packager sends carries a recipe slip, and the selector sets the
+  machine's recipe before the package is opened, whether it came by Robo Bee, train, frogport or by hand. A package
+  for another product waits until the machine has run empty; old or foreign packages are refused. A package's tooltip
+  shows its slip.
+- **One recipe at a time.** A Production Station with a Recipe Selector or recipe slips switches to another product
+  only once the previous product is back in the warehouse and the line is empty; orders for the same product still run
+  together, and an order waiting for its turn does not time out. The terminal, the station screen and the goggles say
+  why an order waits. The return input stores only the products the station expects. If an order ends while its
+  ingredients are still in the line, or something unexpected comes back, the station holds until you check the line
+  and sneak-click the station (or press Resume). Cancelling an order that is already in the machine lets what is in the
+  line come back first. A Stock Keeper rule whose refill at such a station went on to a diversion port instead of the
+  racks is paused, as a lost refill is.
+- **Ponder:** two scenes for the Recipe Selector and the Ender Recipe Selector, shown on both selectors and on the
+  Production Station.
 
 ### Changed
 
@@ -31,9 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ponder:** "Building a Rack Wall" ends with a filled column upgraded from the bottom up and is the scene of both rack
   kits; "Carrying Containers with the Hand Truck" ends with a pallet lifted onto the truck.
 - **Server and players have to update together.** A client with this version cannot join a server with an older one,
-  and the other way round, because of the three new items and the pallet on the hand truck. Worlds load unchanged. Set
-  carried pallets down before going back to an older version: it cannot read a hand truck with a pallet and drops it
-  from the inventory, pallet and all.
+  and the other way round, because of the three new items, the pallet on the hand truck and the Recipe Selectors.
+  Worlds load unchanged. Set carried pallets down before going back to an older version: it cannot read a hand truck
+  with a pallet and drops it from the inventory, pallet and all.
+- **Warehouse Input:** a click with an empty hand on a Recipe Selector's return input hands you what the selector keeps
+  out of the racks there; the input's description says so. With an empty main hand, a block in the off hand is no
+  longer placed against an input.
 
 ### Fixed
 

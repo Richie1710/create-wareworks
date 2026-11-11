@@ -396,6 +396,12 @@ public final class JobPlanner<K, L> {
             InventorySnapshot<K> buffer = input.inputBuffers().apply(station);
             if (buffer == null || buffer.isEmpty())
                 continue;
+            // A Recipe Selector station's return input stores only the products the station expects (ADR-085,
+            // quarantine): a held key stays in the input, costs nothing and is no work, so an input holding nothing
+            // else is skipped exactly like an empty one and its stray item is left for the player to see.
+            List<K> storable = storableKeys(input, station, buffer);
+            if (storable.isEmpty())
+                continue;
             work = true;
             RackPosition stationPos = position(station);
             long toStation = input.travel().travelTicks(input.craneBranch(), input.craneX(), input.craneY(),
@@ -403,7 +409,7 @@ public final class JobPlanner<K, L> {
             // Why this input got no job: "no room anywhere" and "no filter accepts these items" are different problems
             // for the player, and only the first is relieved by a retrieval (ADR-021, §7.4).
             StoreSurvey survey = new StoreSurvey();
-            for (K key : buffer.keys()) {
+            for (K key : storable) {
                 // What the buffer holds that no other crane's job will already pick (issue #14, ADR-075): with one
                 // crane nothing is reserved here while it plans, so this is the buffer's own count.
                 long buffered = Math.max(0L, buffer.count(key) - input.reservations().reservedBuffer(station, key));
@@ -456,6 +462,19 @@ public final class JobPlanner<K, L> {
         if (!work)
             reasons.add(NoJobReason.NO_WORK);
         return new PlanResult<>(Optional.empty(), reasons, cursor, exhausted);
+    }
+
+    /**
+     * The keys of {@code buffer} the store plan may move out of input station {@code station}: every key the input
+     * holds, in the buffer's own order, minus those {@link PlannerInput#storeHeld()} keeps there (ADR-085).
+     */
+    private static <K, L> List<K> storableKeys(PlannerInput<K, L> input, L station, InventorySnapshot<K> buffer) {
+        List<K> storable = new ArrayList<>();
+        for (K key : buffer.keys()) {
+            if (!input.storeHeld().test(station, key))
+                storable.add(key);
+        }
+        return storable;
     }
 
     /**

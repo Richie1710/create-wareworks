@@ -49,6 +49,9 @@ public final class WareworksPonderTags {
                 .add(WareworksBlocks.WAREHOUSE_PRODUCTION)
                 // The Crafter Feeder is the production station's machine (issue #34), so it stands beside it.
                 .add(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER)
+                // So are both Recipe Selectors (ADR-085): they set that station's machine, near or far.
+                .add(WareworksBlocks.RECIPE_SELECTOR)
+                .add(WareworksBlocks.ENDER_RECIPE_SELECTOR)
                 .add(WareworksBlocks.WAREHOUSE_STOCK_KEEPER)
                 // A rack bay is a storage location that is the block itself (M28, issue #20), so all three tiers
                 // belong in the index beside the interface.
@@ -88,6 +91,8 @@ public final class WareworksPonderTags {
                 .add(WareworksBlocks.RACK_BAY_BRASS)
                 // The Schematicannon Requester (issue #45) moves nothing either, but it is how a Schematicannon gets its
                 // materials from the warehouse: it orders them, and the crane, a funnel and a belt bring them.
-                .add(WareworksBlocks.SCHEMATICANNON_REQUESTER);
+                .add(WareworksBlocks.SCHEMATICANNON_REQUESTER)
+                // The Ender Recipe Selector (ADR-085) judges every package a Packager is about to unpack.
+                .add(WareworksBlocks.ENDER_RECIPE_SELECTOR);
     }
 }

@@ -24,23 +24,34 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.selector.LocalSelectorLink;
+import dev.wareworks.content.selector.RecipeSlip;
+import dev.wareworks.content.selector.SelectorMachine;
+import dev.wareworks.content.selector.SelectorRecipeCheck;
+import dev.wareworks.content.selector.SelectorTexts;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.production.CrafterGrid;
 import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.ProductionPattern;
+import dev.wareworks.core.production.SelectorMode;
+import dev.wareworks.core.production.SelectorWait;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.GlobalPos;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
@@ -86,6 +97,20 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
     private static final int MAX_FEEDER_LAID = 256;
     /** Most runs one order can have laid: as many as a loaded feed may claim. */
     private static final int MAX_FEEDER_RUNS = WarehouseCrafterFeederBlockEntity.MAX_RUNS;
+    /**
+     * NBT key of the Recipe Selector state (ADR-085, design §3.1): written by every full save, read only from one, so a
+     * schematic print never carries a selector link, a selection or a hold.
+     */
+    public static final String RECIPE_SELECTOR_TAG = "RecipeSelector";
+    private static final String SELECTOR_MODE = "Mode";
+    private static final String SELECTOR_LINK = "Selector";
+    private static final String SELECTOR_KIND = "MachineKind";
+    private static final String SELECTOR_RETURN = "ReturnInput";
+    private static final String SELECTOR_SELECTION = "Selection";
+    private static final String SELECTOR_SWITCH_TIME = "SwitchTime";
+    private static final String SELECTOR_EPOCH = "Epoch";
+    private static final String SELECTOR_HOLD = "Hold";
+    private static final String SELECTOR_PROBE = "Probe";
 
     private final ProductionPatterns patterns;
     /** Derived goggle state, never saved; synced with the shared station summary. */
@@ -95,6 +120,19 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      * recipe checks below know when their answers are stale. Never saved.
      */
     private int patternsRevision;
+    /**
+     * Cached Recipe Selector pattern checks per slot (ADR-085, design §10; null = not computed yet), valid for
+     * {@link #selectorChecksRevision}, the machine kind {@link #selectorChecksKind}, the recipe manager
+     * {@link #selectorChecksRecipes} and Create's recipe switches {@link #selectorChecksOptions} (review fix, Create API
+     * 3: Create's server config can be changed while the game runs). Never saved.
+     */
+    private SelectorRecipeCheck.Verdict[] selectorChecks = new SelectorRecipeCheck.Verdict[0];
+    private int selectorChecksRevision = -1;
+    @Nullable
+    private SelectorMachine.Kind selectorChecksKind;
+    private WeakReference<Object> selectorChecksRecipes = new WeakReference<>(null);
+    @Nullable
+    private SelectorRecipeCheck.Options selectorChecksOptions;
     /** Cached crafter recipe checks per pattern slot (null = not computed yet), valid for {@link #checksRevision}. */
     private CrafterRecipeCheck.Result[] checks = new CrafterRecipeCheck.Result[0];
     private int checksRevision = -1;
@@ -115,6 +153,27 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      * Pruned by the feeder to orders that are still open.
      */
     private final Map<UUID, Integer> feederLaid = new LinkedHashMap<>();
+
+    /**
+     * The Recipe Selector state (ADR-085, design §3.1). Saved in a full save only; {@link #selectorArmed},
+     * {@link #armFault} and {@link #slipsTrusted} are never saved, so a load verifies the line again before it fetches.
+     */
+    private SelectorMode selectorMode = SelectorMode.NONE;
+    private Optional<BlockPos> linkedSelector = Optional.empty();
+    private Optional<SelectorMachine.Kind> machineKind = Optional.empty();
+    private Optional<BlockPos> returnInput = Optional.empty();
+    private Optional<ItemKey> selection = Optional.empty();
+    private long switchTime;
+    private int selectorEpoch;
+    private Optional<SelectorHold> selectorHold = Optional.empty();
+    private Optional<UUID> probeOrder = Optional.empty();
+    private boolean selectorArmed;
+    private Optional<SelectorWait> armFault = Optional.empty();
+    private boolean armFaultOnSwitch;
+    private boolean slipsTrusted;
+    /** GameTests only ({@link #installTestSelectorArm}); never saved. */
+    @Nullable
+    private SelectorArm testSelectorArm;
 
     public WarehouseProductionBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.productionBufferSlots());
@@ -166,16 +225,61 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
     public record SlotPattern(int slot, ProductionPattern<ItemKey> pattern) {
     }
 
-    /** {@link #activePatterns()} with each pattern's slot, in slot order. */
+    /**
+     * {@link #activePatterns()} with each pattern's slot, in slot order. At a Recipe Selector station whose machine
+     * kind is known, a pattern the machine would not make exactly is dropped as well ({@link #selectorCheck}, ADR-085
+     * design §10, the feeder's precedent).
+     */
     public List<SlotPattern> activeSlots() {
-        boolean feeder = level != null && !level.isClientSide && attachedFeeder().isPresent();
+        boolean server = level != null && !level.isClientSide;
+        boolean feeder = server && attachedFeeder().isPresent();
+        boolean selector = server && selectorMode.selects() && machineKind.isPresent();
         List<SlotPattern> usable = new ArrayList<>(patterns.size());
         for (int slot = 0; slot < patterns.size(); slot++) {
             Optional<ProductionPattern<ItemKey>> pattern = patterns.patternAt(slot);
-            if (pattern.isPresent() && (!feeder || checkOf(slot).check() == CrafterPatternCheck.VALID))
-                usable.add(new SlotPattern(slot, pattern.get()));
+            if (pattern.isEmpty() || (feeder && checkOf(slot).check() != CrafterPatternCheck.VALID))
+                continue;
+            if (selector && selectorCheckOf(slot) != SelectorRecipeCheck.Verdict.VALID)
+                continue;
+            usable.add(new SlotPattern(slot, pattern.get()));
         }
         return List.copyOf(usable);
+    }
+
+    /**
+     * Server: the Recipe Selector pattern check of slot {@code slot} (ADR-085, design §10), or empty while the station
+     * is in no selector mode, its machine kind is unknown or the slot holds no complete pattern. Cached until the
+     * patterns, the machine kind, the recipes or Create's recipe switches change.
+     */
+    public Optional<SelectorRecipeCheck.Verdict> selectorCheck(int slot) {
+        if (level == null || level.isClientSide || !selectorMode.selects() || machineKind.isEmpty() || slot < 0
+                || slot >= patterns.size() || patterns.patternAt(slot).isEmpty())
+            return Optional.empty();
+        return Optional.of(selectorCheckOf(slot));
+    }
+
+    /** The cached selector check of {@code slot}; the caller has checked mode, kind and pattern. */
+    private SelectorRecipeCheck.Verdict selectorCheckOf(int slot) {
+        Object recipes = SelectorRecipeCheck.recipeSet(level);
+        SelectorMachine.Kind kind = machineKind.orElseThrow();
+        SelectorRecipeCheck.Options options = SelectorRecipeCheck.Options.fromServer();
+        if (selectorChecksRevision != patternsRevision || selectorChecks.length != patterns.size()
+                || selectorChecksKind != kind || selectorChecksRecipes.get() != recipes
+                || !options.equals(selectorChecksOptions)) {
+            selectorChecks = new SelectorRecipeCheck.Verdict[patterns.size()];
+            selectorChecksRevision = patternsRevision;
+            selectorChecksKind = kind;
+            selectorChecksRecipes = new WeakReference<>(recipes);
+            selectorChecksOptions = options;
+        }
+        SelectorRecipeCheck.Verdict cached = selectorChecks[slot];
+        if (cached == null) {
+            Optional<ProductionPattern<ItemKey>> pattern = patterns.patternAt(slot);
+            cached = pattern.isEmpty() ? SelectorRecipeCheck.Verdict.NO_RECIPE
+                    : SelectorRecipeCheck.check(level, kind, pattern.get(), options);
+            selectorChecks[slot] = cached;
+        }
+        return cached;
     }
 
     /**
@@ -594,6 +698,38 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
     }
 
     /**
+     * Server: the same resume gesture also releases a Recipe Selector hold (ADR-085, design §8), and tells
+     * {@code player} what came of it: released (the line goes on with its selection), or refused because the station's
+     * buffer or its return input still holds something.
+     *
+     * @return whether the station had a hold, i.e. whether {@code player} was told something here
+     */
+    public boolean releaseSelectorHold(Player player) {
+        Objects.requireNonNull(player, "player");
+        if (selectorHold.isEmpty() || level == null || level.isClientSide || isRemoved())
+            return false;
+        Optional<WarehouseControllerBlockEntity> controller = controller();
+        if (controller.isEmpty())
+            return false;
+        WarehouseControllerBlockEntity.SelectorRelease release = controller.get().releaseSelectorHold(this);
+        Component item = release.item().map(key -> key.toStack().getHoverName())
+                .or(() -> release.at().filter(level::isLoaded).map(at -> level.getBlockState(at).getBlock().getName()))
+                .orElse(Component.empty());
+        String message = switch (release.outcome()) {
+            case RELEASED -> WareworksLang.SELECTOR_HOLD_RELEASED;
+            case REFUSED_BUFFER -> WareworksLang.SELECTOR_HOLD_REFUSED_BUFFER;
+            case REFUSED_RETURN -> WareworksLang.SELECTOR_HOLD_REFUSED_RETURN;
+            case REFUSED_PACKAGER -> WareworksLang.SELECTOR_HOLD_REFUSED_PACKAGER;
+            case REFUSED_PORT -> WareworksLang.SELECTOR_HOLD_REFUSED_PORT;
+            case NO_HOLD -> null;
+        };
+        if (message == null)
+            return false;
+        player.displayClientMessage(WareworksLang.translateDirect(message, item), false);
+        return true;
+    }
+
+    /**
      * Tells {@code player} what a resume did: one line per item, naming the item and the ingredient items that stayed in
      * the machine — or, for a station nothing of whose products was stopped, that there was nothing here to lift.
      * <p>
@@ -657,6 +793,472 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             level.setBlock(worldPosition, state.setValue(WarehouseProductionBlock.STOPPED, stopped),
                     Block.UPDATE_CLIENTS);
         return stopped;
+    }
+
+    // --- Recipe Selector (ADR-085) ---------------------------------------------------------------------------------
+
+    /**
+     * What a station in local selector mode uses instead of a real Recipe Selector in a GameTest
+     * ({@link #installTestSelectorArm}): sets the machine's filter, answering like {@link LocalSelectorLink#armFor}.
+     */
+    @FunctionalInterface
+    public interface SelectorArm {
+        Optional<SelectorWait> arm(ItemKey target, boolean switching);
+    }
+
+    /** What a request to change the station's selector mode came to (design §3.2, §3.3). */
+    public enum SelectorModeChange {
+        /** The mode was set. */
+        ACCEPTED,
+        /** The station was already in this mode; nothing changed. */
+        UNCHANGED,
+        /** A Crafter Feeder is attached: a selector station cannot feed a Crafter. */
+        REFUSED_FEEDER,
+        /** The station is in the other selector mode. */
+        REFUSED_OTHER_MODE,
+        /** The station has open orders. */
+        REFUSED_OPEN_ORDERS,
+        /** The station already has a loaded Recipe Selector that links back to it (design §3.3). */
+        REFUSED_SELECTOR_PRESENT
+    }
+
+    /** What switching the station's selector off came to (design §3.3, {@code SWITCH_OFF}). */
+    public enum SelectorSwitchOff {
+        SWITCHED_OFF,
+        /** The station has no selector mode to switch off. */
+        NOT_ON,
+        /** An order of the station has handed ingredients over: its line must drain first. */
+        REFUSED_ENGAGED,
+        /**
+         * The station holds (design §8): the player has to check the line and resume it first, so lost ingredients or a
+         * quarantined item never end up in the line or the racks of what would be a plain station then.
+         */
+        REFUSED_HOLD
+    }
+
+    /** Whether the station is in selector mode, and which (full save only, never in a schematic print). */
+    public SelectorMode selectorMode() {
+        return selectorMode;
+    }
+
+    /** Local mode: the position of the one registered Recipe Selector. */
+    public Optional<BlockPos> linkedSelector() {
+        return linkedSelector;
+    }
+
+    /** The kind of machine the station's selector serves, as far as the station knows it. */
+    public Optional<SelectorMachine.Kind> selectorMachineKind() {
+        return machineKind;
+    }
+
+    /** The world position of the station's own Warehouse Input for its products (design §3.5). */
+    public Optional<BlockPos> selectorReturnInput() {
+        return returnInput;
+    }
+
+    /** The result the station's line is set to. */
+    public Optional<ItemKey> selection() {
+        return selection;
+    }
+
+    /** Game time of the last switch of the line (the slip's sequence). */
+    public long selectorSwitchTime() {
+        return switchTime;
+    }
+
+    /** How often the line has switched (goggles only). */
+    public int selectorEpoch() {
+        return selectorEpoch;
+    }
+
+    /** The hold that stops the station until a player confirms, if one is armed (design §8). */
+    public Optional<SelectorHold> selectorHold() {
+        return selectorHold;
+    }
+
+    /** Slip mode: the order that may fetch one run only until it has brought a result back (design §7.5). */
+    public Optional<UUID> selectorProbeOrder() {
+        return probeOrder;
+    }
+
+    /** Local mode: the machine's filter read back as the selection at the last arm pass. Never saved. */
+    public boolean selectorArmed() {
+        return selectorArmed;
+    }
+
+    /** Local mode: why the last arm pass failed, if it did. Never saved. */
+    public Optional<SelectorWait> selectorArmFault() {
+        return armFault;
+    }
+
+    /** Slip mode: whether a probe has shown the far factory to work since the last load. Never saved. */
+    public boolean selectorSlipsTrusted() {
+        return slipsTrusted;
+    }
+
+    /** Whether the station's buffer is empty (a selector station switches its line only then). */
+    public boolean bufferIsEmpty() {
+        return buffer.isEmpty();
+    }
+
+    /** The first item in the station's buffer, if any (the hold release names it). */
+    public Optional<ItemKey> firstBufferedItem() {
+        for (int slot = 0; slot < buffer.getSlots(); slot++) {
+            ItemStack stack = buffer.getStackInSlot(slot);
+            if (!stack.isEmpty())
+                return Optional.of(ItemKey.of(stack));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Server: puts the station into selector mode {@code mode} (ADR-085). Refused while a Crafter Feeder is attached,
+     * while the station is in the other mode, and while it has open orders (orders created before the switch would not
+     * be bound to the line). An accepted change starts the station afresh: no selection, not armed, no hold.
+     *
+     * @param kind the machine kind the selector declares, if it knows it
+     */
+    public SelectorModeChange setSelectorMode(SelectorMode mode, Optional<SelectorMachine.Kind> kind) {
+        Objects.requireNonNull(mode, "mode");
+        Objects.requireNonNull(kind, "kind");
+        if (!mode.selects())
+            throw new IllegalArgumentException("switch a selector off with switchSelectorOff()");
+        if (selectorMode == mode) {
+            if (kind.isPresent() && !kind.equals(machineKind)) {
+                machineKind = kind;
+                selectorChanged();
+            }
+            return SelectorModeChange.UNCHANGED;
+        }
+        SelectorModeChange refused = selectorModeRefusal(false);
+        if (refused != null)
+            return refused;
+        selectorMode = mode;
+        machineKind = kind;
+        linkedSelector = Optional.empty();
+        resetSelectorLine();
+        selectorChanged();
+        return SelectorModeChange.ACCEPTED;
+    }
+
+    /**
+     * Server: a local Recipe Selector at {@code selectorPos} registers itself (design §3.3): mode LOCAL with that one
+     * selector. A station whose registered selector is gone (not loaded, or no longer linked back) accepts a new one
+     * even with open orders: they are already bound to the line and simply wait for it.
+     */
+    public SelectorModeChange registerSelector(BlockPos selectorPos, Optional<SelectorMachine.Kind> kind) {
+        Objects.requireNonNull(selectorPos, "selectorPos");
+        Objects.requireNonNull(kind, "kind");
+        Optional<SelectorModeChange> refused = selectorRegistrationRefusal(selectorPos);
+        if (refused.isPresent())
+            return refused.get();
+        selectorMode = SelectorMode.LOCAL;
+        linkedSelector = Optional.of(selectorPos.immutable());
+        machineKind = kind;
+        // Cleared, so the first arm pass switches with an idle machine (design §3.3) - unless an order's ingredients are
+        // in the line already (review fix): then the selection is what the line holds, the next pass sets the new
+        // machine to it (or stops the line while that machine is busy with something else), and an older head of
+        // another result keeps waiting for that order instead of both waiting for each other.
+        Optional<WarehouseControllerBlockEntity> controller = controller();
+        if (controller.isEmpty() || !controller.get().selectorStationEngaged(worldPosition))
+            selection = Optional.empty();
+        selectorArmed = false;
+        armFault = Optional.empty();
+        selectorChanged();
+        return SelectorModeChange.ACCEPTED;
+    }
+
+    /**
+     * Server: why a local Recipe Selector at {@code selectorPos} could not register here right now, or empty if it
+     * could (design §3.2, §3.3); changes nothing. The selector item asks it before it places the block.
+     */
+    public Optional<SelectorModeChange> selectorRegistrationRefusal(BlockPos selectorPos) {
+        Objects.requireNonNull(selectorPos, "selectorPos");
+        if (attachedFeeder().isPresent())
+            return Optional.of(SelectorModeChange.REFUSED_FEEDER);
+        if (selectorMode == SelectorMode.LOCAL) {
+            // The same position registering again is a new block where the old one stood.
+            if (linkedSelector.filter(selectorPos::equals).isEmpty() && localSelector().isPresent())
+                return Optional.of(SelectorModeChange.REFUSED_SELECTOR_PRESENT);
+            // A station whose selector is gone takes a new one even with open orders: they already wait for it.
+            return Optional.empty();
+        }
+        return Optional.ofNullable(selectorModeRefusal(false));
+    }
+
+    /**
+     * Server: binds the Warehouse Input at {@code input} as this station's return input through the aisle's controller
+     * (design §3.5); empty when the station is in no warehouse.
+     */
+    public Optional<WarehouseControllerBlockEntity.ReturnInputBinding> bindSelectorReturnInputAt(BlockPos input) {
+        Objects.requireNonNull(input, "input");
+        return controller().map(found -> found.bindSelectorReturnInput(this, input));
+    }
+
+    /**
+     * Server: the local Recipe Selector at {@code selectorPos} was broken. The station keeps mode LOCAL (fail closed):
+     * its orders wait for a new selector or for the player to switch the selector off.
+     */
+    public void selectorRemoved(BlockPos selectorPos) {
+        if (linkedSelector.filter(selectorPos::equals).isEmpty())
+            return;
+        linkedSelector = Optional.empty();
+        selectorArmed = false;
+        selectorChanged();
+    }
+
+    /**
+     * Server: switches the station's selector off (design §3.3, {@code SWITCH_OFF}). Refused while an order of the
+     * station is engaged, because its ingredients are in the line, and while the station holds and has a controller
+     * that can release the hold (resume it first);
+     * accepted, the station's open orders become ordinary
+     * orders again, the selector forgets its selection and the machine's filter is left as it is (I6).
+     */
+    public SelectorSwitchOff switchSelectorOff() {
+        if (!selectorMode.selects())
+            return SelectorSwitchOff.NOT_ON;
+        Optional<WarehouseControllerBlockEntity> controller = controller();
+        if (controller.isPresent() && controller.get().selectorStationEngaged(worldPosition))
+            return SelectorSwitchOff.REFUSED_ENGAGED;
+        // Review fix: switching off would drop the hold and with it the quarantine, unchecked (design §8). Only while
+        // a controller can release it (re-review fix): without one, switching off is the station's only way out.
+        if (selectorHold.isPresent() && controller.isPresent())
+            return SelectorSwitchOff.REFUSED_HOLD;
+        localSelector().ifPresent(LocalSelectorLink::clearSelection);
+        selectorMode = SelectorMode.NONE;
+        linkedSelector = Optional.empty();
+        machineKind = Optional.empty();
+        resetSelectorLine();
+        controller.ifPresent(found -> found.onSelectorSwitchedOff(worldPosition));
+        selectorChanged();
+        return SelectorSwitchOff.SWITCHED_OFF;
+    }
+
+    /** Server: binds (or, with empty, unbinds) the station's return input; the controller checks the rules first. */
+    public void setSelectorReturnInput(Optional<BlockPos> input) {
+        Objects.requireNonNull(input, "input");
+        Optional<BlockPos> next = input.map(BlockPos::immutable);
+        if (next.equals(returnInput))
+            return;
+        returnInput = next;
+        selectorChanged();
+    }
+
+    /**
+     * Server (controller): the line switched to {@code target} at {@code now}. The switch time only ever grows, so a
+     * slip's sequence stays monotonic even within one tick.
+     */
+    public void selectorSwitched(ItemKey target, long now) {
+        Objects.requireNonNull(target, "target");
+        selection = Optional.of(target);
+        switchTime = Math.max(now, switchTime + 1L);
+        selectorEpoch++;
+        setChanged();
+    }
+
+    /**
+     * Server (controller): the result of an arm pass; returns whether anything changed.
+     *
+     * @param switching whether the pass tried to switch the line (a busy machine then only delays the switch)
+     */
+    public boolean setSelectorArmed(boolean armed, Optional<SelectorWait> fault, boolean switching) {
+        Objects.requireNonNull(fault, "fault");
+        if (armed == selectorArmed && fault.equals(armFault) && switching == armFaultOnSwitch)
+            return false;
+        selectorArmed = armed;
+        armFault = fault;
+        armFaultOnSwitch = switching;
+        return true;
+    }
+
+    /**
+     * Local mode: whether the last failed arm pass was a switch. A busy machine only delays a switch, but a busy machine
+     * whose filter is out of step with the selection (after a crash restore, design §6.1) must stop the line: its
+     * ingredients would go into a machine set to something else. Never saved.
+     */
+    public boolean selectorArmFaultOnSwitch() {
+        return armFaultOnSwitch;
+    }
+
+    /** Server (controller): arms {@code hold} unless one is armed already; returns whether it was armed. */
+    public boolean armSelectorHold(SelectorHold hold) {
+        Objects.requireNonNull(hold, "hold");
+        if (selectorHold.isPresent())
+            return false;
+        selectorHold = Optional.of(hold);
+        selectorArmed = false;
+        slipsTrusted = false;
+        selectorChanged();
+        return true;
+    }
+
+    /**
+     * Server (controller, after its checks): releases the hold. The selection is kept, so whatever is still in the line
+     * is surplus of the old product and never becomes the next one (design §8).
+     */
+    public void clearSelectorHold() {
+        if (selectorHold.isEmpty())
+            return;
+        selectorHold = Optional.empty();
+        selectorArmed = false;
+        slipsTrusted = false;
+        selectorChanged();
+    }
+
+    /**
+     * Slip mode (design §7.3): the recipe slip a box packed from this station gets now: the selection, the station's
+     * address and position, and the game time of its last switch. Empty in any other mode or without a selection.
+     */
+    public Optional<RecipeSlip> currentSlip() {
+        if (selectorMode != SelectorMode.SLIPS || selection.isEmpty() || level == null)
+            return Optional.empty();
+        String from = controller().flatMap(found -> found.addressOf(worldPosition)).map(StorageAddress::format)
+                .orElseGet(() -> worldPosition.getX() + ", " + worldPosition.getY() + ", " + worldPosition.getZ());
+        return Optional.of(RecipeSlip.of(selection.get().getItem(), from, GlobalPos.of(level.dimension(),
+                worldPosition), switchTime));
+    }
+
+    /**
+     * Server (controller, slip mode): whether a probe has shown the far factory to work (design §7.5). Never saved: a
+     * load, slips switched on and every hold make the line untrusted again.
+     */
+    public void setSelectorSlipsTrusted(boolean trusted) {
+        slipsTrusted = trusted;
+    }
+
+    /**
+     * GameTests only: puts {@code stack} into the station's buffer as a crane delivery would, and returns what did not
+     * fit. The buffer's own view is extract-only.
+     */
+    public ItemStack insertIntoBufferForTest(ItemStack stack) {
+        return buffer.insert(stack, false);
+    }
+
+    /** Server (controller): the probe order is {@code order} now, or none. */
+    public void setSelectorProbeOrder(Optional<UUID> order) {
+        Objects.requireNonNull(order, "order");
+        if (order.equals(probeOrder))
+            return;
+        probeOrder = order;
+        setChanged();
+    }
+
+    /**
+     * Server (controller, local mode): asks the station's selector to set its machine's filter to {@code target}
+     * (design §6.1). Fails closed: no registered selector, an unloaded one or one that no longer links back to this
+     * station answers a fault, never a guess and never another machine.
+     */
+    public Optional<SelectorWait> armLocalSelector(ItemKey target, boolean switching) {
+        Objects.requireNonNull(target, "target");
+        if (testSelectorArm != null)
+            return testSelectorArm.arm(target, switching);
+        if (linkedSelector.isEmpty() || level == null)
+            return Optional.of(SelectorWait.NO_SELECTOR);
+        if (!level.isLoaded(linkedSelector.get()))
+            return Optional.of(SelectorWait.SELECTOR_NOT_LOADED);
+        Optional<LocalSelectorLink> selector = localSelector();
+        if (selector.isEmpty())
+            return Optional.of(SelectorWait.NO_SELECTOR);
+        Optional<SelectorWait> fault = selector.get().armFor(target, switching);
+        // The machine kind is read again on every pass (design §3.1): a Mixer set on the Basin later changes the
+        // pattern check.
+        Optional<SelectorMachine.Kind> kind = selector.get().machineKind();
+        if (kind.isPresent() && !kind.equals(machineKind)) {
+            machineKind = kind;
+            setChanged();
+        }
+        return fault;
+    }
+
+    /**
+     * GameTests only: a stand-in for the local Recipe Selector and its machine, so the controller's scheduling can be
+     * tested without the selector block. Never saved; {@code null} removes it.
+     */
+    public void installTestSelectorArm(@Nullable SelectorArm arm) {
+        testSelectorArm = arm;
+    }
+
+    /** The registered local selector, loaded and linked back to this station; never loads a chunk. */
+    private Optional<LocalSelectorLink> localSelector() {
+        if (linkedSelector.isEmpty() || level == null || !level.isLoaded(linkedSelector.get()))
+            return Optional.empty();
+        return level.getBlockEntity(linkedSelector.get()) instanceof LocalSelectorLink link
+                && link.linkedStation().filter(worldPosition::equals).isPresent() ? Optional.of(link)
+                : Optional.empty();
+    }
+
+    /** Why a mode change is refused, or {@code null}; {@code sameModeAllowed} lets a re-registration pass. */
+    @Nullable
+    private SelectorModeChange selectorModeRefusal(boolean sameModeAllowed) {
+        if (attachedFeeder().isPresent())
+            return SelectorModeChange.REFUSED_FEEDER;
+        if (selectorMode.selects() && !sameModeAllowed)
+            return SelectorModeChange.REFUSED_OTHER_MODE;
+        Optional<WarehouseControllerBlockEntity> controller = controller();
+        if (controller.isPresent() && controller.get().productionOrdersAt(worldPosition).stream()
+                .anyMatch(ProductionOrder::isOpen))
+            return SelectorModeChange.REFUSED_OPEN_ORDERS;
+        return null;
+    }
+
+    /** Forgets the line's state: selection, hold, probe, arming and trust. */
+    private void resetSelectorLine() {
+        selection = Optional.empty();
+        selectorHold = Optional.empty();
+        probeOrder = Optional.empty();
+        selectorArmed = false;
+        armFault = Optional.empty();
+        slipsTrusted = false;
+    }
+
+    /** Saves the change and tells the aisle's controller, which keeps its own list of selector stations. */
+    private void selectorChanged() {
+        setChanged();
+        controller().ifPresent(found -> found.onSelectorStationChanged(worldPosition));
+    }
+
+    private CompoundTag saveSelector(HolderLookup.Provider registries) {
+        CompoundTag tag = new CompoundTag();
+        tag.putString(SELECTOR_MODE, selectorMode.name());
+        linkedSelector.ifPresent(pos -> tag.putLong(SELECTOR_LINK, pos.asLong()));
+        machineKind.ifPresent(kind -> tag.putString(SELECTOR_KIND, kind.name()));
+        returnInput.ifPresent(pos -> tag.putLong(SELECTOR_RETURN, pos.asLong()));
+        selection.ifPresent(key -> tag.put(SELECTOR_SELECTION, key.save(registries)));
+        tag.putLong(SELECTOR_SWITCH_TIME, switchTime);
+        tag.putInt(SELECTOR_EPOCH, selectorEpoch);
+        selectorHold.ifPresent(hold -> tag.put(SELECTOR_HOLD, hold.save(registries)));
+        probeOrder.ifPresent(id -> tag.putUUID(SELECTOR_PROBE, id));
+        return tag;
+    }
+
+    /** Reads the selector state of a full save; an older save without one reads as mode NONE. Never throws. */
+    private void loadSelector(CompoundTag tag, HolderLookup.Provider registries) {
+        selectorMode = SelectorMode.NONE;
+        for (SelectorMode mode : SelectorMode.values()) {
+            if (mode.name().equals(tag.getString(SELECTOR_MODE)))
+                selectorMode = mode;
+        }
+        linkedSelector = tag.contains(SELECTOR_LINK, Tag.TAG_LONG)
+                ? Optional.of(BlockPos.of(tag.getLong(SELECTOR_LINK))) : Optional.empty();
+        machineKind = SelectorMachine.Kind.byName(tag.getString(SELECTOR_KIND));
+        returnInput = tag.contains(SELECTOR_RETURN, Tag.TAG_LONG)
+                ? Optional.of(BlockPos.of(tag.getLong(SELECTOR_RETURN))) : Optional.empty();
+        selection = tag.contains(SELECTOR_SELECTION) ? ItemKey.load(registries, tag.get(SELECTOR_SELECTION))
+                : Optional.empty();
+        switchTime = Math.max(0L, tag.getLong(SELECTOR_SWITCH_TIME));
+        selectorEpoch = Math.max(0, tag.getInt(SELECTOR_EPOCH));
+        selectorHold = tag.contains(SELECTOR_HOLD, Tag.TAG_COMPOUND)
+                ? SelectorHold.load(tag.getCompound(SELECTOR_HOLD), registries) : Optional.empty();
+        probeOrder = tag.hasUUID(SELECTOR_PROBE) ? Optional.of(tag.getUUID(SELECTOR_PROBE)) : Optional.empty();
+        if (!selectorMode.selects()) {
+            linkedSelector = Optional.empty();
+            machineKind = Optional.empty();
+            resetSelectorLine();
+        }
+        // Never saved: the first arm pass after a load verifies the filter again (design §11).
+        selectorArmed = false;
+        armFault = Optional.empty();
+        slipsTrusted = false;
     }
 
     // --- screen ------------------------------------------------------------------------------------------------------
@@ -746,6 +1348,11 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         // own plan is still running (M20, issue #4). The controller answers it, because it owns the plan, and the same
         // answer goes into the rows of both screens ({@code WarehouseControllerBlockEntity#waitsForStep}).
         boolean oldestWaitingForStep = false;
+        // The Recipe Selector's part (ADR-085): the oldest order that waits at the gate and why, and how many queue.
+        boolean selects = selectorMode.selects();
+        SelectorWait headWait = SelectorWait.NONE;
+        Optional<ResourceLocation> headItem = Optional.empty();
+        int queued = 0;
         for (ProductionOrder<ItemKey, RackPosition> order : orders) {
             if (oldest.isEmpty()) {
                 oldest = Optional.of(order.state());
@@ -756,9 +1363,24 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             open++;
             missing += order.outstandingIngredients();
             awaited += order.outstandingResult();
+            if (!selects)
+                continue;
+            SelectorWait wait = found.get().waitsForSelector(order);
+            if (wait.queues() && wait != SelectorWait.HOLD)
+                queued++;
+            if (headWait == SelectorWait.NONE && wait != SelectorWait.NONE) {
+                headWait = wait;
+                headItem = found.get().selectorWaitItem(order, wait)
+                        .map(key -> BuiltInRegistries.ITEM.getKey(key.getItem()));
+            }
         }
+        ProductionGoggleSummary.SelectorSummary selector = selects
+                ? new ProductionGoggleSummary.SelectorSummary(selectorMode,
+                        selection.map(key -> BuiltInRegistries.ITEM.getKey(key.getItem())), selectorEpoch,
+                        selectorHold.isPresent(), found.get().selectorFault(worldPosition), headWait, headItem, queued)
+                : ProductionGoggleSummary.SelectorSummary.NONE;
         return new ProductionGoggleSummary(patterns.patternCount(), open, oldest, missing, awaited, stopped.size(),
-                unrecovered, oldestWaitingForStep, feeder, refused);
+                unrecovered, oldestWaitingForStep, feeder, refused, selector);
     }
 
     /**
@@ -784,6 +1406,7 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                 WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_REFUSED, production.refusedPatterns())
                         .style(ChatFormatting.GOLD).forGoggles(tooltip, 2);
         }
+        addSelectorGoggleLines(tooltip, production.selector());
         // The safety stop outranks everything else the station could say, exactly as it does on the keeper's lamp and in
         // its screen: it is the one state a player has to act on, and the pause has already cancelled the orders that
         // would otherwise be reported below (M20, ADR-032).
@@ -817,6 +1440,36 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                     .forGoggles(tooltip, 2);
     }
 
+    /**
+     * The Recipe Selector's goggle lines (ADR-085, design §12): the mode, what the line makes now, a hold or a fault in
+     * red, why the oldest waiting order waits and how many orders queue for their turn.
+     */
+    private static void addSelectorGoggleLines(List<Component> tooltip, ProductionGoggleSummary.SelectorSummary shown) {
+        if (!shown.on())
+            return;
+        WareworksLang.translate(shown.mode() == SelectorMode.SLIPS ? WareworksLang.GOGGLES_PRODUCTION_SELECTOR_SLIPS
+                : WareworksLang.GOGGLES_PRODUCTION_SELECTOR_LOCAL).style(ChatFormatting.GRAY).forGoggles(tooltip, 1);
+        shown.selection().flatMap(BuiltInRegistries.ITEM::getOptional).ifPresent(item -> WareworksLang
+                .translate(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_MAKING, new ItemStack(item).getHoverName())
+                .style(ChatFormatting.WHITE).forGoggles(tooltip, 2));
+        if (shown.hold())
+            WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_HOLD).style(ChatFormatting.RED)
+                    .forGoggles(tooltip, 2);
+        else
+            shown.fault().ifPresent(fault -> WareworksLang.builder()
+                    .add(SelectorTexts.waitText(fault, Optional.empty())).style(ChatFormatting.RED)
+                    .forGoggles(tooltip, 2));
+        if (shown.headWait() != SelectorWait.NONE && !shown.hold() && shown.fault().isEmpty())
+            WareworksLang.builder().add(SelectorTexts.waitText(shown.headWait(), shown.headItem()
+                    .flatMap(BuiltInRegistries.ITEM::getOptional).map(ItemKey::of)))
+                    .style(ProductionScreenState.isSelectorFault(shown.headWait()) ? ChatFormatting.RED
+                            : ChatFormatting.GRAY)
+                    .forGoggles(tooltip, 2);
+        if (shown.waiting() > 0)
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_WAITING, shown.waiting())
+                    .style(ChatFormatting.GRAY).forGoggles(tooltip, 2);
+    }
+
     @Override
     protected String goggleHeaderKey() {
         return WareworksLang.GOGGLES_WAREHOUSE_PRODUCTION;
@@ -845,6 +1498,7 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             }
             tag.put(FEEDER_LAID_TAG, laid);
         }
+        tag.put(RECIPE_SELECTOR_TAG, saveSelector(registries));
     }
 
     @Override
@@ -868,7 +1522,17 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                 if (entryTag.hasUUID(FEEDER_LAID_ORDER) && runs > 0)
                     feederLaid.put(entryTag.getUUID(FEEDER_LAID_ORDER), runs);
             }
+            // The selector state too (design §3.1): a printed station is mode NONE and a standing one keeps its own.
+            loadSelector(tag.getCompound(RECIPE_SELECTOR_TAG), registries);
         }
+    }
+
+    /** A station in selector mode tells its controller when it loads, so the controller lists it again. */
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (level instanceof ServerLevel && selectorMode.selects())
+            controller().ifPresent(found -> found.onSelectorStationChanged(worldPosition));
     }
 
     /**
@@ -881,6 +1545,10 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      */
     @Override
     public void remove() {
+        // The selector lets go of its selection before the station's orders are cancelled (design §3.3); the
+        // machine's filter stays as it is (I6).
+        if (level instanceof ServerLevel)
+            localSelector().ifPresent(LocalSelectorLink::clearSelection);
         super.remove();
         if (level instanceof ServerLevel)
             WarehouseRegistry.findController(level, worldPosition)

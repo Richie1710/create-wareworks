@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "C": { "item": "create:andesite_casing" },
+    "F": { "item": "create:filter" },
+    "T": { "item": "create:electron_tube" }
+  },
+  "pattern": [
+    "F",
+    "C",
+    "T"
+  ],
+  "result": { "count": 1, "id": "wareworks:recipe_selector" }
+}

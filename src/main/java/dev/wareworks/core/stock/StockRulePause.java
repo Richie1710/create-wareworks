@@ -63,7 +63,14 @@ public record StockRulePause(Cause cause, long unrecovered) {
          * (M20, ADR-032) — including a step whose plan was ended by another step failing. As with
          * {@link #ORDER_TIMED_OUT}, only a player lifts it.
          */
-        ORDER_CANCELLED;
+        ORDER_CANCELLED,
+        /**
+         * An <b>automatic</b> order at a Recipe Selector station was completed by a product that came back through its
+         * return input and went straight on to a diversion or an overflow port (ADR-085). The machine works, but the
+         * stock level never rose, so the rule would order again and again and feed the port with no end: the very drain
+         * the time-out of such an order used to stop (M17, ADR-027).
+         */
+        DIVERTED;
 
         private static final String LANG_PREFIX = "gui.keeper.paused.";
 
@@ -82,7 +89,7 @@ public record StockRulePause(Cause cause, long unrecovered) {
          * safety stop exists to prevent (ADR-027, ADR-032).
          */
         public boolean isRuleBorn() {
-            return this == TIMED_OUT || this == CANCELLED;
+            return this == TIMED_OUT || this == CANCELLED || this == DIVERTED;
         }
 
         /**

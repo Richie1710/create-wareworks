@@ -4860,6 +4860,7 @@ Classes:
       stored them, stock stayed `alloy=31 shaft=0` and the order timed out. The fix is the one a player makes — the
       scenario sets the saw's own `FilteringBehaviour` to Shaft, which `getRecipes` applies through
       `RecipeConditions.outputMatchesFilter` and which collapses the five candidates to the one cutting recipe.
+      A Recipe Selector sets that filter for each order (§3.5.9).
     * **Mechanical crafter — the loop worked exactly once.** A crafter refuses every insertion while its group is
       working (`MechanicalCrafterBlockEntity.Inventory#insertItem` hands the stack back unless `phase == IDLE`), so the
       second run's ingredients rode past all three busy funnels to the end of the belt — where the loop's catch chest
@@ -5553,6 +5554,69 @@ racks. The owner's rules (2026-11-09): the result stays one exact item; of sever
 * **Tests.** JUnit `ChoiceAllocatorTest`, `ChoiceIngredientTest`, `RestockChoiceTest`, `ProductionFilterTextWidthTest`
   and the extended planner and feeder tests; GameTests `gametest.ProductionFilterGameTests` and filter tests in
   `CrafterFeederGameTests`, `SchematicannonRequesterGameTests` and `TerminalCraftChainGameTests`.
+
+#### 3.5.9 Recipe Selector (ADR-085)
+
+A Mechanical Saw cuts every stonecutting recipe of its input in turn, and a basin under a Mixer or Press may take
+either of two recipes. A **Recipe Selector** sets the machine's recipe filter for each order of its Production Station,
+so one line makes stairs, slabs and walls one after the other. The **Ender Recipe Selector** does the same for a
+factory far away: the recipe travels as a slip in the package.
+
+* **Setting it up (local).** Sneak-click the station with the selector, place it against a Mechanical Saw facing up
+  or against a Basin (within `selector.localRange` of the station), and sneak-click the Warehouse Input the products
+  come back through: that input is the station's **return input**.
+* **Setting it up (far).** Sneak-click the factory's saw or basin with the Ender selector, then the station (it now
+  sends recipe slips), then the return input, then sneak-place the selector on the factory's unpacking Packager
+  (within `selector.machineRange` of the machine). A plain click on the Packager places nothing. The selector must lie
+  in the Packager's chunk, and one Ender selector serves one station at a time: a sneak-click on it with an empty hand
+  lets it accept slips from any station again.
+* **Refusals.** A station with a Crafter Feeder, a station with open orders (except one whose local selector is gone
+  and gets a new one), a station that already has the other tier, a machine that already has a selector, and the
+  machine's top face. A Mixer or Press click points at the Basin below it.
+* **The pattern check.** At a selector station every pattern is checked against the machine's real recipes: one
+  output, no chance outputs, no fluids, whole runs, Create's `allowStonecuttingOnSaw` and its automation filter. A
+  pattern that fails (also one with List or Attribute Filter cells) is drawn red with the reason in the station's
+  screen and never ordered there.
+* **Switching off and breaking.** The selector row of the station's screen switches the selector (or the slips) off
+  with its red mark; it is refused while an order is in the machine or while the station holds. Breaking the selector
+  keeps the station in selector mode and fetches nothing (`NO_SELECTOR`) until a new selector is linked or the mode is
+  switched off. The machine's filter is never restored.
+* **One recipe at a time.** Orders for the same product run together. An order for another product waits (`BEHIND`,
+  shown in the terminal, the station screen and the goggles) until the line is empty: nothing of the old product's
+  ingredients in the buffer, on the way, in a Packager or in the machine, and the old product back through the return
+  input. Waiting orders do not time out.
+* **Slips.** Every box the station's Packager sends carries the result, the station and a sequence number. At the
+  factory the selector accepts a box only for its own station, never an older one, and for another product only once
+  the saw, the unpack target and its feed are empty; it sets the filter before the box is opened. A refused box stays
+  where it was (port, bee, hand). After a switch the first order fetches one run only while the line is untrusted
+  (`selector.remoteProbe`), until the right product has come back.
+* **The return input.** It stores only what the station is making and what its orders in the line make. Anything else
+  stays in the input and holds the station; click the input with an empty hand to take it out. While the station is
+  unloaded, the input stays guarded with what was last seen of it, across a restart too, and no other station may bind
+  it.
+* **Holds.** An order that ends with its ingredients in the line, or an unexpected return, stops the whole station:
+  nothing is fetched, nothing switches, no deadline runs. Check the line, then sneak-click the station with an empty
+  hand (or press Resume); the release is refused while the buffer, the return input or a Packager still holds
+  something. Cancelling an order already in the machine keeps what is in the line and lets it come back first.
+* **Products that go elsewhere.** A product that comes back through the return input and goes on to a diversion or an
+  overflow port completes its order (the line may switch); the request it was for is reduced by it, and a Stock Keeper
+  rule's own order pauses its rule (`DIVERTED`). A product that comes back through another input is stored but
+  completes nothing.
+* **Layouts that work:** saw facing up fed by a chute or hopper from the station, output into the return input; a
+  basin under a Mixer or Press with a funnel into the return input; a far factory with an unpacking Packager, a chest,
+  a chute and the saw, the products packed and sent back to a Packager behind the return input. **Layouts that do
+  not:** a press on a belt, Deployers, fluid recipes, two stations on one machine, two selectors on one machine, a
+  Crafter Feeder at a selector station, a long belt between the unpack target and the machine (not inspected).
+* **Where it shows.** The terminal's order rows and tooltips, the station screen's selector row (machine, setting,
+  switches, holds and the Resume affordance) and the goggles of the station and of the selector (setting, set-backs,
+  packages with and without a slip, the last refusals) say why an order waits. A package's tooltip shows its slip.
+* **Limits.** One selector or slip mode per station, one per machine, one return input per station and one station
+  per return input; a far switch costs a full round trip; the player's own items put into the return input as the very
+  product of an open order are credited; a block in the off hand is no longer placed against a Warehouse Input while
+  the main hand is empty (the empty-hand click takes the quarantine out). Decisions and the full list: ADR-085.
+* **Tests.** JUnit `SelectorGateTest`, `ProductionOrdersTest`, `OrderRowWidthsTest`, `PackageOrderBoundaryTest`;
+  GameTests `RecipeSelectorGameTests`, `RecipeSelectorBlockGameTests`, `RecipeSlipGameTests`; visual scenarios
+  `selector` and `selector-remote` (Robo Bees, `-Pwareworks.cmp`).
 
 ### 3.6 Warehouse Stock Keeper (`content.station`, M15)
 
@@ -8743,6 +8807,9 @@ the **two cranes in flight** phase of the `robustness` scenario (§8.1).
 | `tripsPerRequest` (section `optimizer`, issue #46) | 32 | how many crane trips one press of a Warehouse Optimizer's Optimise may cost at most (§3.10, ADR-079). An order also ends earlier once nothing more fits anywhere better, and the crane only relocates while it has nothing else to do. Read when the order starts; range 1–512, clamped again in `core.optimizer.OptimizerLimits` |
 | `pollIntervalTicks` (section `requester`, issue #45) | 20 | how often a Schematicannon Requester looks at its cannon and its orders (§3.11, ADR-080). It is also the back-off after the warehouse could not serve an order: there is no retry interval of its own, except that an attempt to have something made that was refused or came back short waits 5 polls before the next (`RequesterLimits.MAKE_RETRY_POLLS`, ADR-081). An idle poll costs one look at the cannon; nothing runs between polls. Range 10–200 |
 | `orderTimeoutTicks` (`requester`) | 12000 | the **dead-man switch**: a requester's order that has not arrived after this long is given up, its own outstanding share given back (`reduceRequestShare`, never a cancel) and the order placed again. Only **live** time counts, polls on which the terminal was reached and its warehouse loaded and no production order was making the item, so an unloaded terminal or a stopped server never fires it, and a production order has its own `productionOrderTimeoutTicks` (ADR-081). Range 600–72000 (30 s to 1 h) |
+| `localRange` (section `selector`, ADR-085) | 32 | how far a Recipe Selector may stand from the Production Station it serves (§3.5.9). Range 8–64 |
+| `machineRange` (`selector`) | 16 | how far the machine an Ender Recipe Selector is linked to may stand from the selector. Range 1–32 |
+| `remoteProbe` (`selector`) | `UNTRUSTED` | when a station that sends recipe slips lets the first order after a switch fetch one run only, until it has come back as the right product: `UNTRUSTED` (after a server start, after slips were switched on and after a hold), `EVERY_SWITCH` or `OFF` |
 | `checklistRefreshTicks` (`requester`) | 1200 | when a requester's count of what the schematic still needs has gone stale (items taken out of the cannon's chest, a request shortened), it asks the cannon for a fresh material list (`updateChecklist()`, the call Create makes for a book print mid-run) at most once in this many ticks, and orders what the cannon reports missing in between. Range 200–72000 |
 
 Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (`1/384 = 0.0026041666…`). The TOML file groups the keys into sections, so the full path of a key is `<section>.<key>`:
@@ -8760,6 +8827,7 @@ Implementation (M1, `config.WareworksConfig`): fractions are stored as doubles (
 | `remote` (issue #44) | `range`, `crossDimension` | 16–30000000, boolean |
 | `optimizer` (issue #46) | `tripsPerRequest` | 1–512 |
 | `requester` (issue #45) | `pollIntervalTicks`, `orderTimeoutTicks`, `checklistRefreshTicks` | 10–200, 600–72000, 200–72000 |
+| `selector` (ADR-085) | `localRange`, `machineRange`, `remoteProbe` | 8–64, 1–32, enum |
 
 File: `<instance>/config/wareworks-server.toml`, overridable per world in `<world>/serverconfig/`. Read values only through the typed getters, which fall back to the defaults while the config is not loaded.
 

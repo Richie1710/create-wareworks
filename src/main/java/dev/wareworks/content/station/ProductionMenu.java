@@ -15,14 +15,18 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.selector.SelectorRecipeCheck;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crafting.IngredientPicker;
 import dev.wareworks.core.production.CrafterGrid;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
+import dev.wareworks.core.production.SelectorMode;
+import dev.wareworks.core.production.SelectorWait;
 import dev.wareworks.network.ProductionPatternLayPayload;
 import dev.wareworks.network.ProductionScreenPayload;
+import dev.wareworks.network.ProductionSelectorPayload;
 import dev.wareworks.registry.WareworksMenuTypes;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.core.BlockPos;
@@ -366,6 +370,41 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         return Optional.of(menu.resume(player));
     }
 
+    /**
+     * Server: the action of a {@code ProductionSelectorPayload} (ADR-085, design §13), resolved like every edit of this
+     * menu. {@code SWITCH_OFF} switches the station's Recipe Selector (or its recipe slips) off, which the station
+     * refuses while an order of it is engaged; the player is told either way.
+     *
+     * @return whether the station changed; empty when the player has no such menu open or the budget is spent
+     */
+    public static Optional<Boolean> submitSelector(@Nullable Player player, int containerId,
+            ProductionSelectorPayload.Action action) {
+        ProductionMenu menu = resolve(player, containerId);
+        if (menu == null || action == null)
+            return Optional.empty();
+        return Optional.of(menu.selector(player, action));
+    }
+
+    /** Server: switches the station's selector off, if it may be (design §3.3). */
+    private boolean selector(Player player, ProductionSelectorPayload.Action action) {
+        if (action != ProductionSelectorPayload.Action.SWITCH_OFF || !mayEdit(player)
+                || !player.mayInteract(contentHolder.getLevel(), contentHolder.getBlockPos()))
+            return false;
+        SelectorMode before = contentHolder.selectorMode();
+        WarehouseProductionBlockEntity.SelectorSwitchOff outcome = contentHolder.switchSelectorOff();
+        String message = switch (outcome) {
+            case SWITCHED_OFF -> before == SelectorMode.SLIPS ? WareworksLang.SELECTOR_SLIPS_OFF
+                    : WareworksLang.SELECTOR_SWITCHED_OFF;
+            case REFUSED_ENGAGED -> WareworksLang.SELECTOR_REFUSED_ENGAGED;
+            case REFUSED_HOLD -> WareworksLang.SELECTOR_REFUSED_HOLD;
+            default -> null;
+        };
+        if (message != null)
+            player.displayClientMessage(WareworksLang.translateDirect(message), true);
+        markDirty();
+        return outcome == WarehouseProductionBlockEntity.SelectorSwitchOff.SWITCHED_OFF;
+    }
+
     /** Server: cancels a production order of this station. */
     private boolean cancel(Player player, UUID orderId) {
         if (!mayEdit(player))
@@ -392,9 +431,12 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
     private boolean resume(Player player) {
         if (!mayEdit(player))
             return false;
+        // The Resume button also releases a Recipe Selector hold (ADR-085, design §8).
+        boolean held = contentHolder.releaseSelectorHold(player);
         List<StoppedProduct> resumed = contentHolder.resumeStoppedProducts();
-        WarehouseProductionBlockEntity.tellResumed(player, resumed);
-        if (resumed.isEmpty())
+        if (!held || !resumed.isEmpty())
+            WarehouseProductionBlockEntity.tellResumed(player, resumed);
+        if (resumed.isEmpty() && !held)
             return false;
         markDirty();
         return true;
@@ -473,6 +515,8 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         List<ProductionScreenState.OrderView> orders = List.of();
         List<StoppedProduct> stopped = List.of();
         List<ProductionScreenState.ChoiceView> choices = List.of();
+        Optional<SelectorWait> selectorFault = Optional.empty();
+        boolean selectorEngaged = false;
         BlockPos pos = contentHolder.getBlockPos();
         Optional<WarehouseControllerBlockEntity> controller =
                 WarehouseRegistry.findController(contentHolder.getLevel(), pos);
@@ -488,6 +532,11 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             stopped = contentHolder.stoppedProducts(controller.get());
             // What each filter cell would take right now (ADR-082), ranked as an order would pick it.
             choices = controller.get().choiceViews(contentHolder);
+            // The Recipe Selector's fault and whether switching it off would be refused (ADR-085): the gate's own facts.
+            if (contentHolder.selectorMode().selects()) {
+                selectorFault = controller.get().selectorFault(pos);
+                selectorEngaged = controller.get().selectorStationEngaged(pos);
+            }
         } else {
             choices = choicesWithoutAisle(patterns, contentHolder.getLevel());
         }
@@ -502,7 +551,35 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
                         .map(made -> new ProductionScreenState.EntryView(ProductionPatterns.RESULT_ENTRY,
                                 ItemKey.of(made), made.getCount()))));
         }
-        return new ProductionScreenState(views, orders, stopped, feeder, checks, choices);
+        return new ProductionScreenState(views, orders, stopped, feeder, checks, choices,
+                selectorView(selectorFault, selectorEngaged), selectorChecks(patterns.size()));
+    }
+
+    /** The station's Recipe Selector as its screen shows it (ADR-085), {@code NONE} for a station without one. */
+    private ProductionScreenState.SelectorView selectorView(
+            Optional<SelectorWait> fault, boolean engaged) {
+        WarehouseProductionBlockEntity station = contentHolder;
+        if (!station.selectorMode().selects())
+            return ProductionScreenState.SelectorView.NONE;
+        Optional<SelectorHold> hold = station.selectorHold();
+        Optional<ItemKey> holdItem = hold.flatMap(found -> found.unexpected().or(() -> Optional.of(found.result())));
+        return new ProductionScreenState.SelectorView(station.selectorMode(), station.selection(),
+                station.selectorEpoch(), hold.map(SelectorHold::cause), holdItem, fault, station.linkedSelector(),
+                station.selectorMachineKind(), station.selectorReturnInput(), station.selectorSlipsTrusted(), engaged);
+    }
+
+    /**
+     * The Recipe Selector check of every slot (ADR-085, design §10): the same cached verdicts the station drops its
+     * planner patterns with, so a red slot is exactly a slot the warehouse never orders. Empty for a station whose
+     * machine is not known.
+     */
+    private List<Optional<SelectorRecipeCheck.Verdict>> selectorChecks(int slots) {
+        if (!contentHolder.selectorMode().selects() || contentHolder.selectorMachineKind().isEmpty())
+            return List.of();
+        List<Optional<SelectorRecipeCheck.Verdict>> checks = new ArrayList<>(slots);
+        for (int slot = 0; slot < slots; slot++)
+            checks.add(contentHolder.selectorCheck(slot));
+        return checks;
     }
 
     /**

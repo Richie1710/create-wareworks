@@ -25,6 +25,7 @@ import dev.wareworks.config.WareworksConfig;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.selector.SelectorTexts;
 import dev.wareworks.content.station.ListTableLayout;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.TerminalCraftOrderState;
@@ -44,6 +45,7 @@ import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.production.SelectorWait;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.terminal.BucketFormat;
 import dev.wareworks.core.terminal.ContainerPlan;
@@ -3104,7 +3106,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 ? line.frontier().flatMap(this::order).orElse(null)
                 : null;
         int color = head.lostIngredients() ? COLOR_LOST : COLOR_TEXT;
-        int stateColor = frontier == null ? color : frontier.lostIngredients() ? COLOR_LOST : COLOR_PRODUCIBLE;
+        // A Recipe Selector wait (ADR-085) is red for a fault or a hold and grey for a queue, as at the station.
+        int stateColor = frontier == null ? WarehouseProductionScreen.selectorWaitColor(head, color)
+                : frontier.lostIngredients() ? COLOR_LOST : COLOR_PRODUCIBLE;
         // A finished order has no cancel mark, so its line gets that column back for its own text.
         int reserved = head.state().isFinished() ? 0 : cancelColumnWidth();
         Component badge = line.isChain() ? stepBadge(line) : null;
@@ -3112,9 +3116,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         Component item = orderItemText(head);
         // The state wins the row, but never past the item's floor: a chain's badge sits between the two, and a name cut
         // to three letters names nothing.
-        int floor = Math.min(font.width(item), MIN_ITEM_WIDTH);
+        // A Recipe Selector wait reads the same for every queued order of a station, so there the item's name comes
+        // first (review fix): the rows stay told apart, and the tooltip holds the whole wait.
+        boolean itemFirst = frontier == null && head.selectorWait() != SelectorWait.NONE;
         Component state = fitTo(frontier == null ? orderStateText(head) : frontierText(frontier),
-                Math.max(0, ROW_WIDTH - reserved - badgeWidth - floor - TEXT_GAP));
+                OrderRowWidths.stateRoom(ROW_WIDTH, reserved, badgeWidth, font.width(item), MIN_ITEM_WIDTH, TEXT_GAP,
+                        itemFirst));
         int stateX = Math.max(TerminalMenuLayout.MARGIN,
                 TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - reserved - font.width(state));
         graphics.drawString(font, state, x + stateX, top, stateColor, false);
@@ -3154,6 +3161,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * here, so the boundary is on the line itself and not only in a tooltip ({@code docs/warehouse-system.md} §3.5.4).
      */
     private static Component orderStateText(ProductionScreenState.OrderView order) {
+        // Why an order waits at its Recipe Selector station (ADR-085) says more than its state: "waiting for
+        // ingredients" about an order the station deliberately feeds nothing yet would read as a forgotten crane.
+        if (order.selectorWait() != SelectorWait.NONE)
+            return SelectorTexts.waitText(order.selectorWait(), order.selectorItem());
         return orderStateText(order.state(), order.lostIngredients());
     }
 
@@ -4454,8 +4465,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * ({@code docs/warehouse-system.md} §3.5.6).
      */
     private static Component stepStateText(ProductionScreenState.OrderView view) {
-        return view.waitingForStep() ? WareworksLang.translateDirect(WareworksLang.PRODUCTION_WAITING_FOR_STEP)
-                : WareworksLang.translateDirect(view.state().langKey());
+        if (view.waitingForStep())
+            return WareworksLang.translateDirect(WareworksLang.PRODUCTION_WAITING_FOR_STEP);
+        // A step waiting at its Recipe Selector station says why (ADR-085), as its own row does.
+        if (view.selectorWait() != SelectorWait.NONE)
+            return SelectorTexts.waitText(view.selectorWait(), view.selectorItem());
+        return WareworksLang.translateDirect(view.state().langKey());
     }
 
     /** Gold for a row that lost ingredients, aqua for the step that is working, grey for one that has finished. */

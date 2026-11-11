@@ -63,6 +63,12 @@ class ItemTooltipLengthTest {
      */
     private static final Set<String> KINETIC_ITEMS = Set.of("stacker_crane", "warehouse_crafter_feeder");
     private static final int KINETIC_STATS_LINES = 3;
+    /**
+     * Items that add status lines of their own under the description, unlinked at the least: the Recipe Selector says
+     * which station it is linked to, the Ender Recipe Selector also which machine (ADR-085). Each takes a line from the
+     * description's budget (the {@code tooltips} scenario found the Ender one two lines too tall).
+     */
+    private static final Map<String, Integer> STATUS_LINES = Map.of("recipe_selector", 1, "ender_recipe_selector", 2);
 
     private static final Pattern ENTRY = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*(\"((?:[^\"\\\\]|\\\\.)*)\"|-?\\d+)");
     private static final Pattern SUMMARY_KEY = Pattern.compile("((?:block|item)\\.wareworks\\.([a-z0-9_]+)\\.tooltip)\\.summary");
@@ -76,7 +82,8 @@ class ItemTooltipLengthTest {
             Map<String, String> lang = strings(language.file);
             for (Map.Entry<String, String> item : tooltipPrefixes(lang).entrySet()) {
                 int lines = shiftLines(lang, item.getValue(), advances, language.locale);
-                int budget = MAX_SHIFT_LINES - (KINETIC_ITEMS.contains(item.getKey()) ? KINETIC_STATS_LINES : 0);
+                int budget = MAX_SHIFT_LINES - (KINETIC_ITEMS.contains(item.getKey()) ? KINETIC_STATS_LINES : 0)
+                        - STATUS_LINES.getOrDefault(item.getKey(), 0);
                 measured++;
                 if (lines > budget)
                     tooLong.add(String.format("%s %s: %d lines, at most %d", language, item.getKey(), lines, budget));

@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "B": { "item": "create:brass_casing" },
+    "E": { "tag": "c:ender_pearls" },
+    "S": { "item": "wareworks:recipe_selector" }
+  },
+  "pattern": [
+    "E",
+    "S",
+    "B"
+  ],
+  "result": { "count": 1, "id": "wareworks:ender_recipe_selector" }
+}

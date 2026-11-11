@@ -14,6 +14,8 @@ import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.StackerCraneBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.requester.SchematicannonRequesterBlock;
+import dev.wareworks.content.selector.RecipeSelectorBlock;
+import dev.wareworks.content.selector.RecipeSelectorBlockItem;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
@@ -37,7 +39,7 @@ import net.minecraft.world.level.material.MapColor;
  * Entries are built with {@link #REGISTRATE} in static fields. <b>Declaration order is the creative tab order</b>,
  * which follows how an aisle is built: stacker crane (dock), rail,
  * controller, interface, the three rack bays (wood, andesite, brass), the two fluid bays (copper, brass), input,
- * output, terminal, production station, crafter feeder, stock keeper, optimizer, home point, schematicannon
+ * output, terminal, production station, crafter feeder, recipe selector, ender recipe selector, stock keeper, optimizer, home point, schematicannon
  * requester (GameTest {@code creativetaborderandicon}). The bays
  * stand directly after the interface because they are the other half of the same answer: an interface turns somebody
  * else's inventory into a storage location, a bay <b>is</b> one — and the fluid bays stand directly after the item
@@ -288,6 +290,49 @@ public final class WareworksBlocks {
                     .transform(WareworksStress.crafterFeederImpact())
                     .blockstate(WareworksBlockStateGen.crafterFeederBlockProvider())
                     .item()
+                    .transform(ModelGen.customItemModel("_", "item"))
+                    .register();
+
+    /**
+     * Recipe Selector (ADR-085, M36): a thin plate set against an up-facing Mechanical Saw or a Basin that sets the
+     * machine's recipe filter for each order of the production station it is linked to. Directly after the crafter
+     * feeder, because it is the other way a station gets its machine to make the right thing. Its own directional
+     * blockstate ({@link WareworksBlockStateGen#recipeSelectorProvider()}) over the hand-made
+     * {@code models/block/recipe_selector/block.json} (authored with the machine side facing north) and the hand-made
+     * {@code item.json}; the item ({@link RecipeSelectorBlockItem}) carries the link gestures and the placement rules.
+     * Not kinetic, no item capability; protected from contraptions, does not conduct redstone, not a full cube. Drops
+     * itself without its link.
+     */
+    public static final BlockEntry<RecipeSelectorBlock> RECIPE_SELECTOR =
+            REGISTRATE.block("recipe_selector", RecipeSelectorBlock::local)
+                    .initialProperties(SharedProperties::stone)
+                    .properties(p -> p.mapColor(MapColor.STONE).sound(SoundType.WOOD).noOcclusion()
+                            .isRedstoneConductor((state, level, pos) -> false))
+                    .transform(TagGen.pickaxeOnly())
+                    .transform(WareworksTags.relocationProtected())
+                    .blockstate(WareworksBlockStateGen.recipeSelectorProvider())
+                    .item(RecipeSelectorBlockItem::new)
+                    .transform(ModelGen.customItemModel("_", "item"))
+                    .register();
+
+    /**
+     * Ender Recipe Selector (ADR-085, M36): the far tier, sneak-placed on a far factory's unpacking Packager. It reads
+     * the recipe slip of every package the Packager is about to unpack and sets the linked saw's or basin's recipe
+     * first; a package for another product waits until the line is empty. Directly after the local tier, of which it
+     * is the upgrade. The same block class with the {@code ender} flag, the same directional blockstate over its own
+     * hand-made {@code models/block/ender_recipe_selector/block.json} (brass plate, filter frame) and {@code item.json}.
+     * Not kinetic, no item capability of its own; protected from contraptions, does not conduct redstone, not a full
+     * cube. Drops itself without its link.
+     */
+    public static final BlockEntry<RecipeSelectorBlock> ENDER_RECIPE_SELECTOR =
+            REGISTRATE.block("ender_recipe_selector", RecipeSelectorBlock::ender)
+                    .initialProperties(SharedProperties::softMetal)
+                    .properties(p -> p.mapColor(MapColor.TERRACOTTA_YELLOW).sound(SoundType.METAL).noOcclusion()
+                            .isRedstoneConductor((state, level, pos) -> false))
+                    .transform(TagGen.pickaxeOnly())
+                    .transform(WareworksTags.relocationProtected())
+                    .blockstate(WareworksBlockStateGen.recipeSelectorProvider())
+                    .item(RecipeSelectorBlockItem::new)
                     .transform(ModelGen.customItemModel("_", "item"))
                     .register();
 

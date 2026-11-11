@@ -1,5 +1,6 @@
 package dev.wareworks.content.station;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.simibubi.create.content.kinetics.belt.behaviour.DirectBeltInputBehaviour;
@@ -7,6 +8,8 @@ import com.simibubi.create.content.kinetics.belt.transport.TransportedItemStack;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.InsertOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.warehouse.LocationKind;
@@ -105,6 +108,32 @@ public class WarehouseInputBlockEntity extends WarehouseStationBlockEntity {
      */
     public ItemStack insert(ItemStack stack, boolean simulate) {
         return buffer.insert(stack, simulate);
+    }
+
+    /**
+     * Server, a player's empty-hand click (ADR-085 I7, design §8): takes out every item the Recipe Selector's quarantine
+     * keeps in this input because the station it returns for does not expect it, and only those. Nothing else in the
+     * buffer moves; the crane stores the rest as before.
+     *
+     * @return the stacks taken out, empty when this is no return input or holds nothing quarantined
+     */
+    public List<ItemStack> takeQuarantined() {
+        if (level == null || level.isClientSide || isRemoved())
+            return List.of();
+        WarehouseControllerBlockEntity controller = WarehouseRegistry.findController(level, worldPosition).orElse(null);
+        if (controller == null)
+            return List.of();
+        List<ItemStack> taken = new ArrayList<>();
+        for (ItemKey key : List.copyOf(bufferedItems().keys())) {
+            if (!controller.selectorQuarantines(worldPosition, key))
+                continue;
+            for (ItemStack stack = buffer.extract(key, key.toStack().getMaxStackSize(), false); !stack.isEmpty();
+                    stack = buffer.extract(key, key.toStack().getMaxStackSize(), false))
+                taken.add(stack);
+        }
+        if (!taken.isEmpty())
+            setChanged();
+        return taken;
     }
 
     @Override

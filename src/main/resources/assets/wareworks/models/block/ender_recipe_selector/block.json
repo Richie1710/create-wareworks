@@ -1,0 +1,49 @@
+{
+	"credit": "Made with Blockbench",
+	"parent": "block/block",
+	"textures": {
+		"plate": "create:block/brass_casing",
+		"details": "create:block/link_base_unpowered",
+		"frame": "create:item/filter",
+		"particle": "create:block/brass_casing"
+	},
+	"elements": [
+		{
+			"name": "plate",
+			"from": [2, 2, 0],
+			"to": [14, 14, 3],
+			"faces": {
+				"north": {"uv": [2, 2, 14, 14], "texture": "#plate", "cullface": "north"},
+				"east": {"uv": [13, 2, 16, 14], "texture": "#plate"},
+				"south": {"uv": [2, 2, 14, 14], "texture": "#plate"},
+				"west": {"uv": [0, 2, 3, 14], "texture": "#plate"},
+				"up": {"uv": [2, 0, 14, 3], "texture": "#plate"},
+				"down": {"uv": [2, 13, 14, 16], "texture": "#plate"}
+			}
+		},
+		{
+			"name": "rim",
+			"from": [4, 4, 3],
+			"to": [12, 12, 4],
+			"faces": {
+				"east": {"uv": [1, 1, 1.5, 7], "texture": "#details"},
+				"south": {"uv": [1, 1, 7, 7], "texture": "#details"},
+				"west": {"uv": [1, 1, 1.5, 7], "texture": "#details"},
+				"up": {"uv": [1, 1, 7, 1.5], "texture": "#details"},
+				"down": {"uv": [1, 1, 7, 1.5], "texture": "#details"}
+			}
+		},
+		{
+			"name": "filter_frame",
+			"from": [5.5, 5.5, 4],
+			"to": [10.5, 10.5, 5.5],
+			"faces": {
+				"east": {"uv": [5, 4, 6.5, 9], "texture": "#frame"},
+				"south": {"uv": [5, 4, 10, 9], "texture": "#frame"},
+				"west": {"uv": [5, 4, 6.5, 9], "texture": "#frame"},
+				"up": {"uv": [5, 4, 10, 5.5], "texture": "#frame"},
+				"down": {"uv": [5, 4, 10, 5.5], "texture": "#frame"}
+			}
+		}
+	]
+}

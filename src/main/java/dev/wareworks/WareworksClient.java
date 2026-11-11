@@ -1,6 +1,7 @@
 package dev.wareworks;
 
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
+import dev.wareworks.client.selector.RecipeSlipTooltip;
 import dev.wareworks.client.handtruck.HandTruckClientEvents;
 import dev.wareworks.client.input.StorageFilterPressGuard;
 import dev.wareworks.client.ponder.WareworksPonderLang;
@@ -46,6 +47,8 @@ public final class WareworksClient {
         // Issue #37: a player carrying a loaded hand truck walks slowly and cannot sprint, applied to the movement input
         // like sneaking.
         HandTruckClientEvents.register(NeoForge.EVENT_BUS);
+        // ADR-085: a package that carries a recipe slip names the slip's result in its tooltip.
+        RecipeSlipTooltip.register(NeoForge.EVENT_BUS);
         // Issue #37: the truck's own renderer draws the carried container on it, and a loaded truck is pushed with both
         // arms. Fired before the first model bake, so Create's model swap still sees the item.
         modEventBus.addListener(WareworksClient::onRegisterClientExtensions);

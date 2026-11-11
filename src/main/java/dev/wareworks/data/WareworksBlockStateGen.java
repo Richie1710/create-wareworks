@@ -12,6 +12,7 @@ import com.tterrag.registrate.util.nullness.NonNullBiConsumer;
 
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.requester.SchematicannonRequesterBlock;
+import dev.wareworks.content.selector.RecipeSelectorBlock;
 import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
@@ -180,6 +181,24 @@ public final class WareworksBlockStateGen {
                         .modelFile(model)
                         .rotationY(rotationOnto(facing))
                         .build();
+            });
+        };
+    }
+
+    /**
+     * The Recipe Selector's blockstate (ADR-085, design §2): the hand-made {@code block} model, authored with the
+     * machine side facing north, turned onto {@code FACING} like the requester's (all six directions).
+     */
+    public static <T extends Block> NonNullBiConsumer<DataGenContext<Block, T>, RegistrateBlockstateProvider>
+            recipeSelectorProvider() {
+        return (context, provider) -> {
+            ModelFile model = provider.models().getExistingFile(provider.modLoc("block/" + context.getName() + "/block"));
+            provider.getVariantBuilder(context.getEntry()).forAllStates(state -> {
+                Direction facing = state.getValue(RecipeSelectorBlock.FACING);
+                if (facing.getAxis().isVertical())
+                    return ConfiguredModel.builder().modelFile(model).rotationX(facing == Direction.UP ? 270 : 90)
+                            .build();
+                return ConfiguredModel.builder().modelFile(model).rotationY(rotationOnto(facing)).build();
             });
         };
     }

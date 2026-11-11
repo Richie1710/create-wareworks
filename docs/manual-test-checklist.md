@@ -4048,3 +4048,42 @@ you get tired of waiting, and put it back before judging check 160.
 484. **A loaded truck on a filter slot.** Right-click the filter slot of a warehouse interface, of a rack bay and of a
      warehouse output with a truck carrying a chest, and with one carrying a pallet: the filter never changes, and the
      truck sets its load down (into the bay, for a pallet and an empty bay) or refuses with its line, never silently.
+
+## BV. Recipe Selector (ADR-085)
+
+> `RecipeSelectorGameTests`, `RecipeSelectorBlockGameTests`, `RecipeSlipGameTests` and the `selector` and
+> `selector-remote` visual scenarios check the server side (the gate, the switch, the return input and its quarantine,
+> holds, slips and the veto, saves and remaps). What a person has to judge:
+
+485. **The models.** Both selectors against a saw facing up and against a basin, in every facing, in daylight and in
+     the dark, with Flywheel on and off: does each sit flat against its block and read as a selector?
+486. **The value box.** Watch the saw's filter value box while the line switches from stairs to slabs to walls: it shows
+     the product of the order being made, and a filter changed by hand is set back at once (visible).
+487. **A List Filter is never lost.** In survival, put a List Filter into the saw's filter slot, then order something
+     at the station: the selector stops with its line, the List Filter stays in the slot and nothing is consumed.
+488. **Action bar texts.** Every sneak-click and placement of both selectors (link, refuse, too far, wrong machine,
+     another station's input) in English and German: is each line clear and short enough?
+489. **The slip tooltip.** A package sent by a slip station, in a chest and in a Robo Bee port's screen: the tooltip
+     names the product and the station; a package without a slip shows nothing extra.
+490. **Ponder.** Both selector scenes on the selectors and on the Production Station: readable in English and German,
+     the order of the steps understandable without the docs.
+491. **A frogport and a train.** Send slip packages to a far factory by frogport, and by train with a package station:
+     the factory's saw switches before each package of another product is opened.
+492. **A dedicated server.** The whole far setup on a dedicated server: the slip is stamped on the server, the tooltip
+     shows on the client, and a restart while packages are on the way keeps them and their slips.
+493. **The quarantine by hand.** Throw a wrong item into a return input: it stays there, the station holds, the hint
+     says how to take it out, an empty-hand click hands it over and a sneak-click on the station releases the hold.
+494. **A held station without a controller.** Break the controller of a held selector station: switching the selector
+     off at the station works and clears the hold.
+495. **Why an order waits.** Queue stairs, slabs and walls at one selector station and look at the terminal's order
+     rows, their tooltips and the station screen's selector row, at your usual GUI scale and at the smallest window, in
+     English and German: two queued orders never read the same, and each says what it waits for.
+496. **Goggles.** Look at a selector station, a Recipe Selector and an Ender Recipe Selector with goggles while the line
+     switches, after a hand change and after a refused package: the setting, the set-backs, the package counts and the
+     last refusals are right and readable in English and German.
+497. **The off hand at a Warehouse Input.** With an empty main hand and a block in the off hand, right-click an
+     ordinary Warehouse Input: nothing is placed and nothing is taken out. With the block in the main hand it is placed
+     as before. Decide whether that is acceptable in play.
+498. **The Ender selector's latch.** Point two slip stations at one Ender selector: packages of the second are refused
+     (goggles say so) until you sneak-click the selector with an empty hand. Try to place it outside the Packager's
+     chunk: it is refused with its line.

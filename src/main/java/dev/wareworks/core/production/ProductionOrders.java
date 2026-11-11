@@ -284,12 +284,53 @@ public final class ProductionOrders<K, L> {
      * stock index either way.
      */
     public Observation<K, L> observeStored(K key, long amount, long now, long timeoutTicks) {
+        return observeStored(key, amount, now, timeoutTicks, Optional.empty());
+    }
+
+    /**
+     * {@link #observeStored(Object, long, long, long)} for an arrival the crane stored out of the warehouse input
+     * {@code source} (empty: a collecting port, or a caller that does not know).
+     * <p>
+     * <b>A Recipe Selector order is credited only from its own return input</b> (ADR-085, design §3.5): an arrival
+     * counts towards a {@linkplain ProductionOrder#selectorBound() selector-bound} order only when {@code source} is
+     * that order's {@link ProductionOrder#selectorReturn()}, and such orders are offered it <b>before every other
+     * order</b>. Completing a selector order is what lets its station switch the line to another result, so it must
+     * mean that the items it handed over really came back through the line; the same product from a second farm, a
+     * collecting port or a stock rise never completes one. An arrival from the return input that no selector order
+     * wants falls through to the ordinary rules.
+     */
+    public Observation<K, L> observeStored(K key, long amount, long now, long timeoutTicks, Optional<L> source) {
+        return credit(key, amount, now, timeoutTicks, source, false);
+    }
+
+    /**
+     * Credits {@code amount} result items of {@code key} that the crane carried out of the warehouse input
+     * {@code source} into an <b>accepting port</b> instead of storing them (a diversion, or an overflow when no rack took
+     * them): only {@linkplain ProductionOrder#selectorBound() Recipe Selector orders} whose return input is
+     * {@code source} are credited (ADR-085, review fix).
+     * <p>
+     * Their machine really made the items and they really came back through their own line, so the order is complete
+     * and its station may switch; without this it would time out with its ingredients handed over and stop its station
+     * for a loss that never happened. Every other order is left alone, exactly as before: a diverted product was never
+     * stored, so no restock order and no stock-level order may count it (M17), and the caller adds nothing to its
+     * stock-level credits either.
+     */
+    public Observation<K, L> observeDiverted(K key, long amount, long now, long timeoutTicks, L source) {
+        Objects.requireNonNull(source, "source");
+        return credit(key, amount, now, timeoutTicks, Optional.of(source), true);
+    }
+
+    private Observation<K, L> credit(K key, long amount, long now, long timeoutTicks, Optional<L> source,
+            boolean selectorOnly) {
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(source, "source");
         if (amount <= 0L)
             return Observation.none();
         List<ProductionOrder<K, L>> changed = new ArrayList<>();
         long left = amount;
-        for (ProductionOrder<K, L> order : arrivalOrder(key)) {
+        for (ProductionOrder<K, L> order : arrivalOrder(key, source)) {
+            if (selectorOnly && !order.selectorBound())
+                continue;
             if (left <= 0L)
                 break;
             ProductionOrder<K, L> next = order.withStored(left, now, timeoutTicks);
@@ -307,10 +348,10 @@ public final class ProductionOrders<K, L> {
      * ({@link #observeStored}): those without a second channel first, the ones whose machine has taken the ingredients
      * before the ones it has not, and creation order within each group (the sort is stable).
      */
-    private List<ProductionOrder<K, L>> arrivalOrder(K key) {
+    private List<ProductionOrder<K, L>> arrivalOrder(K key, Optional<L> source) {
         List<ProductionOrder<K, L>> candidates = new ArrayList<>();
         for (ProductionOrder<K, L> order : orders.values()) {
-            if (order.result().equals(key) && order.countsArrivals())
+            if (order.result().equals(key) && order.countsArrivals() && creditableFrom(order, source))
                 candidates.add(order);
         }
         if (candidates.size() > 1)
@@ -318,8 +359,23 @@ public final class ProductionOrders<K, L> {
         return candidates;
     }
 
-    /** 0 for an order this arrival is the only hope of, 1 for the rest of those, 2 for one with a second channel. */
+    /**
+     * Whether an arrival out of {@code source} may be credited to {@code order} at all: always for an order that is not
+     * selector-bound, and for a selector order only when it came out of that order's own return input (ADR-085).
+     */
+    private static <K, L> boolean creditableFrom(ProductionOrder<K, L> order, Optional<L> source) {
+        if (!order.selectorBound())
+            return true;
+        return source.isPresent() && order.selectorReturn().equals(source);
+    }
+
+    /**
+     * -1 for a Recipe Selector order (its own return input delivered the arrival, ADR-085), 0 for an order this
+     * arrival is the only hope of, 1 for the rest of those, 2 for one with a second channel.
+     */
     private static int arrivalRank(ProductionOrder<?, ?> order) {
+        if (order.selectorBound())
+            return -1;
         if (order.countsStockLevels())
             return 2;
         return order.state() == ProductionOrderState.WAITING_FOR_RESULT ? 0 : 1;
@@ -399,7 +455,24 @@ public final class ProductionOrders<K, L> {
      * @return the orders that timed out in this call
      */
     public List<ProductionOrder<K, L>> timeOut(long now, long timeoutTicks) {
+        return timeOut(now, timeoutTicks, Set.of());
+    }
+
+    /**
+     * {@link #timeOut(long, long)} with {@code alsoBlocked}, orders the caller holds back for a reason of its own: a
+     * Recipe Selector station queueing an order behind another result, or stopped by a hold (ADR-085, design §5.2,
+     * §9). They are treated exactly like an order waiting for a step of its plan: their deadline does not run, and
+     * the first call that no longer names them gives them a fresh one. Ids of unknown or finished orders change
+     * nothing.
+     */
+    public List<ProductionOrder<K, L>> timeOut(long now, long timeoutTicks, Set<UUID> alsoBlocked) {
+        Objects.requireNonNull(alsoBlocked, "alsoBlocked");
         Set<UUID> blocked = blockedOrderIds();
+        if (!alsoBlocked.isEmpty()) {
+            Set<UUID> union = new HashSet<>(blocked);
+            union.addAll(alsoBlocked);
+            blocked = union;
+        }
         if (!blockedLastPass.isEmpty()) {
             for (UUID id : blockedLastPass) {
                 ProductionOrder<K, L> unblocked = blocked.contains(id) ? null : orders.get(id);
@@ -472,10 +545,18 @@ public final class ProductionOrders<K, L> {
         for (ProductionOrder<K, L> member : plan) {
             if (member.id().equals(nodeId) || !member.isOpen())
                 continue;
-            if (ancestors.contains(member.id()) || member.deliveredIngredients() == 0)
-                cancel(member.id(), now).ifPresent(cancelled::add);
-            else
+            if (ancestors.contains(member.id()) || member.deliveredIngredients() == 0) {
+                Optional<ProductionOrder<K, L>> ended = cancel(member.id(), now);
+                if (ended.isPresent() && ended.get().isOpen()) {
+                    // A Recipe Selector order that had handed something over is trimmed, not ended (ADR-085): it runs
+                    // on with what is in its line, like a detached order.
+                    detach(member.id()).or(() -> ended).ifPresent(detached::add);
+                } else {
+                    ended.ifPresent(cancelled::add);
+                }
+            } else {
                 detach(member.id()).ifPresent(detached::add);
+            }
         }
         return new PlanFailure<>(cancelled, detached, unrecoveredIn(plan));
     }
@@ -541,20 +622,95 @@ public final class ProductionOrders<K, L> {
         return ancestors;
     }
 
-    /** Cancels order {@code id}; returns the cancelled order, or empty when it is unknown or already finished. */
+    /**
+     * Cancels order {@code id}; returns the cancelled order, or empty when it is unknown or already finished.
+     * <p>
+     * <b>An {@linkplain ProductionOrder#engaged() engaged} Recipe Selector order is trimmed instead</b> (ADR-085,
+     * design §5.5): it has handed ingredients to its line, and ending it would let the station switch the line to
+     * another result while they are still in it. It keeps the whole runs it has delivered for, fetches nothing more and
+     * stays open until they come back ({@link ProductionOrder#trimmedToDelivered}); the returned order is then still
+     * <b>open</b>, which is how the caller tells a trim from an ending. One that has not handed over a single whole
+     * run is cancelled as always. A trimmed order's deadline is never moved earlier; this form does not extend it
+     * either, {@link #cancel(UUID, long, long)} gives it the fresh one the design asks for.
+     */
     public Optional<ProductionOrder<K, L>> cancel(UUID id, long now) {
+        return cancel(id, now, 0L);
+    }
+
+    /** {@link #cancel(UUID, long)} with the timeout a trimmed selector order's fresh deadline is measured with. */
+    public Optional<ProductionOrder<K, L>> cancel(UUID id, long now, long timeoutTicks) {
+        return replace(get(id).filter(ProductionOrder::isOpen), order -> order.selectorBound() && order.engaged()
+                ? order.trimmedToDelivered(now, timeoutTicks)
+                : order.cancelled(now));
+    }
+
+    /**
+     * Ends order {@code id} as cancelled whatever it is, a Recipe Selector order included: for an order whose station
+     * is gone ({@link #cancelFor}), where nothing is left that its ingredients could come back through.
+     */
+    public Optional<ProductionOrder<K, L>> cancelOutright(UUID id, long now) {
         return replace(get(id).filter(ProductionOrder::isOpen), order -> order.cancelled(now));
     }
 
-    /** Cancels every open order for the production station at {@code station} (it was removed or turned away). */
+    /**
+     * Cancels every open order for the production station at {@code station} (it was removed or turned away). Selector
+     * orders are ended too, never trimmed: the station and its line are gone ({@link #cancelOutright}).
+     */
     public List<ProductionOrder<K, L>> cancelFor(L station, long now) {
         Objects.requireNonNull(station, "station");
         List<ProductionOrder<K, L>> cancelled = new ArrayList<>();
         for (ProductionOrder<K, L> order : List.copyOf(orders.values())) {
             if (order.isOpen() && order.station().equals(station))
-                cancel(order.id(), now).ifPresent(cancelled::add);
+                cancelOutright(order.id(), now).ifPresent(cancelled::add);
         }
         return List.copyOf(cancelled);
+    }
+
+    /**
+     * Gives every open Recipe Selector order of the station at {@code station} that has not handed anything over the
+     * return input {@code returnInput} (ADR-085, design §3.5): the station had none when the orders were created, or
+     * the player bound another one. An {@linkplain ProductionOrder#engaged() engaged} order keeps the input it has,
+     * because its products may already be on their way back through it; the caller refuses a rebinding while one is.
+     *
+     * @return the orders that changed, in creation order
+     */
+    public List<ProductionOrder<K, L>> bindSelectorReturn(L station, L returnInput) {
+        Objects.requireNonNull(station, "station");
+        Objects.requireNonNull(returnInput, "returnInput");
+        List<ProductionOrder<K, L>> changed = new ArrayList<>();
+        for (ProductionOrder<K, L> order : List.copyOf(orders.values())) {
+            if (!order.isOpen() || !order.selectorBound() || !order.station().equals(station))
+                continue;
+            if (order.engaged() && order.selectorReturn().isPresent())
+                continue;
+            ProductionOrder<K, L> next = order.withSelectorReturn(returnInput);
+            if (next != order) {
+                store(next);
+                changed.add(next);
+            }
+        }
+        return List.copyOf(changed);
+    }
+
+    /**
+     * Turns every open order of the station at {@code station} back into an ordinary order (ADR-085): the station's
+     * Recipe Selector was switched off, which the caller only accepts while none of them is
+     * {@linkplain ProductionOrder#engaged() engaged}. Such an order has handed nothing over, so it simply goes on as
+     * any order created at a station without a selector would.
+     *
+     * @return the orders that changed, in creation order
+     */
+    public List<ProductionOrder<K, L>> unbindSelector(L station) {
+        Objects.requireNonNull(station, "station");
+        List<ProductionOrder<K, L>> changed = new ArrayList<>();
+        for (ProductionOrder<K, L> order : List.copyOf(orders.values())) {
+            if (!order.isOpen() || !order.selectorBound() || !order.station().equals(station))
+                continue;
+            ProductionOrder<K, L> next = order.withSelector(null, 0);
+            store(next);
+            changed.add(next);
+        }
+        return List.copyOf(changed);
     }
 
     /** Forgets the backing request of every order that names {@code requestId} (the request is gone). */

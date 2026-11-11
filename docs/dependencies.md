@@ -241,6 +241,12 @@ factories over bees works end to end:
   address. Wareworks' own aisle tickets do not cover ports outside the aisle.
 * **Checked at runtime** by `./gradlew runVisualTest -Pwareworks.visualTest=robobee -Pwareworks.cmp`. Without the
   property the scenario fails at once with a line naming it.
+* **Also used by `selector-remote`** (`-Pwareworks.visualTest=selector-remote -Pwareworks.cmp`, ADR-085): one remote
+  saw behind an Ender Recipe Selector, fed and emptied by Robo Bees, fails at once without CMP in the same way. It
+  reaches CMP only through `dev.RoboBeeLedger` (the port and bee items, the trip ledger, and CMP's `beeSpeed` raised
+  for its own world by reflection and restored at the end), so no further CMP member is named anywhere. Nothing about
+  the dependency changed: still `localRuntime` only with the property, never compiled against, nothing in
+  `neoforge.mods.toml`.
 
 ## Create / NeoForge APIs in use or planned
 

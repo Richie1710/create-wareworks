@@ -1,0 +1,27 @@
+{
+  "variants": {
+    "facing=down": {
+      "model": "wareworks:block/ender_recipe_selector/block",
+      "x": 90
+    },
+    "facing=east": {
+      "model": "wareworks:block/ender_recipe_selector/block",
+      "y": 90
+    },
+    "facing=north": {
+      "model": "wareworks:block/ender_recipe_selector/block"
+    },
+    "facing=south": {
+      "model": "wareworks:block/ender_recipe_selector/block",
+      "y": 180
+    },
+    "facing=up": {
+      "model": "wareworks:block/ender_recipe_selector/block",
+      "x": 270
+    },
+    "facing=west": {
+      "model": "wareworks:block/ender_recipe_selector/block",
+      "y": 270
+    }
+  }
+}

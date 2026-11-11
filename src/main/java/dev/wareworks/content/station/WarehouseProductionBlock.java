@@ -1,11 +1,17 @@
 package dev.wareworks.content.station;
 
 import java.util.List;
+import java.util.Optional;
 
 import com.mojang.serialization.MapCodec;
+import com.simibubi.create.content.logistics.packager.PackagerBlock;
+import com.simibubi.create.content.logistics.packager.PackagerBlockEntity;
+import com.simibubi.create.content.logistics.packager.repackager.RepackagerBlockEntity;
 
+import dev.wareworks.content.selector.RecipeSlip;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -13,6 +19,7 @@ import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -121,7 +128,54 @@ public class WarehouseProductionBlock extends WarehouseStationBlock<WarehousePro
      * a click that does nothing silently is a click nobody finds (M20, ADR-032).
      */
     private static void resume(Player player, WarehouseProductionBlockEntity station) {
-        WarehouseProductionBlockEntity.tellResumed(player, station.resumeStoppedProducts());
+        // A Recipe Selector hold is released by the same gesture (ADR-085, design §8); "nothing stopped" is then only
+        // said when there was no hold to talk about either.
+        boolean held = station.releaseSelectorHold(player);
+        List<StoppedProduct> resumed = station.resumeStoppedProducts();
+        if (!held || !resumed.isEmpty())
+            WarehouseProductionBlockEntity.tellResumed(player, resumed);
+    }
+
+    /**
+     * <b>Stamps the recipe slip</b> (ADR-085, design §7.3, the one exception ADR-085 makes to ADR-065 D3): when a
+     * Packager that packs from this station has just made a box, a station in slip mode writes its slip into the box.
+     * <p>
+     * Create's Packager sets its new {@code heldBox}, starts its tray cycle and calls {@code notifyUpdate()}, whose
+     * {@code setChanged} reaches this method synchronously for every neighbour (vanilla
+     * {@code Level#updateNeighbourForOutputSignal}); the chunk is already dirty, the client packet follows with the
+     * slip, and the box cannot leave the Packager for the 20 ticks of its cycle. Only data is written, on a box Create
+     * made; nothing moves. Cheapest checks first, because this runs on every neighbour change in a rack wall. Never for
+     * a Repackager, never for a Packager that is linked to a logistics network (its boxes may be re-boxed, which would
+     * lose the slip; that is a station fault instead), never twice for the same slip. A box that already carries another
+     * slip (a package re-sent from the buffer) gets this station's current one.
+     */
+    @Override
+    public void onNeighborChange(BlockState state, LevelReader level, BlockPos pos, BlockPos neighbor) {
+        super.onNeighborChange(state, level, pos, neighbor);
+        if (level.isClientSide() || !(level instanceof Level real))
+            return;
+        BlockState neighbour = real.getBlockState(neighbor);
+        if (!(neighbour.getBlock() instanceof PackagerBlock))
+            return;
+        Direction side = Direction.fromDelta(neighbor.getX() - pos.getX(), neighbor.getY() - pos.getY(),
+                neighbor.getZ() - pos.getZ());
+        // The Packager packs from what its back touches: this station exactly when it faces away from it.
+        if (side == null || neighbour.getOptionalValue(PackagerBlock.FACING).orElse(null) != side)
+            return;
+        if (!(real.getBlockEntity(neighbor) instanceof PackagerBlockEntity packager)
+                || packager instanceof RepackagerBlockEntity)
+            return;
+        if (packager.animationInward || packager.animationTicks != PackagerBlockEntity.CYCLE
+                || packager.heldBox.isEmpty())
+            return;
+        if (PackageHandover.ignoresRedstone(real, neighbor))
+            return;
+        if (!(real.getBlockEntity(pos) instanceof WarehouseProductionBlockEntity station))
+            return;
+        Optional<RecipeSlip> slip = station.currentSlip();
+        if (slip.isEmpty() || RecipeSlip.read(packager.heldBox).equals(slip))
+            return;
+        RecipeSlip.stamp(packager.heldBox, slip.get());
     }
 
     @Override

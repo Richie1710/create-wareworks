@@ -537,6 +537,186 @@ public final class WareworksLang {
     /** Chat line after the same click on a station none of whose products the safety stop was holding (M20). */
     public static final String PRODUCTION_NOTHING_STOPPED = "production.nothing_stopped";
     /**
+     * {@code "Station released: it goes on with %1$s"}: a player released a Recipe Selector station's hold (ADR-085,
+     * design §8); the station keeps its selection.
+     */
+    public static final String SELECTOR_HOLD_RELEASED = "selector.hold_released";
+    /** {@code "The station still holds %1$s. Empty it first"}: a hold release refused for a station buffer in use. */
+    public static final String SELECTOR_HOLD_REFUSED_BUFFER = "selector.hold_refused_buffer";
+    /** {@code "Take %1$s out of the return input first"}: a hold release refused for an unexpected returned item. */
+    public static final String SELECTOR_HOLD_REFUSED_RETURN = "selector.hold_refused_return";
+    /** {@code "Took %1$s out of the return input"}: an empty-hand click took quarantined items out (ADR-085 I7). */
+    public static final String SELECTOR_TOOK_OUT = "selector.took_out";
+    /** {@code "Linked to production station %1$s"}: the selector item was linked to the station at %1$s (ADR-085). */
+    public static final String SELECTOR_LINKED_STATION = "selector.linked_station";
+    /** {@code "Link cleared"}: a sneak-use into the air cleared the selector item's link (ADR-085). */
+    public static final String SELECTOR_CLEARED = "selector.cleared";
+    /** {@code "Sneak-click a production station with the selector first"}: placement or a return-input click without a station link (ADR-085). */
+    public static final String SELECTOR_NOT_LINKED = "selector.not_linked";
+    /** {@code "The station is too far away (more than %1$s blocks)"}: placement farther than the selector range %1$s from the station (ADR-085). */
+    public static final String SELECTOR_TOO_FAR = "selector.too_far";
+    /** {@code "There is no production station at %1$s any more"}: the linked station %1$s is gone (ADR-085). */
+    public static final String SELECTOR_STATION_MISSING = "selector.station_missing";
+    /** {@code "The station at %1$s is not loaded"}: the linked station %1$s is in an unloaded chunk (ADR-085). */
+    public static final String SELECTOR_STATION_NOT_LOADED = "selector.station_not_loaded";
+    /** {@code "Place it against a Mechanical Saw facing up or against a Basin"}: placement against a block that is no saw or basin (ADR-085). */
+    public static final String SELECTOR_NO_MACHINE = "selector.no_machine";
+    /** {@code "This saw cuts trees and has no recipe filter"}: placement against a saw that does not face up (ADR-085). */
+    public static final String SELECTOR_HORIZONTAL_SAW = "selector.horizontal_saw";
+    /** {@code "Place it against the Basin below the %1$s"}: placement against a Mixer or Press (%1$s): the selector goes on the Basin (ADR-085). */
+    public static final String SELECTOR_PLACE_ON_BASIN = "selector.place_on_basin";
+    /** {@code "This machine already has a Recipe Selector"}: another selector already writes this machine's filter (ADR-085). */
+    public static final String SELECTOR_REFUSED_MACHINE_TAKEN = "selector.refused_machine_taken";
+    /** {@code "Finish or cancel the station's open orders first"}: the station has open orders (ADR-085). */
+    public static final String SELECTOR_REFUSED_OPEN_ORDERS = "selector.refused_open_orders";
+    /** {@code "This station feeds a Crafter. A Recipe Selector is for saws and basins"}: the station has a Crafter Feeder (ADR-085). */
+    public static final String SELECTOR_REFUSED_FEEDER = "selector.refused_feeder";
+    /** {@code "This station sends recipe slips. Switch them off in its screen first"}: the station is in recipe-slip mode (ADR-085). */
+    public static final String SELECTOR_REFUSED_SLIPS_ACTIVE = "selector.refused_slips_active";
+    /** {@code "This station already has a Recipe Selector at %1$s"}: the station already has a working selector at %1$s (ADR-085). */
+    public static final String SELECTOR_REFUSED_SELECTOR_PRESENT = "selector.refused_selector_present";
+    /** {@code "Recipe Selector placed: station %1$s now makes one recipe at a time. Bind its return input next"}: the selector registered with station %1$s (ADR-085). */
+    public static final String SELECTOR_PLACED = "selector.placed";
+    /** {@code "Warehouse Input bound as the return input of station %1$s"}: the clicked input is now the return input of station %1$s (ADR-085). */
+    public static final String SELECTOR_BOUND_RETURN_INPUT = "selector.bound_return_input";
+    /** {@code "This input belongs to another warehouse"}: the clicked input is in another warehouse (ADR-085). */
+    public static final String SELECTOR_REFUSED_OTHER_CONTROLLER = "selector.refused_other_controller";
+    /** {@code "This input is not part of the station's warehouse"}: the clicked input is in no warehouse, or the station is in none (ADR-085). */
+    public static final String SELECTOR_INPUT_NOT_IN_WAREHOUSE = "selector.input_not_in_warehouse";
+    /** {@code "This input already returns for another station"}: the clicked input is the return input of another station (ADR-085). */
+    public static final String SELECTOR_REFUSED_INPUT_TAKEN = "selector.refused_input_taken";
+    /** {@code "An order of the station is in the machine. Wait until it is back"}: an order of the station has handed ingredients over (ADR-085). */
+    public static final String SELECTOR_REFUSED_ENGAGED = "selector.refused_engaged";
+    /** {@code "The station is stopped. Check its line and resume it first"}: switching the selector off while the station holds (ADR-085). */
+    public static final String SELECTOR_REFUSED_HOLD = "selector.refused_hold";
+    /** {@code "You cannot use that block"}: the player may not interact with the clicked block (ADR-085). */
+    public static final String SELECTOR_NOT_ALLOWED = "selector.not_allowed";
+    /** {@code "Station: %1$s"}: item tooltip: the linked station (ADR-085). */
+    public static final String SELECTOR_TOOLTIP_STATION = "selector.tooltip.station";
+    /** {@code "Not linked: sneak-click a production station"}: item tooltip of an unlinked selector (ADR-085). */
+    public static final String SELECTOR_TOOLTIP_UNLINKED = "selector.tooltip.unlinked";
+    /** {@code "Linked to %1$s at %2$s"}: the Ender selector item was linked to the machine %1$s at %2$s (ADR-085). */
+    public static final String SELECTOR_LINKED_MACHINE = "selector.linked_machine";
+    /** {@code "Station %1$s now puts a recipe slip into every package and makes one recipe at a time"}: the Ender selector item switched station %1$s to recipe slips (ADR-085). */
+    public static final String SELECTOR_SLIPS_ON = "selector.slips_on";
+    /** {@code "Sneak-click the saw or basin at the factory first"}: the Ender selector item has no machine link yet (ADR-085). */
+    public static final String SELECTOR_NEEDS_MACHINE_LINK = "selector.needs_machine_link";
+    /** {@code "Place it on the factory's unpacking Packager"}: the Ender selector was placed against no Packager (ADR-085). */
+    public static final String SELECTOR_NEEDS_PACKAGER = "selector.needs_packager";
+    /** {@code "Sneak to place it on the Packager"}: a plain click with the Ender selector on a Packager (ADR-085). */
+    public static final String SELECTOR_SNEAK_TO_PLACE = "selector.sneak_to_place";
+    /** {@code "Place it so that it is in the same chunk as the Packager"}: the Ender selector would stand in another chunk than its Packager (ADR-085). */
+    public static final String SELECTOR_REFUSED_OTHER_CHUNK = "selector.refused_other_chunk";
+    /** {@code "This Packager already has an Ender Recipe Selector"}: another Ender selector already sits on the Packager (ADR-085). */
+    public static final String SELECTOR_REFUSED_PACKAGER_TAKEN = "selector.refused_packager_taken";
+    /** {@code "The linked machine is too far away (more than %1$s blocks)"}: the item's machine link is farther than the machine range %1$s from the Ender selector (ADR-085). */
+    public static final String SELECTOR_MACHINE_TOO_FAR = "selector.machine_too_far";
+    /** {@code "Recipe Selector now sets %1$s at %2$s"}: a placed Ender selector took the item's machine link (ADR-085). */
+    public static final String SELECTOR_RELINKED = "selector.relinked";
+    /** {@code "Recipe Selector accepts slips from any station again"}: an empty-handed sneak-click cleared the Ender selector's station (ADR-085). */
+    public static final String SELECTOR_LATCH_CLEARED = "selector.latch_cleared";
+    /** {@code "A package of this station is still in %1$s"}: a hold release refused while a Packager (%1$s) of the slip station holds or queues a box (ADR-085). */
+    public static final String SELECTOR_HOLD_REFUSED_PACKAGER = "selector.hold_refused_packager";
+    /** {@code "A package of this station is still in %1$s next to its Packager"}: a hold release refused while an inventory (%1$s) beside the Packager holds a box of this station (ADR-085). */
+    public static final String SELECTOR_HOLD_REFUSED_PORT = "selector.hold_refused_port";
+    /** {@code "Machine: %1$s at %2$s"}: Ender item tooltip: the linked machine (ADR-085). */
+    public static final String SELECTOR_TOOLTIP_MACHINE = "selector.tooltip.machine";
+    /** {@code "No machine: sneak-click the factory's saw or basin"}: Ender item tooltip without a machine link (ADR-085). */
+    public static final String SELECTOR_TOOLTIP_NO_MACHINE = "selector.tooltip.no_machine";
+    /** {@code "Recipe slip: %1$s"}: package tooltip: the recipe slip's result (ADR-085). */
+    public static final String RECIPE_SLIP_TOOLTIP = "recipe_slip.tooltip";
+    /**
+     * {@code "Recipe Selector switched off: the station makes its orders as they come again"}: the station screen switched the Recipe Selector off (ADR-085).
+     */
+    public static final String SELECTOR_SWITCHED_OFF = "selector.switched_off";
+    /**
+     * {@code "Recipe slips switched off: the station's packages carry none any more"}: the station screen switched recipe slips off (ADR-085).
+     */
+    public static final String SELECTOR_SLIPS_OFF = "selector.slips_off";
+    /** {@code "Recipe Selector set to %1$s"}: station screen: the selector row of a local selector, set to %1$s. */
+    public static final String PRODUCTION_SELECTOR_ROW_LOCAL = "gui.production.selector.row_local";
+    /** {@code "Recipe slips on: making %1$s"}: station screen: the selector row in slip mode, making %1$s. */
+    public static final String PRODUCTION_SELECTOR_ROW_SLIPS = "gui.production.selector.row_slips";
+    /** {@code "nothing yet"}: station screen: a selector row before the first switch. */
+    public static final String PRODUCTION_SELECTOR_NOTHING_YET = "gui.production.selector.nothing_yet";
+    /**
+     * {@code "Recipe Selector missing: place one or switch it off"}: station screen: a local station whose selector is gone.
+     */
+    public static final String PRODUCTION_SELECTOR_ROW_MISSING = "gui.production.selector.row_missing";
+    /** {@code "Held: check the line, then click here"}: station screen: the selector row while the station holds. */
+    public static final String PRODUCTION_SELECTOR_HOLD = "gui.production.selector.hold";
+    /** {@code "Switch the Recipe Selector off"}: station screen: the red mark of a local selector row. */
+    public static final String PRODUCTION_SELECTOR_SWITCH_OFF = "gui.production.selector.switch_off";
+    /** {@code "Switch recipe slips off"}: station screen: the red mark of a slip-mode row. */
+    public static final String PRODUCTION_SELECTOR_SWITCH_OFF_SLIPS = "gui.production.selector.switch_off_slips";
+    /**
+     * {@code "Not while an order is in the machine"}: station screen: switching off is refused while an order is engaged.
+     */
+    public static final String PRODUCTION_SELECTOR_SWITCH_OFF_ENGAGED = "gui.production.selector.switch_off_engaged";
+    /** {@code "Recipe Selector at %1$s"}: station screen tooltip: where the local selector stands. */
+    public static final String PRODUCTION_SELECTOR_AT = "gui.production.selector.at";
+    /** {@code "Machine: %1$s"}: station screen tooltip: the selector's machine. */
+    public static final String PRODUCTION_SELECTOR_MACHINE = "gui.production.selector.machine";
+    /** {@code "Return input at %1$s"}: station screen tooltip: where the return input is. */
+    public static final String PRODUCTION_SELECTOR_RETURN_INPUT = "gui.production.selector.return_input";
+    /** {@code "Switched %1$s times"}: station screen tooltip: how often the line switched. */
+    public static final String PRODUCTION_SELECTOR_SWITCHES = "gui.production.selector.switches";
+    /**
+     * {@code "The next switch sends one run first to check the factory"}: station screen tooltip: slip mode, the next switch is probed.
+     */
+    public static final String PRODUCTION_SELECTOR_UNTRUSTED = "gui.production.selector.untrusted";
+    /**
+     * {@code "An order for %1$s ended with ingredients in the line"}: station screen tooltip: a hold for lost ingredients.
+     */
+    public static final String PRODUCTION_SELECTOR_HOLD_LOST = "gui.production.selector.hold_lost";
+    /** {@code "%1$s came back through the return input"}: station screen tooltip: a hold for an unexpected return. */
+    public static final String PRODUCTION_SELECTOR_HOLD_RETURN = "gui.production.selector.hold_return";
+    /**
+     * {@code "Check the line, then click this row or sneak-click the station"}: station screen tooltip: how to release a hold.
+     */
+    public static final String PRODUCTION_SELECTOR_HOLD_HINT = "gui.production.selector.hold_hint";
+    /**
+     * {@code "Click the return input with an empty hand to take it out"}: station screen tooltip: how a held return
+     * comes out of the quarantine.
+     */
+    public static final String PRODUCTION_SELECTOR_HOLD_TAKE_OUT = "gui.production.selector.hold_take_out";
+    /**
+     * {@code "The warehouse never orders this pattern at this station"}: station screen tooltip: a pattern the selector check refused.
+     */
+    public static final String PRODUCTION_SELECTOR_CHECK_SKIPPED = "gui.production.selector.check.skipped";
+    /** {@code "Recipe Selector: one recipe at a time"}: station goggles: the station has a local selector. */
+    public static final String GOGGLES_PRODUCTION_SELECTOR_LOCAL = "gui.goggles.production_selector_local";
+    /** {@code "Recipe slips: one recipe at a time"}: station goggles: the station sends recipe slips. */
+    public static final String GOGGLES_PRODUCTION_SELECTOR_SLIPS = "gui.goggles.production_selector_slips";
+    /** {@code "Now making: %1$s"}: station goggles: the selection. */
+    public static final String GOGGLES_PRODUCTION_SELECTOR_MAKING = "gui.goggles.production_selector_making";
+    /** {@code "Orders waiting for their turn: %1$s"}: station goggles: orders queued behind another result. */
+    public static final String GOGGLES_PRODUCTION_SELECTOR_WAITING = "gui.goggles.production_selector_waiting";
+    /** {@code "Held: check the line, then sneak-click the station"}: station goggles: the station holds. */
+    public static final String GOGGLES_PRODUCTION_SELECTOR_HOLD = "gui.goggles.production_selector_hold";
+    /** {@code "Recipe Selector:"}: goggle header of the local selector. */
+    public static final String GOGGLES_RECIPE_SELECTOR = "gui.goggles.recipe_selector";
+    /** {@code "Ender Recipe Selector:"}: goggle header of the Ender selector. */
+    public static final String GOGGLES_ENDER_RECIPE_SELECTOR = "gui.goggles.ender_recipe_selector";
+    /** {@code "Station: %1$s"}: selector goggles: the linked station. */
+    public static final String GOGGLES_SELECTOR_STATION = "gui.goggles.selector_station";
+    /** {@code "Machine: %1$s at %2$s"}: selector goggles: the machine it sets. */
+    public static final String GOGGLES_SELECTOR_MACHINE = "gui.goggles.selector_machine";
+    /** {@code "Filter now: %1$s"}: selector goggles: the machine's filter. */
+    public static final String GOGGLES_SELECTOR_FILTER = "gui.goggles.selector_filter";
+    /** {@code "No filter set"}: selector goggles: the machine has no filter. */
+    public static final String GOGGLES_SELECTOR_FILTER_NONE = "gui.goggles.selector_filter_none";
+    /** {@code "Last slip: %1$s from %2$s, %3$s s ago"}: Ender goggles: the last slip read. */
+    public static final String GOGGLES_SELECTOR_LAST_SLIP = "gui.goggles.selector_last_slip";
+    /** {@code "Packages: %1$s with slip, %2$s without"}: Ender goggles: packages let through. */
+    public static final String GOGGLES_SELECTOR_BOXES = "gui.goggles.selector_boxes";
+    /** {@code "Refused: %1$s × %2$s"}: Ender goggles: refusals per reason. */
+    public static final String GOGGLES_SELECTOR_REFUSED = "gui.goggles.selector_refused";
+    /** {@code "Serves station %1$s"}: Ender goggles: the station it serves. */
+    public static final String GOGGLES_SELECTOR_LATCH = "gui.goggles.selector_latch";
+    /** {@code "Hand changes set back: %1$s"}: local goggles: how often a hand change was set back. */
+    public static final String GOGGLES_SELECTOR_SET_BACKS = "gui.goggles.selector_set_backs";
+    /**
      * {@code "Stopped products: %1$s"}: items the safety stop is holding — on a production station the ones it makes
      * itself, on a warehouse controller the aisle's whole count (M20, issue #4, ADR-032).
      * <p>
@@ -2126,6 +2306,16 @@ public final class WareworksLang {
     public static String requesterStatusKey(dev.wareworks.core.requester.RequesterStatus status) {
         return GOGGLES_REQUESTER_STATUS_PREFIX + (status == dev.wareworks.core.requester.RequesterStatus.GRACE
                 ? "grace_wait" : status.serializedName());
+    }
+
+    /**
+     * The short label of a refusal reason in the Ender Recipe Selector's goggles ({@code "Refused: old package x 3"},
+     * ADR-085); a status that refuses no box falls back to its own status text.
+     */
+    public static String selectorReasonKey(dev.wareworks.content.selector.RecipeSelectorStatus reason) {
+        return reason.refusesBox()
+                ? "gui.goggles.selector_reason." + reason.name().toLowerCase(java.util.Locale.ROOT)
+                : reason.langKey();
     }
 
     /** Full translation key for a key relative to the {@code wareworks} namespace. */

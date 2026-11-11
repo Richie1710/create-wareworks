@@ -40,9 +40,12 @@ import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.HomePointStatus;
+import dev.wareworks.content.station.PackageHandover;
+import dev.wareworks.content.selector.RecipeSlip;
 import dev.wareworks.content.station.PatternFilterCells;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.SelectorHold;
 import dev.wareworks.content.station.TerminalFluidOutcome;
 import dev.wareworks.content.station.TerminalFluids;
 import dev.wareworks.content.station.TerminalRequestOutcome;
@@ -109,6 +112,9 @@ import dev.wareworks.core.production.ProductionPlanner;
 import dev.wareworks.core.production.SequentialPlans;
 import dev.wareworks.core.production.StationPattern;
 import dev.wareworks.core.production.SupplyLine;
+import dev.wareworks.core.production.SelectorGate;
+import dev.wareworks.core.production.SelectorMode;
+import dev.wareworks.core.production.SelectorWait;
 import dev.wareworks.core.stock.RestockDecision;
 import dev.wareworks.core.stock.RestockInput;
 import dev.wareworks.core.stock.RestockLimits;
@@ -157,6 +163,7 @@ import net.createmod.catnip.math.BlockFace;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.GlobalPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -166,6 +173,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.items.IItemHandler;
 
 /**
  * Block entity of the warehouse controller: the logical state of one warehouse ({@code docs/warehouse-system.md}
@@ -371,6 +380,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** Production orders of this aisle ({@code docs/warehouse-system.md} §3.5, ADR-024). Saved. */
     private final ProductionOrders<ItemKey, RackPosition> productionOrders =
             new ProductionOrders<>(configuredMaxProductionOrders());
+    /** The Recipe Selector stations of this aisle (ADR-085): which select, their gate, arm pass and holds. Not saved. */
+    private final SelectorStations selectors = new SelectorStations(this, productionOrders);
     /** Job planning and reservations; derived from the crane's job, not saved. */
     private final CraneDispatch dispatch = new CraneDispatch(this);
     /** What the filter cells of this aisle's patterns allow (ADR-082); asked at clicks and passes, never ticked. */
@@ -1839,7 +1850,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /** The loaded production station at rack position {@code rack} of this aisle, if there is one. */
-    private Optional<WarehouseProductionBlockEntity> productionStationAt(RackPosition rack) {
+    Optional<WarehouseProductionBlockEntity> productionStationAt(RackPosition rack) {
         if (level == null || layout == null)
             return Optional.empty();
         BlockPos pos = layout.rackPos(rack);
@@ -1981,9 +1992,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 continue;
             if (productionOrders.hasOpenChildren(order.id()))
                 continue;
+            // A Recipe Selector station lets only the orders of its line's result fetch (ADR-085, design §5.3, I2): -1
+            // is an ordinary order, 0 is "not now", anything else the runs it may fetch for (a probe fetches one).
+            int admission = selectors.admission(order);
+            if (admission == 0)
+                continue;
             for (SupplyLine<ItemKey> line : order.lines()) {
-                if (line.remaining() > 0)
-                    needs.add(new PlannerInput.SupplyNeed<>(line.id(), line.key(), line.remaining(), order.station()));
+                int remaining = admission < 0 ? line.remaining()
+                        : SelectorStations.remainingUnderCap(order, line, admission);
+                if (remaining > 0)
+                    needs.add(new PlannerInput.SupplyNeed<>(line.id(), line.key(), remaining, order.station()));
             }
         }
         return List.copyOf(needs);
@@ -2013,12 +2031,38 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public Optional<ProductionOrder<ItemKey, RackPosition>> cancelProductionOrder(UUID id) {
         if (level == null || level.isClientSide)
             return Optional.empty();
-        Optional<ProductionOrder<ItemKey, RackPosition>> cancelled = productionOrders.cancel(id, level.getGameTime());
+        Optional<ProductionOrder<ItemKey, RackPosition>> before = productionOrders.get(id);
+        Optional<ProductionOrder<ItemKey, RackPosition>> cancelled = productionOrders.cancel(id, level.getGameTime(),
+                productionTimeoutTicks());
         cancelled.ifPresent(order -> {
-            onProductionOrderEnded(order);
+            // An engaged Recipe Selector order is trimmed, not ended (ADR-085, design §5.5): it is still open.
+            if (order.isOpen())
+                onProductionOrderTrimmed(before.orElse(order), order);
+            else
+                onProductionOrderEnded(order);
             setChanged();
         });
         return cancelled;
+    }
+
+    /**
+     * An engaged Recipe Selector order was trimmed to the whole runs it has handed over (ADR-085, design §5.5): it
+     * fetches nothing more, so a crane fetching for it aborts before the pick or takes what it holds back into storage,
+     * and the request it backs gets back what the order no longer promises. It stays open until its products are back,
+     * so its station's line does not switch while they are in it.
+     */
+    private void onProductionOrderTrimmed(ProductionOrder<ItemKey, RackPosition> before,
+            ProductionOrder<ItemKey, RackPosition> after) {
+        cancelSupplyJobsOf(after);
+        selectors.invalidate();
+        long released = before.promisedToRequest() - after.promisedToRequest();
+        if (released > 0L)
+            after.backingRequest().ifPresent(request -> reduceRequestForShortfall(request,
+                    (int) Math.min(Integer.MAX_VALUE, released)));
+        setChanged();
+        markChunkKeepDirty();
+        if (after.state() == ProductionOrderState.COMPLETE)
+            onProductionOrderFinished(after);
     }
 
     /** A production station was broken or replaced: its orders can never finish, so they are cancelled. */
@@ -2031,8 +2075,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
 
     private void cancelProductionOrdersAt(RackPosition rack) {
         long now = level == null ? 0L : level.getGameTime();
-        for (ProductionOrder<ItemKey, RackPosition> cancelled : productionOrders.cancelFor(rack, now))
-            onProductionOrderEnded(cancelled);
+        // The station is gone, so no hold is armed for it (ADR-085): a hold belongs to a station a player can release.
+        selectors.withoutHolds(() -> {
+            for (ProductionOrder<ItemKey, RackPosition> cancelled : productionOrders.cancelFor(rack, now))
+                onProductionOrderEnded(cancelled);
+        });
     }
 
     /**
@@ -2207,6 +2254,23 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * was created). A pattern makes whole runs, so the orders may yield more; that surplus simply lands in stock and was
      * promised to nobody ({@code ProductionOrder#promisedToRequest})
      */
+    /**
+     * {@code order} bound to its station's Recipe Selector line (ADR-085, design §5.3) when the station selects: it is
+     * then gated, credited only out of the station's return input and never by a stock rise. A station in selector
+     * mode without a return input still gets the order; it waits for the input and is given it when it is bound.
+     *
+     * @param runs the runs of the pattern the order was created for (its {@code selectorRuns})
+     */
+    private ProductionOrder<ItemKey, RackPosition> selectorBound(ProductionOrder<ItemKey, RackPosition> order,
+            int runs) {
+        Optional<WarehouseProductionBlockEntity> station = productionStationAt(order.station());
+        if (station.isEmpty() || !station.get().selectorMode().selects())
+            return order;
+        RackPosition returnInput = station.get().selectorReturnInput().flatMap(this::rackAt)
+                .filter(rack -> membership.kindAt(rack).orElse(null) == LocationKind.INPUT).orElse(null);
+        return order.withSelector(returnInput, runs);
+    }
+
     private int startProductionPlan(ProductionPlan<ItemKey, RackPosition> plan, @Nullable UUID backingRequest) {
         if (level == null || layout == null)
             return 0;
@@ -2240,13 +2304,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 order = ProductionOrder.step(UUID.randomUUID(), node.station(), node.pattern(), node.runs(),
                         node.lines(), UUID::randomUUID, now, timeout, line.get());
             }
-            byNode.put(index, order);
+            byNode.put(index, selectorBound(order, node.runs()));
         }
         List<ProductionOrder<ItemKey, RackPosition>> batch = new ArrayList<>(plan.steps());
         for (int index = 0; index < plan.steps(); index++)
             batch.add(byNode.get(index));
         if (!productionOrders.addAll(batch))
             return 0;
+        selectors.invalidate();
         setChanged();
         markChunkKeepDirty(); // M19: an open order is work, and every step of a plan is one of these
         return promised;
@@ -2348,10 +2413,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 else
                     usesMore++;
             }
+            // Why it waits at its Recipe Selector station (ADR-085), and the item the wait text names.
+            SelectorWait selectorWait = waiting ? SelectorWait.NONE : waitsForSelector(order);
             views.add(new ProductionScreenState.OrderView(order.id(), order.state(), order.result(),
                     order.resultAmount(), order.produced(), order.outstandingIngredients(),
                     order.deliveredIngredients(), plan, depth, stationAddress(order.station()), waiting, uses,
-                    usesMore));
+                    usesMore, selectorWait, selectorWaitItem(order, selectorWait)));
         }
         return List.copyOf(views);
     }
@@ -2433,6 +2500,286 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return order != null && order.isOpen() && productionOrders.hasOpenChildren(order.id());
     }
 
+    // --- Recipe Selector stations (ADR-085) --------------------------------------------------------------------------
+
+    /**
+     * Why {@code order} fetches nothing (or only one run) at its Recipe Selector station right now (ADR-085, design
+     * §5.3): the one definition behind the screens, the terminal and the goggles, next to {@link #waitsForStep}.
+     * {@link SelectorWait#NONE} for an order at a station without a selector, and for an admitted one.
+     */
+    public SelectorWait waitsForSelector(ProductionOrder<ItemKey, RackPosition> order) {
+        if (level == null || level.isClientSide || order == null)
+            return SelectorWait.NONE;
+        return selectors.waitOf(order);
+    }
+
+    /**
+     * Server: the open orders whose deadline the Recipe Selector stations hold back in this tick (ADR-085, design §9):
+     * queued and held ones, and those of a station that is not loaded. Read-only; the visual scenarios watch with it
+     * that a queued order's deadline starts over when it leaves the queue.
+     */
+    public Set<UUID> selectorPausedOrders() {
+        if (level == null || level.isClientSide || !selectors.any())
+            return Set.of();
+        return Set.copyOf(selectors.paused());
+    }
+
+    /**
+     * The item the wait text of {@code order} names (ADR-085, design §12): the result that goes first for a queue
+     * ({@code BEHIND}, {@code LINE_BUSY}, {@code PROBE_BEHIND}), the item that came back unexpectedly for a hold of that
+     * cause; empty for every other wait, and for a hold whose ingredients were lost in the line.
+     */
+    public Optional<ItemKey> selectorWaitItem(ProductionOrder<ItemKey, RackPosition> order, SelectorWait wait) {
+        if (level == null || level.isClientSide || order == null || wait == null)
+            return Optional.empty();
+        SelectorStations.View view = switch (wait) {
+            case BEHIND, LINE_BUSY, PROBE_BEHIND, HOLD -> selectors.views().get(order.station());
+            default -> null;
+        };
+        if (view == null)
+            return Optional.empty();
+        if (wait == SelectorWait.HOLD)
+            return view.station() == null ? Optional.empty()
+                    : view.station().selectorHold().flatMap(SelectorHold::unexpected);
+        return view.decision() == null ? Optional.empty() : view.decision().firstResult();
+    }
+
+    /**
+     * Server: what the selector gate decides for the station at {@code station} in this tick, if it is a loaded
+     * Recipe Selector station of this aisle (GameTests and screens).
+     */
+    public Optional<SelectorGate.Decision<ItemKey>> selectorDecision(BlockPos station) {
+        Objects.requireNonNull(station, "station");
+        if (level == null || level.isClientSide)
+            return Optional.empty();
+        return rackAt(station).map(rack -> selectors.views().get(rack)).map(SelectorStations.View::decision);
+    }
+
+    /**
+     * Server: the fault the selector gate was given for the station at {@code station} in this tick (no selector, no
+     * return input, a filter item, ...), the one the station's screen and goggles name (ADR-085, design §12); empty for
+     * a station that has none, is not loaded or does not select.
+     */
+    public Optional<SelectorWait> selectorFault(BlockPos station) {
+        Objects.requireNonNull(station, "station");
+        if (level == null || level.isClientSide)
+            return Optional.empty();
+        return rackAt(station).map(rack -> selectors.views().get(rack)).flatMap(SelectorStations.View::fault);
+    }
+
+    /**
+     * Quarantine for the planner ({@code PlannerInput#storeHeld}, ADR-085 I7): whether the items of {@code key} must
+     * stay in the input at {@code input} because it is a selector station's return input and the station does not
+     * expect them. Free for an aisle without a selector station.
+     */
+    public boolean selectorStoreHeld(RackPosition input, ItemKey key) {
+        if (level == null || level.isClientSide)
+            return false;
+        return selectors.storeHeld(input, key);
+    }
+
+    /**
+     * Server: whether the quarantine keeps the items of {@code key} in the Warehouse Input at the world position
+     * {@code input} ({@link #selectorStoreHeld}), so a player may take them out of it by hand (ADR-085 I7, design §8:
+     * the hold asks the player to). False for any other input or key.
+     */
+    public boolean selectorQuarantines(BlockPos input, ItemKey key) {
+        if (level == null || level.isClientSide)
+            return false;
+        return rackAt(input).map(rack -> selectors.storeHeld(rack, key)).orElse(false);
+    }
+
+    /**
+     * GameTests only: arms {@code hold} for the station at {@code station} the way an order that ends while its station
+     * is not loaded does (ADR-085, I5): it waits in the controller, saved with it, until the station is next seen.
+     */
+    public void pendSelectorHoldForTest(BlockPos station, SelectorHold hold) {
+        Objects.requireNonNull(station, "station");
+        Objects.requireNonNull(hold, "hold");
+        rackAt(station).ifPresent(rack -> selectors.pendHoldForTest(rack, hold));
+    }
+
+    /**
+     * GameTests only: the selector side treats the station at {@code station} as not loaded while {@code hidden}
+     * (ADR-085, I4, I7), so its fail-closed paths can be tested in a structure whose chunks never unload.
+     */
+    public void hideSelectorStationForTest(BlockPos station, boolean hidden) {
+        Objects.requireNonNull(station, "station");
+        rackAt(station).ifPresent(rack -> selectors.hideStationForTest(rack, hidden));
+    }
+
+    /** Server: a production station changed its selector mode, link, return input or hold, or loaded (ADR-085). */
+    public void onSelectorStationChanged(BlockPos station) {
+        Objects.requireNonNull(station, "station");
+        selectors.markStale();
+    }
+
+    /**
+     * Server: the station at {@code station} switched its Recipe Selector off (ADR-085, design §3.3). It accepts that
+     * only while none of its orders is engaged, so its open orders simply become ordinary orders again.
+     */
+    public void onSelectorSwitchedOff(BlockPos station) {
+        Objects.requireNonNull(station, "station");
+        rackAt(station).ifPresent(rack -> {
+            if (!productionOrders.unbindSelector(rack).isEmpty())
+                setChanged();
+        });
+        selectors.markStale();
+    }
+
+    /** Server: whether an open order of the station at {@code station} has handed ingredients over (ADR-085). */
+    public boolean selectorStationEngaged(BlockPos station) {
+        Objects.requireNonNull(station, "station");
+        return rackAt(station).map(selectors::engaged).orElse(false);
+    }
+
+    /** What binding a return input to a selector station came to (ADR-085, design §3.5). */
+    public enum ReturnInputBinding {
+        /** Bound; the station's open orders that handed nothing over now return through it. */
+        BOUND,
+        /** The station is no production station of this aisle. */
+        REFUSED_NOT_HERE,
+        /** The block is no Warehouse Input of this aisle. */
+        REFUSED_NOT_AN_INPUT,
+        /** The input belongs to another warehouse. */
+        REFUSED_OTHER_CONTROLLER,
+        /** The input is already the return input of another selector station. */
+        REFUSED_INPUT_TAKEN,
+        /** An order of the station has handed ingredients over: its products may be on their way back already. */
+        REFUSED_ENGAGED
+    }
+
+    /**
+     * Server: binds the Warehouse Input at {@code input} as the return input of {@code station} (ADR-085, design §3.5).
+     * Only that input completes the station's selector orders, and while the station selects it stores only what the
+     * station makes. A rebinding replaces the old input.
+     */
+    public ReturnInputBinding bindSelectorReturnInput(WarehouseProductionBlockEntity station, BlockPos input) {
+        Objects.requireNonNull(station, "station");
+        Objects.requireNonNull(input, "input");
+        if (level == null || level.isClientSide || layout == null)
+            return ReturnInputBinding.REFUSED_NOT_HERE;
+        Optional<RackPosition> stationRack = rackAt(station.getBlockPos())
+                .filter(rack -> membership.kindAt(rack).orElse(null) == LocationKind.PRODUCTION);
+        if (stationRack.isEmpty())
+            return ReturnInputBinding.REFUSED_NOT_HERE;
+        Optional<RackPosition> inputRack = rackAt(input)
+                .filter(rack -> membership.kindAt(rack).orElse(null) == LocationKind.INPUT);
+        if (inputRack.isEmpty()) {
+            Optional<WarehouseControllerBlockEntity> owner = WarehouseRegistry.findController(level, input);
+            return owner.isPresent() && owner.get() != this ? ReturnInputBinding.REFUSED_OTHER_CONTROLLER
+                    : ReturnInputBinding.REFUSED_NOT_AN_INPUT;
+        }
+        // Another station of this aisle that returns through the same input: the loaded ones say so themselves, an
+        // unloaded one through what was last seen of it and the orders it still has open.
+        if (selectors.returnInputTaken(stationRack.get(), input, inputRack.get()))
+            return ReturnInputBinding.REFUSED_INPUT_TAKEN;
+        if (selectors.engaged(stationRack.get()))
+            return ReturnInputBinding.REFUSED_ENGAGED;
+        station.setSelectorReturnInput(Optional.of(input));
+        productionOrders.bindSelectorReturn(stationRack.get(), inputRack.get());
+        selectors.markStale();
+        setChanged();
+        return ReturnInputBinding.BOUND;
+    }
+
+    /**
+     * What releasing a selector station's hold came to (ADR-085, design §8).
+     *
+     * @param outcome what happened
+     * @param item    the item the line goes on with ({@link Outcome#RELEASED}), or the one that is in the way
+     */
+    public record SelectorRelease(Outcome outcome, Optional<ItemKey> item, Optional<BlockPos> at) {
+        public enum Outcome {
+            RELEASED,
+            /** The station holds nothing. */
+            NO_HOLD,
+            /** The station's buffer still holds items. */
+            REFUSED_BUFFER,
+            /** The return input still holds an item the station does not make. */
+            REFUSED_RETURN,
+            /** Slip mode: a Packager of the station still holds or queues a box ({@link #at()}). */
+            REFUSED_PACKAGER,
+            /** Slip mode: an inventory touching a Packager of the station holds a box of this station ({@link #at()}). */
+            REFUSED_PORT
+        }
+
+        public SelectorRelease {
+            Objects.requireNonNull(outcome, "outcome");
+            Objects.requireNonNull(item, "item");
+            Objects.requireNonNull(at, "at");
+        }
+
+        public SelectorRelease(Outcome outcome, Optional<ItemKey> item) {
+            this(outcome, item, Optional.empty());
+        }
+    }
+
+    /**
+     * Server: a player confirms that {@code station}'s line is checked (ADR-085, design §8): the hold is released
+     * unless the station's buffer still holds items or its return input an unexpected one. The station keeps its
+     * selection, so whatever is still in the line becomes surplus of the old product, never a new one.
+     */
+    public SelectorRelease releaseSelectorHold(WarehouseProductionBlockEntity station) {
+        Objects.requireNonNull(station, "station");
+        if (level == null || level.isClientSide || station.selectorHold().isEmpty())
+            return new SelectorRelease(SelectorRelease.Outcome.NO_HOLD, Optional.empty());
+        Optional<ItemKey> buffered = station.firstBufferedItem();
+        if (buffered.isPresent())
+            return new SelectorRelease(SelectorRelease.Outcome.REFUSED_BUFFER, buffered);
+        Optional<RackPosition> rack = rackAt(station.getBlockPos());
+        Optional<SelectorStations.View> view = rack.map(found -> selectors.views().get(found));
+        Optional<ItemKey> unexpected = view.flatMap(selectors::unexpectedIn);
+        if (unexpected.isPresent())
+            return new SelectorRelease(SelectorRelease.Outcome.REFUSED_RETURN, unexpected);
+        if (station.selectorMode() == SelectorMode.SLIPS) {
+            SelectorRelease boxes = slipBoxesInTheWay(station);
+            if (boxes != null)
+                return boxes;
+        }
+        Optional<ItemKey> goesOn = station.selection().or(() -> station.selectorHold().map(SelectorHold::result));
+        station.clearSelectorHold();
+        selectors.invalidate();
+        setChanged();
+        return new SelectorRelease(SelectorRelease.Outcome.RELEASED, goesOn);
+    }
+
+    /**
+     * Slip mode (design §8): a box of {@code station} that is still on its way out and could reach the factory after the
+     * release, or {@code null}. A Packager of the station that holds or queues a box; an inventory touching one of those
+     * Packagers (a package port, a chest) that holds a box whose slip names this station. Capability reads of at most
+     * six Packagers and their six neighbours each; nothing is scanned.
+     */
+    @Nullable
+    private SelectorRelease slipBoxesInTheWay(WarehouseProductionBlockEntity station) {
+        BlockPos stationPos = station.getBlockPos();
+        GlobalPos origin = GlobalPos.of(level.dimension(), stationPos);
+        List<BlockPos> packagers = PackageHandover.packagersOf(level, stationPos);
+        for (BlockPos packager : packagers) {
+            if (!PackageHandover.packagersIdle(level, List.of(packager)))
+                return new SelectorRelease(SelectorRelease.Outcome.REFUSED_PACKAGER, Optional.empty(),
+                        Optional.of(packager));
+        }
+        for (BlockPos packager : packagers) {
+            for (Direction side : Direction.values()) {
+                BlockPos next = packager.relative(side);
+                if (next.equals(stationPos) || packagers.contains(next) || !level.isLoaded(next))
+                    continue;
+                IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, next, side.getOpposite());
+                if (handler == null)
+                    continue;
+                int slots = Math.min(handler.getSlots(), 256);
+                for (int slot = 0; slot < slots; slot++) {
+                    Optional<RecipeSlip> slip = RecipeSlip.read(handler.getStackInSlot(slot));
+                    if (slip.isPresent() && slip.get().origin().equals(origin))
+                        return new SelectorRelease(SelectorRelease.Outcome.REFUSED_PORT, Optional.empty(),
+                                Optional.of(next));
+                }
+            }
+        }
+        return null;
+    }
+
     /** The canonical address of a rack position of this aisle, e.g. {@code "A-05-01R"}; empty without a layout. */
     public Optional<String> stationAddress(RackPosition rack) {
         if (rack == null || layout == null)
@@ -2463,7 +2810,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * arriving, timeouts and forgetting finished orders. Runs only while orders exist, at the dispatch cadence.
      */
     private void tickProductionOrders(long now) {
-        if (productionOrders.isEmpty())
+        boolean selecting = selectors.any();
+        if (productionOrders.isEmpty() && !selecting)
             return;
         long timeout = productionTimeoutTicks();
         boolean changed = false;
@@ -2477,7 +2825,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // A step that times out ends its whole plan (M20): the order above it is waiting for something no machine is
         // going to make now. An order that is itself waiting for a step is not timed out at all — its deadline starts
         // over when that step ends (ProductionOrders#timeOut).
-        for (ProductionOrder<ItemKey, RackPosition> timedOut : productionOrders.timeOut(now, timeout)) {
+        // The Recipe Selector stations' pass (ADR-085, design §5.3): holds, quarantine, the line's switch and arm step.
+        // Their queued and held orders do not time out (design §9).
+        if (selecting)
+            changed |= selectors.run(now);
+        for (ProductionOrder<ItemKey, RackPosition> timedOut
+                : productionOrders.timeOut(now, timeout, selecting ? selectors.paused() : Set.of())) {
             onProductionOrderEnded(timedOut);
             changed = true;
         }
@@ -2551,18 +2904,62 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * tipped into a rack, an unrelated farm or a player taking the product out and putting it back would otherwise
      * complete an order whose ingredients a machine had swallowed — and the rule would go on feeding that machine.
      */
-    private void onResultStored(ItemKey key, int delivered) {
+    private void onResultStored(ItemKey key, int delivered, Optional<RackPosition> source) {
         long timeout = productionTimeoutTicks();
         ProductionOrders.Observation<ItemKey, RackPosition> observed =
-                productionOrders.observeStored(key, delivered, level.getGameTime(), timeout);
+                productionOrders.observeStored(key, delivered, level.getGameTime(), timeout, source);
         if (observed.isEmpty())
             return;
+        selectors.invalidate();
         if (observed.credited() > 0L)
             storedCredits.merge(key, observed.credited(), Long::sum);
         for (ProductionOrder<ItemKey, RackPosition> order : observed.changed()) {
             if (order.state() == ProductionOrderState.COMPLETE)
                 onProductionOrderFinished(order);
         }
+        setChanged();
+    }
+
+    /**
+     * Server: {@code delivered} result items of {@code key} the crane carried out of the warehouse input {@code source}
+     * into an accepting port instead of storing them. Only a Recipe Selector order whose return input is {@code source}
+     * counts them ({@link ProductionOrders#observeDiverted}); {@code storedCredits} is left alone, because the stock
+     * level never rose.
+     * <p>
+     * The credit only lets the line go on (re-review fix). What the order was <i>for</i> did not happen, because the
+     * items never reached the racks, so the two things an unfulfilled order does still happen here, for the diverted
+     * part only: a request that waited for these items is reduced by them ({@link #reduceRequestForShortfall}), and a
+     * stock rule's own order stops its rule ({@link StockRulePause.Cause#DIVERTED}), or it would order again and again
+     * and feed the port with no end (M17, ADR-027).
+     */
+    private void onSelectorResultDiverted(ItemKey key, int delivered, RackPosition source) {
+        if (productionOrders.isEmpty())
+            return;
+        Map<UUID, ProductionOrder<ItemKey, RackPosition>> before = new HashMap<>();
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.open()) {
+            if (order.selectorBound() && order.result().equals(key))
+                before.put(order.id(), order);
+        }
+        ProductionOrders.Observation<ItemKey, RackPosition> observed = productionOrders.observeDiverted(key, delivered,
+                level.getGameTime(), productionTimeoutTicks(), source);
+        if (observed.isEmpty())
+            return;
+        selectors.invalidate();
+        boolean restockDiverted = false;
+        for (ProductionOrder<ItemKey, RackPosition> order : observed.changed()) {
+            ProductionOrder<ItemKey, RackPosition> was = before.get(order.id());
+            long diverted = was == null ? 0L : Math.max(0L, order.produced() - was.produced());
+            // Only what was promised and still owed: a pattern's surplus was promised to nobody (§3.5.3).
+            long owed = was == null ? 0L : Math.min(diverted, was.unfulfilledPromise());
+            if (owed > 0L)
+                order.backingRequest().ifPresent(id -> reduceRequestForShortfall(id,
+                        (int) Math.min(Integer.MAX_VALUE, owed)));
+            restockDiverted |= diverted > 0L && order.isRestock();
+            if (order.state() == ProductionOrderState.COMPLETE)
+                onProductionOrderFinished(order);
+        }
+        if (restockDiverted)
+            pauseProduction(key, StockRulePause.Cause.DIVERTED, 0L);
         setChanged();
     }
 
@@ -2616,10 +3013,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private void failProductionPlan(ProductionOrder<ItemKey, RackPosition> node) {
         if (level == null)
             return;
+        Map<UUID, ProductionOrder<ItemKey, RackPosition>> before = new HashMap<>();
+        for (ProductionOrder<ItemKey, RackPosition> member : productionOrders.planOf(node.id()))
+            before.put(member.id(), member);
         ProductionOrders.PlanFailure<ItemKey, RackPosition> failure =
                 productionOrders.failPlan(node.id(), level.getGameTime());
         if (failure.isEmpty())
             return;
+        // A Recipe Selector order of the plan that had handed something over was trimmed, not ended (ADR-085).
+        for (ProductionOrder<ItemKey, RackPosition> detached : failure.detached()) {
+            ProductionOrder<ItemKey, RackPosition> was = before.get(detached.id());
+            if (was != null && detached.selectorBound() && detached.resultAmount() != was.resultAmount())
+                onProductionOrderTrimmed(was, detached);
+        }
         // Not onProductionOrderEnded: failPlan has already answered for the whole plan in one pass, so every order it
         // ended needs its own cleanup and nothing more.
         for (ProductionOrder<ItemKey, RackPosition> cancelled : failure.cancelled())
@@ -2645,6 +3051,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private void onProductionOrderFinished(ProductionOrder<ItemKey, RackPosition> order) {
         cancelSupplyJobsOf(order);
+        // A Recipe Selector order that ended with ingredients in the line stops its station (ADR-085, I5).
+        selectors.orderEnded(order, level == null ? 0L : level.getGameTime());
         markChunkKeepDirty(); // M19: one fewer order, so the aisle may be idle now
         // The safety stop (M15 part 2, widened by M20): an order ended with ingredients already in a machine and
         // nothing coming back. Those items are unrecoverable, so the warehouse stops making that item and waits for the
@@ -4927,8 +5335,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             order = ProductionOrder.restock(UUID.randomUUID(), station, chosen, runs, UUID::randomUUID,
                     level.getGameTime(), productionTimeoutTicks());
         }
+        order = selectorBound(order, runs);
         if (!productionOrders.add(order))
             return false;
+        selectors.invalidate();
         setChanged();
         markChunkKeepDirty(); // M19: an automatic restock order is work like any other order
         return true;
@@ -5187,8 +5597,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return;
         long now = level.getGameTime();
         for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.open()) {
-            if (order.result().equals(key))
-                productionOrders.cancel(order.id(), now).ifPresent(this::onProductionOrderEnded);
+            if (!order.result().equals(key))
+                continue;
+            Optional<ProductionOrder<ItemKey, RackPosition>> cancelled = productionOrders.cancel(order.id(), now,
+                    productionTimeoutTicks());
+            if (cancelled.isPresent() && cancelled.get().isOpen())
+                onProductionOrderTrimmed(order, cancelled.get()); // an engaged selector order (ADR-085)
+            else
+                cancelled.ifPresent(this::onProductionOrderEnded);
         }
     }
 
@@ -5623,8 +6039,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // the moment an ingredient really arrived at the machine, so only a real drop counts here too.
         if (requestId.isPresent() && job.targetKind() == LocationKind.PRODUCTION && delivered > 0
                 && productionOrders.deliver(requestId.get(), delivered, level.getGameTime(), productionTimeoutTicks())
-                        .isPresent())
+                        .isPresent()) {
+            selectors.invalidate(); // an order that handed something over is engaged now (ADR-085)
             setChanged();
+        }
         dispatch.track(job);
         dispatch.rememberJob(crane, job);
         if (job.targetKind() == LocationKind.STORAGE)
@@ -5637,13 +6055,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // stop fires for no reason. This single line is what makes "collecting closes the production loop" true rather
         // than decorative.
         if (job.type().bringsItemsIn() && job.targetKind() == LocationKind.STORAGE && delivered > 0)
-            onResultStored(job.key(), delivered);
+            // A Recipe Selector order counts only what came out of its own return input (ADR-085, design §3.5), so the
+            // store job says where from; a collected arrival never completes one.
+            onResultStored(job.key(), delivered,
+                    job.type() == JobType.STORE ? Optional.of(job.source()) : Optional.empty());
         // The mirror image: items the warehouse handed over through an accepting port instead of storing them (M17).
         // onResultStored above is deliberately not reached by them — a product diverted out was never stored, so no
         // restock order may count it, and ADR-027's safety stop is what catches the rule that keeps ordering.
-        if (job.type() == JobType.STORE && job.targetKind() == LocationKind.OUTPUT && delivered > 0
-                && level.getBlockEntity(layout.rackPos(target)) instanceof WarehouseOutputBlockEntity port)
-            port.recordExport(delivered);
+        if (job.type() == JobType.STORE && job.targetKind() == LocationKind.OUTPUT && delivered > 0) {
+            if (level.getBlockEntity(layout.rackPos(target)) instanceof WarehouseOutputBlockEntity port)
+                port.recordExport(delivered);
+            // The one exception (ADR-085, review fix): a Recipe Selector order whose product came back through its own
+            // return input and went straight on to a diversion or an overflow port was made all the same. Only such
+            // orders are credited, and nothing is counted towards the stock level, which never saw these items.
+            onSelectorResultDiverted(job.key(), delivered, job.source());
+        }
         // A Warehouse Optimizer counts what its trips really put down (issue #46), and only that: onResultStored above is
         // not reached by a relocation (JobType#bringsItemsIn), so no production order is credited with a moved item.
         if (job.type() == JobType.RELOCATE && delivered > 0 && optimizerOrders.onDelivered(job.id(), delivered))
@@ -5765,14 +6191,15 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             refreshHomePoints();
         }
         drainPendingSnapshots();
-        if (!productionOrders.isEmpty()) {
-            if (observeProductionResults(now))
+        if (!productionOrders.isEmpty() || selectors.any()) {
+            if (!productionOrders.isEmpty() && observeProductionResults(now))
                 setChanged();
             if (now >= nextProductionTick) {
                 nextProductionTick = now + Math.max(1, WareworksConfig.dispatchIntervalTicks());
                 tickProductionOrders(now);
             }
-        } else if (!storedCredits.isEmpty()) {
+        }
+        if (productionOrders.isEmpty() && !storedCredits.isEmpty()) {
             // Nothing is waiting for a result any more, so an arrival credit that was never consumed is stale: keeping
             // it would suppress the first level gain of the next order for that item (M15 part 2).
             storedCredits.clear();
@@ -6615,6 +7042,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Map<RackPosition, List<KeeperRule>> rules = stockRules.saved();
         List<ProductionOrder<ItemKey, RackPosition>> orders = productionOrders.all();
         List<RetrievalRequest<ItemKey, BlockPos>> openRequests = requests.requests();
+        // The Recipe Selector side's own memory (re-review fix, I5 and I7): holds waiting for an unloaded station and
+        // what was last seen of each selector station follow their blocks like the orders do.
+        Map<RackPosition, SelectorHold> selectorHolds = selectors.pendingHolds();
+        Map<RackPosition, SelectorStations.LastSeen> selectorsSeen = selectors.lastSeen();
         Map<RackPosition, RackPosition> moved = new HashMap<>();
         Set<RackPosition> taken = new HashSet<>();
         for (RackPosition position : knownPositions(records, misaligned, rules, orders)) {
@@ -6684,9 +7115,27 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                     orphaned.add(order.station());
                 continue;
             }
-            remappedOrders.add(order.atStation(to));
+            ProductionOrder<ItemKey, RackPosition> remapped = order.atStation(to);
+            // A Recipe Selector order's return input is a rack position too (ADR-085).
+            RackPosition returnTo = order.selectorReturn().map(moved::get).orElse(null);
+            remappedOrders.add(returnTo == null ? remapped : remapped.withSelectorReturn(returnTo));
         }
         productionOrders.restore(remappedOrders);
+        Map<RackPosition, SelectorHold> remappedHolds = new LinkedHashMap<>();
+        selectorHolds.forEach((rack, hold) -> {
+            RackPosition to = moved.get(rack);
+            if (to != null)
+                remappedHolds.put(to, hold);
+        });
+        selectors.restorePendingHolds(remappedHolds);
+        Map<RackPosition, SelectorStations.LastSeen> remappedSeen = new LinkedHashMap<>();
+        selectorsSeen.forEach((rack, seen) -> {
+            RackPosition to = moved.get(rack);
+            if (to != null)
+                remappedSeen.put(to, new SelectorStations.LastSeen(seen.returnRack().map(moved::get),
+                        seen.selection()));
+        });
+        selectors.restoreLastSeen(remappedSeen);
         int cancelled = 0;
         for (RackPosition station : orphaned) {
             cancelled += productionOrders.ordersFor(station).size();
@@ -6778,6 +7227,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         sharedInventories.clear();
         requests.clear();
         productionOrders.clear();
+        selectors.clear();
         optimizerOrders.clear();
         fillRecipes.clear();
         dispatch.reset();
@@ -6814,6 +7264,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private void processMembership(WarehouseLayout current) {
         MembershipChanges changes = membership.reconcile(current.network(), rack -> probe(current, rack));
         boolean changed = pruneRequests(current);
+        // A production station or an input that comes or goes may change which stations select and which input
+        // returns for one (ADR-085); the selector list is rebuilt from the stations on its next use.
+        if (!changes.removed().isEmpty() || !changes.added().isEmpty())
+            selectors.markStale();
         for (LocationRecord removed : changes.removed()) {
             if (removed.kind() == LocationKind.STORAGE)
                 forgetStorageLocation(removed.position());
@@ -7009,7 +7463,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /** {@link #resolveRack} against the warehouse as it is now; empty without a dock. */
-    private Optional<RackPosition> rackAt(BlockPos pos) {
+    Optional<RackPosition> rackAt(BlockPos pos) {
         return layout == null ? Optional.empty() : resolveRack(layout, pos);
     }
 
@@ -7476,6 +7930,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         ControllerPersistence.writeProductionOrders(tag, productionOrders.all(), registries);
         // Only a warehouse with an optimizer order writes anything here, so every other saves what it did (issue #46).
         ControllerPersistence.writeOptimizerOrders(tag, optimizerOrders.all(), registries);
+        // Only while a Recipe Selector hold waits for its unloaded station (ADR-085, I5): a restart in between must not
+        // let that station go on with lost ingredients in its line.
+        ControllerPersistence.writeSelectorHolds(tag, selectors.pendingHolds(), registries);
+        // And what was last seen of each selector station, so an unloaded one's return input stays guarded across a
+        // restart (re-review fix, I7). Only an aisle with a selector station writes anything here.
+        ControllerPersistence.writeSelectorLastSeen(tag, selectors.lastSeen(), registries);
         // The aisle's stock rules are saved with the controller on purpose: a keeper's chunk can be unloaded while
         // this controller plans, and a rule that is read as "no rule" would store past a maximum or hand out a
         // reserve, which nothing ever undoes (AisleStockRules).
@@ -7589,6 +8049,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             // Optimizer orders belong to the saved layout as well (issue #46). A trip of one that was on its way is saved
             // with its crane like any job, so it is finished after the load and still counted.
             optimizerOrders.restore(ControllerPersistence.readOptimizerOrders(tag, registries));
+            // After clearAisleState, which forgot the old ones (ADR-085, I5).
+            selectors.restorePendingHolds(ControllerPersistence.readSelectorHolds(tag, registries));
+            selectors.restoreLastSeen(ControllerPersistence.readSelectorLastSeen(tag, registries));
             // Restored before the first tick, so the very first plan after a load already knows every maximum and
             // every reserve, even while the keepers themselves are still in unloaded chunks.
             stockRules.restore(ControllerPersistence.readStockRules(tag, registries));

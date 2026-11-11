@@ -3,8 +3,11 @@ package dev.wareworks.content.station;
 import java.util.Optional;
 
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.production.SelectorMode;
+import dev.wareworks.core.production.SelectorWait;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.resources.ResourceLocation;
 
 /**
  * What the goggle tooltip of a warehouse production station shows beyond the shared station lines
@@ -37,11 +40,12 @@ import net.minecraft.nbt.Tag;
  * @param feeder            whether a Warehouse Crafter Feeder is attached to this station's back (issue #34, ADR-067)
  * @param refusedPatterns   complete patterns the feeder refuses because they are no crafting recipe it can lay
  *                          ({@code CrafterPatternCheck#refused}); always 0 without a feeder
+ * @param selector          the station's Recipe Selector (ADR-085), {@link SelectorSummary#NONE} without one
  */
 public record ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
                                       long missingIngredients, long awaitedResult, int stoppedProducts,
                                       long unrecovered, boolean oldestWaitingForStep, boolean feeder,
-                                      int refusedPatterns) {
+                                      int refusedPatterns, SelectorSummary selector) {
     public static final ProductionGoggleSummary NONE =
             new ProductionGoggleSummary(0, 0, Optional.empty(), 0L, 0L, 0, 0L, false, false, 0);
 
@@ -55,6 +59,7 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
     private static final String WAITING_FOR_STEP = "WaitingForStep";
     private static final String FEEDER = "Feeder";
     private static final String REFUSED = "Refused";
+    private static final String SELECTOR = "Selector";
 
     public ProductionGoggleSummary {
         patterns = Math.max(0, patterns);
@@ -70,6 +75,16 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
         oldestWaitingForStep = oldestWaitingForStep && oldestState.isPresent();
         // Refused patterns exist only for a feeder, by the same reasoning as the flag above.
         refusedPatterns = feeder ? Math.max(0, refusedPatterns) : 0;
+        if (selector == null)
+            selector = SelectorSummary.NONE;
+    }
+
+    /** A station without a Recipe Selector: the shape every summary had before ADR-085. */
+    public ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
+            long missingIngredients, long awaitedResult, int stoppedProducts, long unrecovered,
+            boolean oldestWaitingForStep, boolean feeder, int refusedPatterns) {
+        this(patterns, openOrders, oldestState, missingIngredients, awaitedResult, stoppedProducts, unrecovered,
+                oldestWaitingForStep, feeder, refusedPatterns, SelectorSummary.NONE);
     }
 
     /** A station without a Crafter Feeder: the shape every summary had before issue #34. */
@@ -122,6 +137,12 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
             if (refusedPatterns > 0)
                 tag.putInt(REFUSED, refusedPatterns);
         }
+        // And a station without a Recipe Selector pays nothing for it (ADR-085).
+        if (selector.on()) {
+            CompoundTag selectorTag = new CompoundTag();
+            selector.write(selectorTag);
+            tag.put(SELECTOR, selectorTag);
+        }
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -130,6 +151,96 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
                 ? ProductionOrderState.byName(tag.getString(STATE)) : Optional.empty();
         return new ProductionGoggleSummary(tag.getInt(PATTERNS), tag.getInt(OPEN_ORDERS), state, tag.getLong(MISSING),
                 tag.getLong(AWAITED), tag.getInt(STOPPED), tag.getLong(UNRECOVERED),
-                tag.getBoolean(WAITING_FOR_STEP), tag.getBoolean(FEEDER), tag.getInt(REFUSED));
+                tag.getBoolean(WAITING_FOR_STEP), tag.getBoolean(FEEDER), tag.getInt(REFUSED),
+                tag.contains(SELECTOR, Tag.TAG_COMPOUND) ? SelectorSummary.read(tag.getCompound(SELECTOR))
+                        : SelectorSummary.NONE);
+    }
+
+    /**
+     * What the goggles of a Recipe Selector station add (ADR-085, design §12): numbers, item ids and enum names only,
+     * like the rest of this tag, so it stays small and carries no item components.
+     *
+     * @param mode      how the station selects; {@link SelectorMode#NONE} for a station without a selector
+     * @param selection the item id of the result the line is set to
+     * @param epoch     how often the line switched
+     * @param hold      whether the station holds until a player confirms
+     * @param fault     the station's fault, if any
+     * @param headWait  why the oldest waiting order waits ({@link SelectorWait#NONE} when nothing waits)
+     * @param headItem  the item id that wait names
+     * @param waiting   orders queued behind another result ({@link SelectorWait#queues()}, a hold excluded)
+     */
+    public record SelectorSummary(SelectorMode mode, Optional<ResourceLocation> selection, int epoch, boolean hold,
+                                  Optional<SelectorWait> fault, SelectorWait headWait,
+                                  Optional<ResourceLocation> headItem, int waiting) {
+        public static final SelectorSummary NONE = new SelectorSummary(SelectorMode.NONE, Optional.empty(), 0, false,
+                Optional.empty(), SelectorWait.NONE, Optional.empty(), 0);
+
+        private static final String MODE = "Mode";
+        private static final String SELECTION = "Selection";
+        private static final String EPOCH = "Epoch";
+        private static final String HOLD = "Hold";
+        private static final String FAULT = "Fault";
+        private static final String HEAD_WAIT = "HeadWait";
+        private static final String HEAD_ITEM = "HeadItem";
+        private static final String WAITING = "Waiting";
+
+        public SelectorSummary {
+            if (mode == null)
+                mode = SelectorMode.NONE;
+            if (selection == null)
+                selection = Optional.empty();
+            epoch = Math.max(0, epoch);
+            if (fault == null)
+                fault = Optional.empty();
+            fault = fault.filter(wait -> wait != SelectorWait.NONE);
+            if (headWait == null)
+                headWait = SelectorWait.NONE;
+            if (headItem == null || headWait == SelectorWait.NONE)
+                headItem = Optional.empty();
+            waiting = Math.max(0, waiting);
+        }
+
+        /** Whether the station selects at all. */
+        public boolean on() {
+            return mode.selects();
+        }
+
+        void write(CompoundTag tag) {
+            tag.putString(MODE, mode.name());
+            selection.ifPresent(id -> tag.putString(SELECTION, id.toString()));
+            tag.putInt(EPOCH, epoch);
+            if (hold)
+                tag.putBoolean(HOLD, true);
+            fault.ifPresent(wait -> tag.putString(FAULT, wait.name()));
+            if (headWait != SelectorWait.NONE)
+                tag.putString(HEAD_WAIT, headWait.name());
+            headItem.ifPresent(id -> tag.putString(HEAD_ITEM, id.toString()));
+            if (waiting > 0)
+                tag.putInt(WAITING, waiting);
+        }
+
+        static SelectorSummary read(CompoundTag tag) {
+            SelectorMode mode = SelectorMode.NONE;
+            for (SelectorMode candidate : SelectorMode.values()) {
+                if (candidate.name().equals(tag.getString(MODE)))
+                    mode = candidate;
+            }
+            return new SelectorSummary(mode, id(tag, SELECTION), tag.getInt(EPOCH), tag.getBoolean(HOLD),
+                    wait(tag.getString(FAULT)), wait(tag.getString(HEAD_WAIT)).orElse(SelectorWait.NONE),
+                    id(tag, HEAD_ITEM), tag.getInt(WAITING));
+        }
+
+        private static Optional<ResourceLocation> id(CompoundTag tag, String key) {
+            return tag.contains(key, Tag.TAG_STRING) ? Optional.ofNullable(ResourceLocation.tryParse(
+                    tag.getString(key))) : Optional.empty();
+        }
+
+        private static Optional<SelectorWait> wait(String name) {
+            for (SelectorWait wait : SelectorWait.values()) {
+                if (wait != SelectorWait.NONE && wait.name().equals(name))
+                    return Optional.of(wait);
+            }
+            return Optional.empty();
+        }
     }
 }

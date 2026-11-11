@@ -85,6 +85,18 @@ public final class WareworksConfig {
     }
 
     /** The configured value, or its default while the config is not loaded. Never throws. */
+    public static <E extends Enum<E>> E get(ModConfigSpec.EnumValue<E> value) {
+        if (SERVER_SPEC.isLoaded()) {
+            try {
+                return value.get();
+            } catch (IllegalStateException e) {
+                // unloaded between the check and the read (server stopping): fall through to the default
+            }
+        }
+        return value.getDefault();
+    }
+
+    /** The configured value, or its default while the config is not loaded. Never throws. */
     public static double get(ModConfigSpec.DoubleValue value) {
         if (SERVER_SPEC.isLoaded()) {
             try {
@@ -586,6 +598,54 @@ public final class WareworksConfig {
         return get(SERVER.remoteCrossDimension);
     }
 
+    // --- recipe selector -----------------------------------------------------------------------------------------
+
+    /** Default of {@link #selectorLocalRange()}. */
+    public static final int DEFAULT_SELECTOR_LOCAL_RANGE = 32;
+    public static final int MIN_SELECTOR_LOCAL_RANGE = 8;
+    public static final int MAX_SELECTOR_LOCAL_RANGE = 64;
+
+    /**
+     * How far a Recipe Selector may stand from the production station it serves, in blocks (ADR-085, design §3.3,
+     * §13): from the selector's centre to the station's, within one dimension, clamped into
+     * {@value #MIN_SELECTOR_LOCAL_RANGE}..{@value #MAX_SELECTOR_LOCAL_RANGE}.
+     */
+    public static int selectorLocalRange() {
+        return Math.clamp(get(SERVER.selectorLocalRange), MIN_SELECTOR_LOCAL_RANGE, MAX_SELECTOR_LOCAL_RANGE);
+    }
+
+    /** Default of {@link #selectorMachineRange()}. */
+    public static final int DEFAULT_SELECTOR_MACHINE_RANGE = 16;
+    public static final int MIN_SELECTOR_MACHINE_RANGE = 1;
+    public static final int MAX_SELECTOR_MACHINE_RANGE = 32;
+
+    /**
+     * How far the machine an Ender Recipe Selector is linked to may stand from the selector, in blocks (ADR-085,
+     * design §3.4, §7.6): centre to centre, within one dimension, clamped into
+     * {@value #MIN_SELECTOR_MACHINE_RANGE}..{@value #MAX_SELECTOR_MACHINE_RANGE}.
+     */
+    public static int selectorMachineRange() {
+        return Math.clamp(get(SERVER.selectorMachineRange), MIN_SELECTOR_MACHINE_RANGE, MAX_SELECTOR_MACHINE_RANGE);
+    }
+
+    /**
+     * When a production station that sends recipe slips probes its far factory (ADR-085, design §7.5): the first order
+     * after a switch may fetch one run only until that run has come back as the right product.
+     */
+    public enum RemoteProbe {
+        /** Probe at a switch while the line is not trusted yet (after a load, after slips were switched on, after a hold). */
+        UNTRUSTED,
+        /** Probe at every switch. */
+        EVERY_SWITCH,
+        /** Never probe. */
+        OFF
+    }
+
+    /** The probe rule of slip stations ({@link RemoteProbe}); default {@link RemoteProbe#UNTRUSTED}. */
+    public static RemoteProbe selectorRemoteProbe() {
+        return get(SERVER.selectorRemoteProbe);
+    }
+
     // --- optimizer -----------------------------------------------------------------------------------------------
 
     /**
@@ -708,6 +768,10 @@ public final class WareworksConfig {
         public final ModConfigSpec.BooleanValue remoteCrossDimension;
 
         public final ModConfigSpec.IntValue optimizerTripsPerRequest;
+
+        public final ModConfigSpec.IntValue selectorLocalRange;
+        public final ModConfigSpec.IntValue selectorMachineRange;
+        public final ModConfigSpec.EnumValue<RemoteProbe> selectorRemoteProbe;
 
         public final ModConfigSpec.IntValue requesterPollIntervalTicks;
         public final ModConfigSpec.IntValue requesterOrderTimeoutTicks;
@@ -1263,6 +1327,24 @@ public final class WareworksConfig {
             remoteCrossDimension = builder
                     .comment("Lets a remote open a terminal in another dimension; the range is not checked then.")
                     .define("crossDimension", false);
+            builder.pop();
+
+            builder.comment("The Recipe Selector: sets a saw's or basin's recipe for each order of a production station")
+                    .push("selector");
+            selectorLocalRange = builder
+                    .comment("[in Blocks] How far a Recipe Selector may stand from the production station it serves.")
+                    .defineInRange("localRange", DEFAULT_SELECTOR_LOCAL_RANGE, MIN_SELECTOR_LOCAL_RANGE,
+                            MAX_SELECTOR_LOCAL_RANGE);
+            selectorMachineRange = builder
+                    .comment("[in Blocks] How far the machine an Ender Recipe Selector is linked to may stand from the "
+                            + "selector.")
+                    .defineInRange("machineRange", DEFAULT_SELECTOR_MACHINE_RANGE, MIN_SELECTOR_MACHINE_RANGE,
+                            MAX_SELECTOR_MACHINE_RANGE);
+            selectorRemoteProbe = builder
+                    .comment("When a station that sends recipe slips lets the first order after a switch fetch one run "
+                            + "only, until that run has come back as the right product: UNTRUSTED (after a server "
+                            + "start, after slips were switched on and after a hold), EVERY_SWITCH or OFF.")
+                    .defineEnum("remoteProbe", RemoteProbe.UNTRUSTED);
             builder.pop();
 
             builder.comment("The Warehouse Optimizer: moves stock up to better storage locations").push("optimizer");

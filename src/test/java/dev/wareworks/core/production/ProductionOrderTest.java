@@ -558,4 +558,115 @@ class ProductionOrderTest {
         ProductionOrder<String, String> cancelled = order(planks(), 1, 0L).cancelled(START);
         assertSame(cancelled, cancelled.withProgress(START + 500L, TIMEOUT));
     }
+
+    // --- Recipe Selector (ADR-085) -------------------------------------------------------------------------------
+
+    @Test
+    void aSelectorOrderIgnoresStockLevelRises() {
+        ProductionOrder<String, String> order = order(planks(), 2, 10L).withSelector("return", 2);
+        assertTrue(order.selectorBound());
+        assertFalse(order.countsStockLevels(), "only its own return input may complete it");
+        assertEquals(0L, order.observableGain(500L));
+        assertSame(order, order.withResultStock(500L, START + 1L, TIMEOUT));
+        assertSame(order, order.withStored(4L, START + 1L, TIMEOUT), "nothing handed over yet: no arrival counts");
+        ProductionOrder<String, String> engaged = order.withDelivered(order.lines().getFirst().id(), 1, START,
+                TIMEOUT);
+        assertEquals(4L, engaged.withStored(4L, START + 1L, TIMEOUT).produced());
+    }
+
+    @Test
+    void onlyAnOrderWithRunsIsSelectorBound() {
+        ProductionOrder<String, String> plain = order(planks(), 2, 0L);
+        assertFalse(plain.selectorBound());
+        assertEquals(Optional.empty(), plain.selectorReturn());
+        assertEquals(0, plain.selectorRuns());
+        assertTrue(plain.countsStockLevels());
+        assertSame(plain, plain.withSelectorReturn("return"), "an ordinary order has no return input");
+
+        ProductionOrder<String, String> unbound = plain.withSelector("return", 0);
+        assertFalse(unbound.selectorBound());
+        assertEquals(Optional.empty(), unbound.selectorReturn(), "a return input without runs binds nothing");
+
+        ProductionOrder<String, String> noReturnYet = plain.withSelector(null, 2);
+        assertTrue(noReturnYet.selectorBound());
+        assertEquals(Optional.empty(), noReturnYet.selectorReturn());
+        assertEquals(Optional.of("return"), noReturnYet.withSelectorReturn("return").selectorReturn());
+        assertEquals(2, noReturnYet.withSelectorReturn("return").selectorRuns());
+    }
+
+    @Test
+    void engagedMeansSomethingWasHandedOver() {
+        ProductionOrder<String, String> order = order(twoIngredients(), 2, 0L).withSelector("return", 2);
+        assertFalse(order.engaged());
+        ProductionOrder<String, String> oneNail = order.withDelivered(order.lines().get(1).id(), 1, START, TIMEOUT);
+        assertTrue(oneNail.engaged());
+        assertFalse(order.cancelled(START).engaged(), "a finished order that handed nothing over");
+        assertTrue(oneNail.cancelled(START).engaged());
+    }
+
+    @Test
+    void trimmingKeepsTheWholeRunsTheDeliveriesPayFor() {
+        // 4 runs of 2 logs + 3 nails -> 1 plank. 5 logs pay for 2 runs, 9 nails for 3: two whole runs.
+        ProductionOrder<String, String> order = order(twoIngredients(), 4, 0L).withSelector("return", 4);
+        UUID logs = order.lines().get(0).id();
+        UUID nails = order.lines().get(1).id();
+        ProductionOrder<String, String> handed = order.withDelivered(logs, 5, START, TIMEOUT)
+                .withDelivered(nails, 9, START, TIMEOUT);
+        ProductionOrder<String, String> trimmed = handed.trimmedToDelivered(START + 50L, TIMEOUT);
+        assertTrue(trimmed.isOpen(), "it waits for what is in its line");
+        assertEquals(2, trimmed.resultAmount());
+        assertEquals(2, trimmed.selectorRuns());
+        assertEquals(5, trimmed.line(logs).orElseThrow().required());
+        assertEquals(9, trimmed.line(nails).orElseThrow().required());
+        assertEquals(0, trimmed.outstandingIngredients(), "nothing more is fetched");
+        assertEquals(14, trimmed.deliveredIngredients());
+        assertEquals(ProductionOrderState.DELIVERED, trimmed.state());
+        assertEquals(START + 50L + TIMEOUT, trimmed.deadlineTick(), "a fresh deadline");
+        assertEquals(trimmed, trimmed.trimmedToDelivered(START + 50L, TIMEOUT), "trimming twice changes nothing");
+        assertEquals(trimmed.deadlineTick(), trimmed.trimmedToDelivered(START + 10L, 0L).deadlineTick(),
+                "never earlier");
+    }
+
+    @Test
+    void trimmingCompletesAtOnceWhatAlreadyCameBack() {
+        ProductionOrder<String, String> order = order(planks(), 4, 0L).withSelector("return", 4);
+        ProductionOrder<String, String> made = order.withDelivered(order.lines().getFirst().id(), 2, START, TIMEOUT)
+                .withStored(8L, START + 10L, TIMEOUT);
+        assertTrue(made.isOpen());
+        ProductionOrder<String, String> trimmed = made.trimmedToDelivered(START + 20L, TIMEOUT);
+        assertEquals(ProductionOrderState.COMPLETE, trimmed.state());
+        assertEquals(8, trimmed.resultAmount());
+        assertEquals(START + 20L, trimmed.deadlineTick());
+        assertFalse(trimmed.endedWithLostIngredients());
+    }
+
+    @Test
+    void anOrderWithoutAWholeRunHandedOverIsCancelledInstead() {
+        ProductionOrder<String, String> order = order(twoIngredients(), 2, 0L).withSelector("return", 2);
+        ProductionOrder<String, String> logsOnly = order.withDelivered(order.lines().get(0).id(), 2, START, TIMEOUT);
+        ProductionOrder<String, String> ended = logsOnly.trimmedToDelivered(START + 5L, TIMEOUT);
+        assertEquals(ProductionOrderState.CANCELLED, ended.state());
+        assertTrue(ended.endedWithLostIngredients(), "what is in the line is a visible loss, never a wrong product");
+
+        ProductionOrder<String, String> plain = order(planks(), 2, 0L);
+        assertSame(plain, plain.trimmedToDelivered(START, TIMEOUT), "not selector-bound");
+        assertSame(ended, ended.trimmedToDelivered(START + 6L, TIMEOUT), "finished");
+    }
+
+    @Test
+    void aSixtyThreeSlabOrderWaitsForThirtyTwoRuns() {
+        ProductionPattern<String> slabs = ProductionPattern.of("block", 1, "slab", 2);
+        int runs = slabs.runsFor(63L);
+        ProductionOrder<String, String> order = ProductionOrder.start(UUID.randomUUID(), STATION, slabs, runs, lineIds,
+                START, TIMEOUT, 0L, UUID.randomUUID(), 63L).withSelector("return", runs);
+        assertEquals(64, order.resultAmount());
+        assertEquals(32, order.selectorRuns());
+        assertEquals(63L, order.promisedToRequest());
+
+        ProductionOrder<String, String> trimmed = order.withDelivered(order.lines().getFirst().id(), 10, START,
+                TIMEOUT).trimmedToDelivered(START + 1L, TIMEOUT);
+        assertEquals(20, trimmed.resultAmount());
+        assertEquals(10, trimmed.selectorRuns());
+        assertEquals(20L, trimmed.unfulfilledPromise(), "the request gets the rest back as for a cancel");
+    }
 }

@@ -10,19 +10,25 @@ import com.simibubi.create.foundation.gui.AllGuiTextures;
 import com.simibubi.create.foundation.gui.menu.AbstractSimiContainerScreen;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.selector.SelectorRecipeCheck;
+import dev.wareworks.content.selector.SelectorTexts;
 import dev.wareworks.content.station.PatternFilterCells;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
+import dev.wareworks.content.station.SelectorHold;
 import dev.wareworks.content.station.StoppedProduct;
 import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.production.SelectorMode;
+import dev.wareworks.core.production.SelectorWait;
 import dev.wareworks.network.ProductionCancelPayload;
 import dev.wareworks.network.ProductionPatternPayload;
 import dev.wareworks.network.ProductionResumePayload;
 import dev.wareworks.network.ProductionScreenPayload;
+import dev.wareworks.network.ProductionSelectorPayload;
 import dev.wareworks.util.WareworksLang;
 import net.createmod.catnip.gui.UIRenderHelper;
 import net.createmod.catnip.gui.element.GuiGameElement;
@@ -88,6 +94,14 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * while no kind in stock is enough for one run. Its tooltip names the filter with Create's own summary, then the stock
  * matches in pick order with what a player may have of each. An order that took items for a filter says which in its
  * tooltip ({@link #usesLines}), here and at the terminal.
+ * <p>
+ * <b>A Recipe Selector has a row of its own</b> (ADR-085). While the station selects (a local selector or recipe
+ * slips), one text row says what the line is set to, or the fault that stops it, or that the station holds; a click on
+ * a held row releases the hold like Resume, and the red mark at its right end switches the selector off (refused by
+ * the station while an order is in the machine). The row takes an order line, after the stopped row; where the window
+ * has no line left it takes the buffer's label row, and failing that the right end of the "Patterns" row. A pattern the
+ * selector's machine would not make exactly is drawn red like a refused Crafter pattern, with the reason in its
+ * tooltip, and an order waiting at the selector says why in its state column, as at the terminal.
  */
 public class WarehouseProductionScreen extends AbstractSimiContainerScreen<ProductionMenu> {
     private static final int TITLE_Y = 2;
@@ -114,6 +128,10 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private static final int REFUSED_BAR = 2;
     /** What stands in the arrow's place while the selected pattern is refused. */
     private static final String REFUSED_ARROW = "x";
+    /** The Recipe Selector row (ADR-085): the line's own colour, the screen's header gold. */
+    private static final int COLOR_SELECTOR = COLOR_HEADER;
+    /** The mark at the selector row's right end that switches the selector off, as an order line's cancel mark. */
+    public static final String SELECTOR_OFF_MARK = "x";
     /** The tab strip's scroll bar track (issue #35). */
     private static final int COLOR_SCROLL_TRACK = 0xFF2B2B2B;
     /** The tab strip's scroll bar thumb. */
@@ -265,6 +283,19 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.0F);
             return true;
         }
+        // The Recipe Selector row (ADR-085): its red mark switches the selector off, a click on a held row releases the
+        // hold as Resume does. Tested before the order lines, because the row takes one of their lines.
+        if (button == 0 && isOverSelectorOffMark(mouseX, mouseY)) {
+            PacketDistributor.sendToServer(new ProductionSelectorPayload(menu.containerId,
+                    ProductionSelectorPayload.Action.SWITCH_OFF));
+            playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
+            return true;
+        }
+        if (button == 0 && state.selector().held() && isOverSelectorRow(mouseX, mouseY)) {
+            PacketDistributor.sendToServer(new ProductionResumePayload(menu.containerId));
+            playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.0F);
+            return true;
+        }
         // Only a left click on an order that is still running is a cancellation, exactly as on the terminal's own
         // order lines. A right or middle click, or a click on a finished line, falls through instead of sending a
         // payload the server refuses anyway — which would spend the menu's per-tick edit budget and play the
@@ -402,7 +433,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         }
         // The arrow between the grid and the result: this is a pattern, not a crafting grid. A pattern the Crafter
         // Feeder refuses gets a red frame round grid and result and a red cross where the arrow was (issue #34).
-        boolean refused = refusedAt(selectedPattern).isPresent();
+        boolean refused = isRed(selectedPattern);
         String arrow = refused ? REFUSED_ARROW : ">";
         int arrowX = leftPos + layout.arrowX() + ProductionMenuLayout.ARROW_WIDTH / 2 - font.width(arrow) / 2;
         int arrowY = topPos + layout.patternCellY(ProductionMenuLayout.RESULT_CELL)
@@ -443,7 +474,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                     tabY + ITEM_INSET));
             // A pattern the Crafter Feeder refuses is marked under its own tab, whichever pattern is selected, as a
             // stopped product is (issue #34); a bar rather than a tint, so a tab can say both at once.
-            if (refusedAt(pattern).isPresent())
+            if (isRed(pattern))
                 graphics.fill(tabX, tabY + ProductionMenuLayout.SLOT - REFUSED_BAR, tabX + ProductionMenuLayout.SLOT,
                         tabY + ProductionMenuLayout.SLOT, COLOR_REFUSED);
         }
@@ -480,7 +511,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private boolean rowIsRed(int row) {
         int first = row * layout.tabColumns();
         for (int pattern = first; pattern < first + layout.tabColumns() && pattern < menu.patternSlots(); pattern++) {
-            if (stoppedAt(pattern).isPresent() || refusedAt(pattern).isPresent())
+            if (stoppedAt(pattern).isPresent() || isRed(pattern))
                 return true;
         }
         return false;
@@ -529,15 +560,16 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         graphics.drawString(font, title, x + ProductionMenuLayout.MARGIN, y + TITLE_Y, COLOR_HEADER, false);
         graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.PRODUCTION_PATTERNS),
                 x + ProductionMenuLayout.MARGIN, y + layout.patternLabelY(), COLOR_DIM, false);
-        // Why patterns may be red: the Crafter Feeder at the back, at the right end of the same row (issue #34).
-        if (state.feeder()) {
+        // Why patterns may be red: the Crafter Feeder at the back, at the right end of the same row (issue #34). A
+        // Recipe Selector row pushed up into this row takes its place (ADR-085).
+        if (state.feeder() && selectorRowPlace() != SelectorRowPlace.PATTERN_LABEL) {
             Component feeder = WareworksLang.translateDirect(WareworksLang.PRODUCTION_FEEDER);
             graphics.drawString(font, feeder, x + ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN
                     - font.width(feeder), y + layout.patternLabelY(), COLOR_DIM, false);
         }
         // The stopped row takes the buffer's label row in the one configuration that has no order line at all (see
         // renderOrders): the slots below it say what they are, while the stop is the only thing here that asks for an act.
-        if (!(showsStoppedRow() && layout.orderLines() == 0))
+        if (!(showsStoppedRow() && layout.orderLines() == 0) && selectorRowPlace() != SelectorRowPlace.BUFFER_LABEL)
             graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.PRODUCTION_BUFFER),
                     x + ProductionMenuLayout.MARGIN, y + layout.bufferLabelY(), COLOR_DIM, false);
         renderOrders(graphics, x, y);
@@ -562,6 +594,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         if (showsStoppedRow())
             graphics.drawString(font, stoppedRow(), x + ProductionMenuLayout.MARGIN, y + layout.stoppedRowY(),
                     COLOR_STOPPED, false);
+        renderSelectorRow(graphics);
         if (layout.orderLines() == 0)
             return;
         int first = firstOrderLine();
@@ -594,7 +627,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         Component state = fitTo(orderStateText(order), Math.max(0, ROW_WIDTH - floor - TEXT_GAP));
         int stateX = Math.max(ProductionMenuLayout.MARGIN,
                 ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN - font.width(state));
-        graphics.drawString(font, state, x + stateX, top, color, false);
+        graphics.drawString(font, state, x + stateX, top, selectorWaitColor(order, color), false);
         int room = stateX - ProductionMenuLayout.MARGIN - TEXT_GAP;
         graphics.drawString(font, fitTo(item, Math.max(0, room)), x + ProductionMenuLayout.MARGIN, top, color, false);
     }
@@ -614,7 +647,21 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
      * what it means is in this line's tooltip, in full ({@code gui.production.ingredients_lost}).
      */
     private static Component orderStateText(ProductionScreenState.OrderView order) {
+        if (order.selectorWait() != SelectorWait.NONE)
+            return SelectorTexts.waitText(order.selectorWait(), order.selectorItem());
         return orderStateText(order.state(), order.waitingForStep(), order.lostIngredients());
+    }
+
+    /**
+     * The colour of an order's state column (ADR-085): a selector fault or hold in the error red, a queue behind another
+     * result in grey, anything else in {@code otherwise}. The terminal colours its rows the same way.
+     */
+    public static int selectorWaitColor(ProductionScreenState.OrderView order, int otherwise) {
+        if (order.selectorWait() == SelectorWait.NONE)
+            return otherwise;
+        if (order.selectorFault())
+            return WarehouseTerminalScreen.COLOR_ERROR;
+        return order.selectorWait().queues() ? COLOR_DIM : otherwise;
     }
 
     /**
@@ -625,9 +672,13 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         return state.anyStopped();
     }
 
-    /** The line the first order is drawn in: the second one while the stopped row has the first. */
+    /**
+     * The line the first order is drawn in: past the stopped row and the Recipe Selector row, each of which takes an
+     * order line while there is one left.
+     */
     private int firstOrderLine() {
-        return showsStoppedRow() && layout.orderLines() > 0 ? 1 : 0;
+        int taken = (showsStoppedRow() ? 1 : 0) + (state.selector().on() ? 1 : 0);
+        return Math.min(taken, layout.orderLines());
     }
 
     /**
@@ -658,8 +709,10 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         // issue #4): it is nominally waiting for ingredients, but the controller hands it nothing at all until the
         // step below it is done, so "waiting for ingredients" would read as a crane that has forgotten it. It is the
         // sentence the terminal's step panel and this station's goggle line use, from the one shared key.
-        Component status = WareworksLang.translateDirect(order.waitingForStep()
-                ? WareworksLang.PRODUCTION_WAITING_FOR_STEP : order.state().langKey());
+        Component status = order.selectorWait() != SelectorWait.NONE
+                ? SelectorTexts.waitText(order.selectorWait(), order.selectorItem())
+                : WareworksLang.translateDirect(order.waitingForStep()
+                        ? WareworksLang.PRODUCTION_WAITING_FOR_STEP : order.state().langKey());
         return order.lostIngredients()
                 ? WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER_LOST, name, amount, status)
                 : WareworksLang.translateDirect(WareworksLang.PRODUCTION_ORDER, name, amount, status);
@@ -741,6 +794,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             });
             refusedAt(tab).ifPresent(check -> tooltip.addAll(refusalLines(check)));
+            tooltip.addAll(selectorRefusalLines(tab));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_TAB_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             return tooltip;
@@ -751,9 +805,20 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 addStoppedLines(tooltip, stopped);
             return tooltip;
         }
+        if (isOverSelectorOffMark(mouseX, mouseY)) {
+            tooltip.add(WareworksLang.translateDirect(state.selector().mode() == SelectorMode.SLIPS
+                    ? WareworksLang.PRODUCTION_SELECTOR_SWITCH_OFF_SLIPS : WareworksLang.PRODUCTION_SELECTOR_SWITCH_OFF)
+                    .copy().withStyle(ChatFormatting.RED));
+            if (state.selector().engaged())
+                tooltip.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_SWITCH_OFF_ENGAGED)));
+            return tooltip;
+        }
+        if (isOverSelectorRow(mouseX, mouseY))
+            return selectorRowTooltip(state.selector());
         // The arrow of a refused pattern says why it is red (issue #34); a pattern that is fine has nothing to say there.
         if (isOverArrow(mouseX, mouseY)) {
             refusedAt(selectedPattern).ifPresent(check -> tooltip.addAll(refusalLines(check)));
+            tooltip.addAll(selectorRefusalLines(selectedPattern));
             return tooltip;
         }
         int cell = cellAt(mouseX, mouseY);
@@ -881,6 +946,163 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     /** Whether the Crafter Feeder refuses pattern slot {@code pattern}, as the screen draws it (dev harness). */
     public boolean isRefused(int pattern) {
         return refusedAt(pattern).isPresent();
+    }
+
+    /** Whether pattern slot {@code pattern} is drawn red: refused by the Crafter Feeder or by the selector check. */
+    public boolean isRed(int pattern) {
+        return refusedAt(pattern).isPresent() || state.selectorRefusal(pattern).isPresent();
+    }
+
+    /** Why the Recipe Selector's machine would not make pattern slot {@code pattern} exactly, and what follows. */
+    private List<Component> selectorRefusalLines(int pattern) {
+        Optional<SelectorRecipeCheck.Verdict> verdict = state.selectorRefusal(pattern);
+        if (verdict.isEmpty())
+            return List.of();
+        return List.of(SelectorTexts.checkText(verdict.get(), state.selector().kind()).copy()
+                        .withStyle(ChatFormatting.RED),
+                gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_CHECK_SKIPPED)));
+    }
+
+    // --- the Recipe Selector row (ADR-085) ---------------------------------------------------------------------------
+
+    /** Where the Recipe Selector row is drawn; {@code NOWHERE} for a station without a selector. */
+    private enum SelectorRowPlace {
+        NOWHERE, ORDER_LINE, BUFFER_LABEL, PATTERN_LABEL
+    }
+
+    /**
+     * Where the selector row goes: the order line after the stopped row while there is one; else the buffer's label row
+     * while the stopped row does not have it; else the right end of the "Patterns" row.
+     */
+    private SelectorRowPlace selectorRowPlace() {
+        if (layout == null || !state.selector().on())
+            return SelectorRowPlace.NOWHERE;
+        int line = showsStoppedRow() ? 1 : 0;
+        if (line < layout.orderLines())
+            return SelectorRowPlace.ORDER_LINE;
+        if (!(showsStoppedRow() && layout.orderLines() == 0))
+            return SelectorRowPlace.BUFFER_LABEL;
+        return SelectorRowPlace.PATTERN_LABEL;
+    }
+
+    /** Top of the selector row relative to the window, or -1 without one. Public for the dev harness. */
+    public int selectorRowY() {
+        return switch (selectorRowPlace()) {
+            case ORDER_LINE -> layout.orderLineY(showsStoppedRow() ? 1 : 0);
+            case BUFFER_LABEL -> layout.bufferLabelY();
+            case PATTERN_LABEL -> layout.patternLabelY();
+            case NOWHERE -> -1;
+        };
+    }
+
+    /** Left edge of the selector row's text, relative to the window. */
+    private int selectorRowX() {
+        if (selectorRowPlace() != SelectorRowPlace.PATTERN_LABEL)
+            return ProductionMenuLayout.MARGIN;
+        return ProductionMenuLayout.MARGIN
+                + font.width(WareworksLang.translateDirect(WareworksLang.PRODUCTION_PATTERNS)) + TEXT_GAP;
+    }
+
+    /** Left edge of the selector row's red mark, relative to the window. Public for the dev harness. */
+    public int selectorOffMarkX() {
+        return ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN - font.width(SELECTOR_OFF_MARK);
+    }
+
+    /** What the selector row says: the hold, the missing selector, the fault, or what the line is set to. */
+    public Component selectorRowText() {
+        ProductionScreenState.SelectorView view = state.selector();
+        if (view.held())
+            return WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_HOLD);
+        if (view.mode() == SelectorMode.LOCAL && view.linked().isEmpty())
+            return WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_ROW_MISSING);
+        if (view.fault().isPresent())
+            return SelectorTexts.waitText(view.fault().get(), Optional.empty());
+        return selectionText(view);
+    }
+
+    /** "Recipe Selector set to Deepslate Tile Stairs" or "Recipe slips on: making ...": what the line is set to. */
+    private static Component selectionText(ProductionScreenState.SelectorView view) {
+        Component selection = view.selection().map(key -> key.toStack().getHoverName())
+                .orElseGet(() -> WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_NOTHING_YET));
+        return WareworksLang.translateDirect(view.mode() == SelectorMode.SLIPS
+                ? WareworksLang.PRODUCTION_SELECTOR_ROW_SLIPS : WareworksLang.PRODUCTION_SELECTOR_ROW_LOCAL, selection);
+    }
+
+    /** Whether the selector row reads as something to act on (red) rather than the line's state (gold). */
+    private boolean selectorRowIsRed() {
+        ProductionScreenState.SelectorView view = state.selector();
+        return view.held() || view.fault().isPresent()
+                || view.mode() == SelectorMode.LOCAL && view.linked().isEmpty();
+    }
+
+    private void renderSelectorRow(GuiGraphics graphics) {
+        int rowY = selectorRowY();
+        if (rowY < 0)
+            return;
+        int left = selectorRowX();
+        int markX = selectorOffMarkX();
+        Component text = fitTo(selectorRowText(), Math.max(0, markX - TEXT_GAP - left));
+        graphics.drawString(font, text, leftPos + left, topPos + rowY,
+                selectorRowIsRed() ? COLOR_STOPPED : COLOR_SELECTOR, false);
+        graphics.drawString(font, SELECTOR_OFF_MARK, leftPos + markX, topPos + rowY,
+                state.selector().engaged() ? COLOR_DIM : WarehouseTerminalScreen.COLOR_ERROR, false);
+    }
+
+    /** Whether the mouse is over the selector row's text (not its red mark). Public for the dev harness. */
+    public boolean isOverSelectorRow(double mouseX, double mouseY) {
+        int rowY = selectorRowY();
+        if (rowY < 0)
+            return false;
+        int top = topPos + rowY;
+        return mouseY >= top && mouseY < top + ProductionMenuLayout.LABEL_HEIGHT && mouseX >= leftPos + selectorRowX()
+                && mouseX < leftPos + selectorOffMarkX() - TEXT_GAP / 2;
+    }
+
+    /** Whether the mouse is over the selector row's red mark. Public for the dev harness. */
+    public boolean isOverSelectorOffMark(double mouseX, double mouseY) {
+        int rowY = selectorRowY();
+        if (rowY < 0)
+            return false;
+        int top = topPos + rowY;
+        int left = leftPos + selectorOffMarkX() - TEXT_GAP / 2;
+        return mouseY >= top && mouseY < top + ProductionMenuLayout.LABEL_HEIGHT && mouseX >= left
+                && mouseX < leftPos + ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN + TEXT_GAP / 2;
+    }
+
+    /**
+     * The selector row's tooltip: what the line is set to, what a hold is about and how to release it, the fault, where
+     * the selector and the return input are, the machine, how often the line switched and the probe of a far factory.
+     */
+    public static List<Component> selectorRowTooltip(ProductionScreenState.SelectorView view) {
+        List<Component> tooltip = new ArrayList<>();
+        tooltip.add(selectionText(view).copy().withStyle(ChatFormatting.GOLD));
+        if (view.held()) {
+            Component item = view.holdItem().map(key -> key.toStack().getHoverName()).orElse(Component.empty());
+            tooltip.add(WareworksLang.translateDirect(view.hold().get() == SelectorHold.Cause.UNEXPECTED_RETURN
+                    ? WareworksLang.PRODUCTION_SELECTOR_HOLD_RETURN : WareworksLang.PRODUCTION_SELECTOR_HOLD_LOST,
+                    item).copy().withStyle(ChatFormatting.RED));
+            if (view.hold().get() == SelectorHold.Cause.UNEXPECTED_RETURN)
+                tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_HOLD_TAKE_OUT).copy()
+                        .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_HOLD_HINT).copy()
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        }
+        if (view.mode() == SelectorMode.LOCAL && view.linked().isEmpty())
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_ROW_MISSING).copy()
+                    .withStyle(ChatFormatting.RED));
+        view.fault().ifPresent(fault -> tooltip.add(SelectorTexts.waitText(fault, Optional.empty()).copy()
+                .withStyle(ChatFormatting.RED)));
+        view.linked().ifPresent(pos -> tooltip.add(gray(WareworksLang.translateDirect(
+                WareworksLang.PRODUCTION_SELECTOR_AT, SelectorTexts.position(pos)))));
+        view.kind().ifPresent(kind -> tooltip.add(gray(WareworksLang.translateDirect(
+                WareworksLang.PRODUCTION_SELECTOR_MACHINE, SelectorTexts.machineName(kind)))));
+        view.returnInput().ifPresent(pos -> tooltip.add(gray(WareworksLang.translateDirect(
+                WareworksLang.PRODUCTION_SELECTOR_RETURN_INPUT, SelectorTexts.position(pos)))));
+        tooltip.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_SWITCHES,
+                LangNumberFormat.format(view.epoch()))));
+        if (view.mode() == SelectorMode.SLIPS && !view.slipsTrusted())
+            tooltip.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_SELECTOR_UNTRUSTED)));
+        return tooltip;
     }
 
     /** The reason a refused pattern is red, in red, and what that means for it, as a tooltip shows them. */

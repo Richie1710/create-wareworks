@@ -323,6 +323,248 @@ public final class WareworksLangGen {
                 "The warehouse makes %1$s again; %2$s ingredient items were delivered and never came back");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_NOTHING_STOPPED),
                 "Nothing this station makes is stopped");
+        // A Recipe Selector station's hold (ADR-085, design §8): released only by a player, and only once the line is
+        // empty where the warehouse can see it.
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_HOLD_RELEASED), "Station released: it goes on with %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_HOLD_REFUSED_BUFFER),
+                "The station still holds %1$s. Empty it first");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_HOLD_REFUSED_RETURN),
+                "Take %1$s out of the return input first: click it with an empty hand");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_TOOK_OUT), "Took %1$s out of the return input");
+        // The Recipe Selector item and block (ADR-085, design §3.2, §3.3, §3.5): link, placement and return input.
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_LINKED_STATION), "Linked to production station %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_CLEARED), "Link cleared");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_NOT_LINKED),
+                "Sneak-click a production station with the selector first");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_TOO_FAR),
+                "The station is too far away (more than %1$s blocks)");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_STATION_MISSING),
+                "There is no production station at %1$s any more");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_STATION_NOT_LOADED), "The station at %1$s is not loaded");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_NO_MACHINE),
+                "Place it against a Mechanical Saw facing up or against a Basin");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_HORIZONTAL_SAW),
+                "This saw cuts trees and has no recipe filter");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_PLACE_ON_BASIN),
+                "Place it against the Basin below the %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_MACHINE_TAKEN),
+                "This machine already has a Recipe Selector");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_OPEN_ORDERS),
+                "Finish or cancel the station's open orders first");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_FEEDER),
+                "This station feeds a Crafter. A Recipe Selector is for saws and basins");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_SLIPS_ACTIVE),
+                "This station sends recipe slips. Switch them off in its screen first");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_SELECTOR_PRESENT),
+                "This station already has a Recipe Selector at %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_PLACED),
+                "Recipe Selector placed: station %1$s now makes one recipe at a time. Bind its return input next");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_BOUND_RETURN_INPUT),
+                "Warehouse Input bound as the return input of station %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_OTHER_CONTROLLER),
+                "This input belongs to another warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_INPUT_NOT_IN_WAREHOUSE),
+                "This input is not part of the station's warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_INPUT_TAKEN),
+                "This input already returns for another station");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_ENGAGED),
+                "An order of the station is in the machine. Wait until it is back");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_HOLD),
+                "The station is stopped. Check its line and resume it first");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_NOT_ALLOWED), "You cannot use that block");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_TOOLTIP_STATION), "Station: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_TOOLTIP_UNLINKED),
+                "Not linked: sneak-click a production station");
+        tooltip(lang, "block.wareworks.recipe_selector",
+                "Sets the recipe of a _Mechanical Saw_ or a _Basin_ for each order of a _Production Station_, so one "
+                        + "machine makes several products in turn.",
+                "When sneak-clicking a station",
+                "Links to that _Production Station_.",
+                "When placed against a saw or basin",
+                "Sets its _recipe_ for each order: _one product_ at a time. A _filter item_ in it is never touched.",
+                "When sneak-clicking a Warehouse Input",
+                "Makes it the station's _return input_: only the station's products come back through it.");
+        // The Ender Recipe Selector and the recipe slip (ADR-085, design §3.2, §3.4, §7, §8, §12).
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_LINKED_MACHINE), "Linked to %1$s at %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_SLIPS_ON),
+                "Station %1$s now puts a recipe slip into every package and makes one recipe at a time");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_NEEDS_MACHINE_LINK),
+                "Sneak-click the saw or basin at the factory first");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_NEEDS_PACKAGER),
+                "Place it on the factory's unpacking Packager");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_SNEAK_TO_PLACE), "Sneak to place it on the Packager");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_OTHER_CHUNK),
+                "Place it so that it is in the same chunk as the Packager");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_REFUSED_PACKAGER_TAKEN),
+                "This Packager already has an Ender Recipe Selector");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_MACHINE_TOO_FAR),
+                "The linked machine is too far away (more than %1$s blocks)");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_RELINKED), "Recipe Selector now sets %1$s at %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_LATCH_CLEARED),
+                "Recipe Selector accepts slips from any station again");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_HOLD_REFUSED_PACKAGER),
+                "A package of this station is still in %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_HOLD_REFUSED_PORT),
+                "A package of this station is still in %1$s next to its Packager");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_TOOLTIP_MACHINE), "Machine: %1$s at %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_TOOLTIP_NO_MACHINE),
+                "No machine: sneak-click the factory's saw or basin");
+        lang.accept(WareworksLang.key(WareworksLang.RECIPE_SLIP_TOOLTIP), "Recipe slip: %1$s");
+        // What a Recipe Selector last did, or why it refused a package (RecipeSelectorStatus#langKey).
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.idle"), "Waiting for its station");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.set"), "Filter set");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.set_back"), "Filter changed by hand and set back");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.no_link"), "Not linked to a station");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.station_missing"), "Station missing");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.station_not_loaded"), "Station not loaded");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.station_switched_off"),
+                "The station switched its Recipe Selector off");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.no_machine"), "No saw or basin to set");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.machine_not_loaded"), "Machine not loaded");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.filter_item"),
+                "A filter item in the machine blocks the Recipe Selector");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.filter_refused"), "The machine refused the recipe");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.contested"),
+                "Two Recipe Selectors write this machine's recipe");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.waiting_for_slip"),
+                "Waiting for a package with a recipe slip");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.cannot_make"),
+                "The machine cannot make %1$s from this package");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.no_packager"), "Not on an unpacking Packager");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.foreign_slip"),
+                "Package from station %1$s: this selector serves %2$s");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.stale_slip"),
+                "Old package from %1$s: take it out of the port");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.waits_for_empty_line"),
+                "Waits until the machine and %1$s are empty");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.port_bypass"),
+                "A package port here also fills another inventory and bypasses the selector");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.no_veto"),
+                "Another mod handles this Packager: packages are not checked");
+        lang.accept(WareworksLang.key("gui.recipe_selector.status.failed"), "Check failed: the package was refused");
+        // Stage 5 of ADR-085: the station screen row, order waits, pattern checks and goggles.
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_SWITCHED_OFF),
+                "Recipe Selector switched off: the station makes its orders as they come again");
+        lang.accept(WareworksLang.key(WareworksLang.SELECTOR_SLIPS_OFF),
+                "Recipe slips switched off: the station's packages carry none any more");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_ROW_LOCAL), "Recipe Selector set to %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_ROW_SLIPS), "Recipe slips on: making %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_NOTHING_YET), "nothing yet");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_ROW_MISSING),
+                "Recipe Selector missing: place one or switch it off");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_HOLD), "Held: check the line, then click here");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_SWITCH_OFF), "Switch the Recipe Selector off");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_SWITCH_OFF_SLIPS), "Switch recipe slips off");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_SWITCH_OFF_ENGAGED),
+                "Not while an order is in the machine");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_AT), "Recipe Selector at %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_MACHINE), "Machine: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_RETURN_INPUT), "Return input at %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_SWITCHES), "Switched %1$s times");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_UNTRUSTED),
+                "The next switch sends one run first to check the factory");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_HOLD_LOST),
+                "An order for %1$s ended with ingredients in the line");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_HOLD_RETURN),
+                "%1$s came back through the return input");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_HOLD_TAKE_OUT),
+                "Click the return input with an empty hand to take it out");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_HOLD_HINT),
+                "Check the line, then click this row or sneak-click the station");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_SELECTOR_CHECK_SKIPPED),
+                "The warehouse never orders this pattern at this station");
+        lang.accept(WareworksLang.key("gui.production.selector.check.no_recipe"),
+                "%1$s: no recipe makes this from these ingredients");
+        lang.accept(WareworksLang.key("gui.production.selector.check.wrong_count"),
+                "%1$s: the recipe makes or uses another amount");
+        lang.accept(WareworksLang.key("gui.production.selector.check.chance"), "%1$s: makes this only by chance");
+        lang.accept(WareworksLang.key("gui.production.selector.check.ambiguous"),
+                "%1$s: several recipes make this in different amounts");
+        lang.accept(WareworksLang.key("gui.production.selector.check.stonecutting_off"),
+                "Stonecutting on saws is switched off on this server");
+        lang.accept(WareworksLang.key("gui.production.selector.check.fluid"),
+                "Recipes with fluids cannot use a Recipe Selector yet");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.probe_one_run"),
+                "First run alone: checks the factory's selector");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.behind"), "Waits for its turn: %1$s first");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.line_busy"),
+                "Waits until the %1$s results are back");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.probe_behind"), "Waits for the first run of %1$s");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.hold"),
+                "Held: an order ended with ingredients in the line. Check it, then sneak-click the station");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.hold_unexpected"),
+                "Held: %1$s came back through the return input. Click the input with an empty hand to take it out, "
+                        + "then sneak-click the station");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.buffer_not_empty"),
+                "Waits for the station to empty");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.crane_inbound"), "Waits for the crane's last trip");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.packager_busy"),
+                "Waits for the Packager to send its package");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.switching"), "Setting the machine's recipe");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.arming"), "Setting the machine's recipe");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.no_selector"), "Recipe Selector missing");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.selector_not_loaded"), "Recipe Selector not loaded");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.no_machine"),
+                "No saw or basin at the Recipe Selector");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.machine_not_loaded"), "Machine not loaded");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.machine_busy"),
+                "Waits for the machine to run empty");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.filter_item"),
+                "A filter item in the machine blocks the Recipe Selector");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.filter_refused"), "The machine refused the recipe");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.contested"),
+                "Two Recipe Selectors write this machine's recipe");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.no_packager"),
+                "Recipe slips need a Packager on the station");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.packager_linked"),
+                "The Packager is linked to a network: slips would be lost");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.feeder_attached"),
+                "A Crafter Feeder and a Recipe Selector cannot share a station");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.no_return_input"),
+                "Bind a return input: sneak-click a Warehouse Input with the selector");
+        lang.accept(WareworksLang.key("gui.terminal.order.selector.return_input_missing"),
+                "The return input is missing or not loaded");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_LOCAL),
+                "Recipe Selector: one recipe at a time");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_SLIPS),
+                "Recipe slips: one recipe at a time");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_MAKING), "Now making: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_WAITING),
+                "Orders waiting for their turn: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_SELECTOR_HOLD),
+                "Held: check the line, then sneak-click the station");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_RECIPE_SELECTOR), "Recipe Selector:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_ENDER_RECIPE_SELECTOR), "Ender Recipe Selector:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_STATION), "Station: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_MACHINE), "Machine: %1$s at %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_FILTER), "Filter now: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_FILTER_NONE), "No filter set");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_LAST_SLIP),
+                "Last slip: %1$s from %2$s, %3$s s ago");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_BOXES), "Packages: %1$s with slip, %2$s without");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_REFUSED), "Refused: %1$s × %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_LATCH), "Serves station %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_SET_BACKS), "Hand changes set back: %1$s");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.cannot_make"), "cannot make it");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.foreign_slip"), "other station");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.stale_slip"), "old package");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.waits_for_empty_line"), "line not empty");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.no_machine"), "no machine");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.machine_not_loaded"), "machine not loaded");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.filter_item"), "filter item");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.filter_refused"), "filter refused");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.contested"), "two selectors");
+        lang.accept(WareworksLang.key("gui.goggles.selector_reason.failed"), "error");
+        tooltip(lang, "block.wareworks.ender_recipe_selector",
+                "For a factory far away: sets the machine's recipe from the _recipe slip_ of each package its _Packager_ unpacks.",
+                "When sneak-clicking a saw or basin",
+                "Links to that _machine_ at the factory.",
+                "When sneak-clicking a station",
+                "Switches on _recipe slips_ in the packages the station sends.",
+                "When sneak-placed on a Packager",
+                "Sets the _recipe_ before a package opens; one for another product _waits_ for an empty line.",
+                "When sneak-clicking a Warehouse Input",
+                "Makes it the station's _return input_.");
         // The safety stop where the machine is (M20, issue #4, ADR-032): the goggle line, the screen's own row and the
         // sentence that says how to lift it. "Stopped" rather than "paused", because a player stopped nothing here.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_STOPPED), "Stopped products: %1$s");
@@ -985,6 +1227,7 @@ public final class WareworksLangGen {
                 case CANCELLED -> "the last order was given up";
                 case ORDER_TIMED_OUT -> "an order at a machine timed out";
                 case ORDER_CANCELLED -> "an order at a machine was given up";
+                case DIVERTED -> "the last order's product left through a port instead of the racks";
             });
         }
         // Label-and-number rather than "%1$s ingredient items", which reads "1 ingredient items" at the count that
@@ -1198,8 +1441,11 @@ public final class WareworksLangGen {
                 "Upgrade the bay below first: no bay may carry a stronger one");
         lang.accept(WareworksLang.key(WareworksLang.BAY_UPGRADE_NOT_ALLOWED), "You may not change this bay here");
 
+        // ADR-085: the one way out of a Recipe Selector station's quarantine, which nothing else on the block shows.
         tooltip(lang, "block.wareworks.warehouse_input",
-                "Where _items_ enter the warehouse. Can be filled by _belts_, _funnels_ and _Mechanical Arms_.");
+                "Where _items_ enter the warehouse. Can be filled by _belts_, _funnels_ and _Mechanical Arms_.",
+                "When clicked with an empty hand",
+                "Hands you an item a _Recipe Selector_ station _held back_ in its return input.");
 
         tooltip(lang, "block.wareworks.warehouse_output",
                 "Hands out _items_ on a _redstone_ signal or takes the warehouse's _overflow_. Works with _funnels_ "

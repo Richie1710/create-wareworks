@@ -202,7 +202,7 @@ var ceeRuntimeProperty = providers.gradleProperty('wareworks.cee').orNull
 var ceeRuntimeVersion = ceeRuntimeProperty == null || ceeRuntimeProperty == 'false' ? null
         : (ceeRuntimeProperty.isEmpty() || ceeRuntimeProperty == 'true' ? project.cee_version : ceeRuntimeProperty)
 
-// Create Mobile Packages needs no code here either (ADR-074): only the dev-only robobee visual scenario uses it, and only
+// Create Mobile Packages needs no code here either (ADR-074): only the dev-only robobee and selector-remote visual scenarios use it, and only
 // by registry id, Create's own PackagePortBlockEntity API and reflection (dev.RoboBeeLedger). It enters the dev runs on
 // request:
 //   -Pwareworks.cmp             the CMP of cmp_version (gradle.properties)

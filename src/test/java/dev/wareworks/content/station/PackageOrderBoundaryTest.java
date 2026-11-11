@@ -42,6 +42,12 @@ import org.junit.jupiter.api.Test;
  * harness, which build boxes to test with and which the jar leaves out; and the Ponder scenes of packages, which put a
  * box into a Packager of a Ponder level, a scene's own copy of the world that no player's items ever enter.
  * <p>
+ * <b>ADR-085 amends D3 with exactly two exceptions</b> ({@link #theRecipeSlipIsWrittenInOnePlace}): a production
+ * station in slip mode writes <b>its own</b> recipe slip into the vanilla {@code custom_data} of a box Create has just
+ * packed, and only there ({@code RecipeSlip.stamp(} only in {@code WarehouseProductionBlock}, {@code custom_data} only
+ * in {@code RecipeSlip}); and the Ender Recipe Selector may refuse a box, for which the hand path asks Create's own
+ * read-only simulation {@code unwrapBox(copy, true)} in {@code SlipVeto}, never a real unpack.
+ * <p>
  * Runs without Minecraft: it only reads text.
  */
 class PackageOrderBoundaryTest {
@@ -51,6 +57,9 @@ class PackageOrderBoundaryTest {
     private static final Path DEV_HARNESS = Path.of("dev/wareworks/dev");
     private static final Path PACKAGE_SCENES = Path.of("dev/wareworks/client/ponder/scenes/PackageScenes.java");
     private static final Path REQUEST_PAYLOAD = Path.of("dev/wareworks/network/TerminalRequestPayload.java");
+    private static final Path RECIPE_SLIP = Path.of("dev/wareworks/content/selector/RecipeSlip.java");
+    private static final Path STAMPING_BLOCK = Path.of("dev/wareworks/content/station/WarehouseProductionBlock.java");
+    private static final Path SLIP_VETO = Path.of("dev/wareworks/content/selector/SlipVeto.java");
 
     /** What would build, address or stamp a package through Create's own helpers. */
     private static final Pattern PACKAGE_STAMP = Pattern.compile(
@@ -70,6 +79,14 @@ class PackageOrderBoundaryTest {
     private static final List<Pattern> SHAPES = List.of(PACKAGE_STAMP, ORDER_COMPONENT, PACKING_CALL,
             PACKAGER_STATE_WRITE, NETWORK_TYPE);
 
+    /** Writing or reading vanilla {@code custom_data}: the recipe slip's storage (ADR-085), allowed in RecipeSlip only. */
+    private static final Pattern CUSTOM_DATA = Pattern.compile(
+            "\\bDataComponents\\s*\\.\\s*CUSTOM_DATA\\b|\\bCustomData\\s*(?:\\.|::)\\s*(?:update|set|of)\\b");
+    /** Stamping a recipe slip (ADR-085): allowed in WarehouseProductionBlock only. */
+    private static final Pattern SLIP_STAMP = Pattern.compile("\\bRecipeSlip\\s*(?:\\.|::)\\s*stamp\\b");
+    /** Create's read-only simulation of an unpack, on a copy: the one {@code unwrapBox} SlipVeto may call. */
+    private static final Pattern SIMULATED_UNWRAP = Pattern.compile("\\.\\s*unwrapBox\\s*\\([^;]*,\\s*true\\s*\\)");
+
     @Test
     void noProductionCodePacksStampsOrOrders() throws IOException {
         List<String> offenders = new ArrayList<>();
@@ -82,8 +99,12 @@ class PackageOrderBoundaryTest {
                 String code = codeOf(lines.get(line));
                 for (Pattern shape : SHAPES) {
                     Matcher match = shape.matcher(code);
-                    while (match.find())
+                    while (match.find()) {
+                        // ADR-085: the Ender selector's hand path asks Create's read-only simulation, nothing more.
+                        if (relative.equals(SLIP_VETO) && shape == PACKING_CALL && SIMULATED_UNWRAP.matcher(code).find())
+                            continue;
                         offenders.add(relative + ":" + (line + 1) + ": " + match.group());
+                    }
                 }
             }
         }
@@ -115,6 +136,45 @@ class PackageOrderBoundaryTest {
         String build = Files.readString(BUILD_SCRIPT, StandardCharsets.UTF_8);
         assertTrue(build.contains("exclude('dev/wareworks/dev/**')"), "the dev harness is no longer left out of the jar");
         assertTrue(build.contains("exclude('dev/wareworks/gametest/**')"), "the GameTests are no longer left out of the jar");
+    }
+
+    /**
+     * ADR-085's two exceptions stay exactly where they are: {@code custom_data} is written and read in
+     * {@code RecipeSlip} only, a slip is stamped in {@code WarehouseProductionBlock} only (on a box Create has just
+     * packed), and {@code SlipVeto} calls {@code unwrapBox} only as Create's simulation ({@code true}). Each place is
+     * still needed, so a move cannot quietly empty the rule.
+     */
+    @Test
+    void theRecipeSlipIsWrittenInOnePlace() throws IOException {
+        List<String> offenders = new ArrayList<>();
+        for (Path file : mainSources()) {
+            Path relative = MAIN_SOURCES.relativize(file);
+            if (isExempt(relative))
+                continue;
+            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            for (int line = 0; line < lines.size(); line++) {
+                String code = codeOf(lines.get(line));
+                if (!relative.equals(RECIPE_SLIP) && CUSTOM_DATA.matcher(code).find())
+                    offenders.add(relative + ":" + (line + 1) + ": custom_data outside RecipeSlip");
+                if (!relative.equals(STAMPING_BLOCK) && SLIP_STAMP.matcher(code).find()
+                        && !(relative.equals(RECIPE_SLIP) && code.contains("public static void stamp(")))
+                    offenders.add(relative + ":" + (line + 1) + ": a recipe slip stamped outside the station block");
+            }
+        }
+        assertTrue(offenders.isEmpty(), "ADR-085 allows custom_data in RecipeSlip and stamping in "
+                + "WarehouseProductionBlock only; found " + offenders);
+        assertTrue(anyCodeLineMatches(source(RECIPE_SLIP), CUSTOM_DATA), "RecipeSlip no longer uses custom_data");
+        assertTrue(anyCodeLineMatches(source(STAMPING_BLOCK), SLIP_STAMP),
+                "WarehouseProductionBlock no longer stamps the slip: drop its exception");
+        String veto = source(SLIP_VETO);
+        assertTrue(anyCodeLineMatches(veto, SIMULATED_UNWRAP), "SlipVeto no longer simulates an unpack: drop it");
+        for (String line : veto.split("\n")) {
+            String code = codeOf(line);
+            if (PACKING_CALL.matcher(code).find())
+                assertTrue(SIMULATED_UNWRAP.matcher(code).find(), "SlipVeto may only simulate an unpack: " + code);
+        }
+        assertTrue(SIMULATED_UNWRAP.matcher("return packager.unwrapBox(box.copy(), true);").find());
+        assertFalse(SIMULATED_UNWRAP.matcher("packager.unwrapBox(box, false);").find());
     }
 
     /** A request names its door by position and carries no text a client could fill with an address. */

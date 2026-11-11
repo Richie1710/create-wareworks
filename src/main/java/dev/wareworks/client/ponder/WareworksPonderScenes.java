@@ -13,6 +13,7 @@ import dev.wareworks.client.ponder.scenes.PackageScenes;
 import dev.wareworks.client.ponder.scenes.PortScenes;
 import dev.wareworks.client.ponder.scenes.ProductionScenes;
 import dev.wareworks.client.ponder.scenes.RackBayScenes;
+import dev.wareworks.client.ponder.scenes.RecipeSelectorScenes;
 import dev.wareworks.client.ponder.scenes.RequesterScenes;
 import dev.wareworks.client.ponder.scenes.StockRuleScenes;
 import dev.wareworks.client.ponder.scenes.TerminalScenes;
@@ -54,7 +55,10 @@ import net.minecraft.resources.ResourceLocation;
  *       warehouse/production_chain, warehouse/fluid_bay, warehouse/ordering_to_a_door,
  *       warehouse/fluid_request</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
- *       warehouse/production_chain, warehouse/crafter_feeder</td></tr>
+ *       warehouse/production_chain, warehouse/crafter_feeder, warehouse/recipe_selector,
+ *       warehouse/ender_recipe_selector</td></tr>
+ *   <tr><td>recipe_selector</td><td>warehouse/recipe_selector</td></tr>
+ *   <tr><td>ender_recipe_selector</td><td>warehouse/ender_recipe_selector</td></tr>
  *   <tr><td>warehouse_crafter_feeder</td><td>warehouse/crafter_feeder</td></tr>
  *   <tr><td>warehouse_stock_keeper</td><td>warehouse/stock_rules, warehouse/restocking,
  *       warehouse/port_accepting</td></tr>
@@ -242,5 +246,15 @@ public final class WareworksPonderScenes {
         // player cannot guess (the remote, Skip missing Blocks, the route out of the buffer) are this block's story.
         scenes.forComponents(WareworksBlocks.SCHEMATICANNON_REQUESTER)
                 .addStoryBoard("requester/ordering", RequesterScenes::ordering, AllCreatePonderTags.LOGISTICS);
+
+        // The Recipe Selector (ADR-085), registered last so no scene of any other block moves (ADR-016). Each tier has
+        // its scene, and both belong to the production station as well, because the selector is how that station
+        // shares one machine between several products: a player holding the station finds both after the feeder.
+        scenes.forComponents(WareworksBlocks.RECIPE_SELECTOR, WareworksBlocks.WAREHOUSE_PRODUCTION)
+                .addStoryBoard("warehouse/recipe_selector", RecipeSelectorScenes::local,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
+        scenes.forComponents(WareworksBlocks.ENDER_RECIPE_SELECTOR, WareworksBlocks.WAREHOUSE_PRODUCTION)
+                .addStoryBoard("warehouse/ender_recipe_selector", RecipeSelectorScenes::ender,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

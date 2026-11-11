@@ -72,13 +72,23 @@ import org.jetbrains.annotations.Nullable;
  *                       A step is never automatic: {@link #restock()} and this are mutually exclusive, and the parent
  *                       link wins, so no crafted save can describe an order that feeds a parent <i>and</i> trips a
  *                       rule's safety stop
+ * @param selectorReturn the return input of the Recipe Selector station this order was created at (ADR-085): the one
+ *                       warehouse input whose arrivals may complete it ({@link ProductionOrders#observeStored}). Empty
+ *                       for every other order, and for a selector order whose station had no return input yet when it
+ *                       was created ({@link #withSelectorReturn}); such an order is credited by nothing until it has one
+ * @param selectorRuns   the runs a selector order waits for ({@link ProductionPattern#runsFor} at creation, lowered
+ *                       only by {@link #trimmedToDelivered}); greater than 0 exactly when the order is
+ *                       {@linkplain #selectorBound() selector-bound}, 0 for every other order. It is the order's own
+ *                       record of its pattern's yield, so neither a probe cap nor a trim ever reads the station's
+ *                       current pattern
  * @param <K>            item key type
  * @param <L>            location type
  */
 public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmount, List<SupplyLine<K>> lines,
                                     ProductionOrderState state, long deadlineTick, long produced,
                                     long resultStockSeen, Optional<UUID> backingRequest, long promisedToRequest,
-                                    boolean restock, Optional<UUID> parentLine) {
+                                    boolean restock, Optional<UUID> parentLine, Optional<L> selectorReturn,
+                                    int selectorRuns) {
     /**
      * A {@link #resultStockSeen()} that means "no baseline yet": {@link #observableGain} answers 0 for it and the next
      * observation adopts the level that is really there instead of counting all of it as progress. It is what
@@ -123,6 +133,24 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         // exactly what pauses an item.
         if (restock && parentLine.isPresent())
             restock = false;
+        // A selector order is one with runs to wait for (ADR-085); a return input without them binds nothing, so save
+        // data cannot describe an order that only its return input could complete and that waits for no run.
+        Objects.requireNonNull(selectorReturn, "selectorReturn");
+        if (selectorRuns <= 0) {
+            selectorRuns = 0;
+            selectorReturn = Optional.empty();
+        }
+    }
+
+    /**
+     * An order that is not bound to a Recipe Selector station: every order created before ADR-085, and every order
+     * created at a station without a selector.
+     */
+    public ProductionOrder(UUID id, L station, K result, int resultAmount, List<SupplyLine<K>> lines,
+            ProductionOrderState state, long deadlineTick, long produced, long resultStockSeen,
+            Optional<UUID> backingRequest, long promisedToRequest, boolean restock, Optional<UUID> parentLine) {
+        this(id, station, result, resultAmount, lines, state, deadlineTick, produced, resultStockSeen, backingRequest,
+                promisedToRequest, restock, parentLine, Optional.empty(), 0);
     }
 
     /**
@@ -260,7 +288,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         return new ProductionOrder<>(id, station, pattern.result().key(), pattern.resultFor(runs), lines,
                 ProductionOrderState.WAITING_FOR_INGREDIENTS, deadline(now, timeoutTicks), 0L,
                 Math.max(0L, resultStockNow), Optional.ofNullable(backingRequest), promisedToRequest, restock,
-                Optional.ofNullable(parentLine));
+                Optional.ofNullable(parentLine), Optional.empty(), 0);
     }
 
     /** Whether the order still promises ingredients and can still finish. */
@@ -303,7 +331,56 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      * satisfies them just as well (§3.5.3).
      */
     public boolean countsStockLevels() {
-        return !restock && !isStep();
+        return !restock && !isStep() && !selectorBound();
+    }
+
+    /**
+     * Whether this order was created at a Recipe Selector station (ADR-085). Its completion opens the station's line
+     * for another result, so only arrivals out of its own return input may complete it
+     * ({@link #selectorReturn()}, {@link ProductionOrders#observeStored}); a rise of the stock level never does
+     * ({@link #countsStockLevels()}), and like a step it counts arrivals only after it has handed something over.
+     */
+    public boolean selectorBound() {
+        return selectorRuns > 0;
+    }
+
+    /**
+     * This order bound to a Recipe Selector station: {@code runs} runs to wait for and the station's return input
+     * {@code returnInput} ({@code null} while the station has none). {@code runs} below 1 unbinds it.
+     * <p>
+     * <b>Unbinding resets the stock baseline to {@link #BASELINE_PENDING}</b>, as {@link #withoutParentLine()} does: a
+     * bound order never kept one ({@link #countsStockLevels()} was false, so {@link #resultStockSeen()} is still the
+     * level at its creation), and an order that gains the stock-level channel with that old baseline would count every
+     * rise since then, including items other selector orders were already credited with, as its own product.
+     */
+    public ProductionOrder<K, L> withSelector(@Nullable L returnInput, int runs) {
+        long baseline = runs < 1 && selectorBound() ? BASELINE_PENDING : resultStockSeen;
+        return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
+                baseline, backingRequest, promisedToRequest, restock, parentLine,
+                Optional.ofNullable(returnInput), runs);
+    }
+
+    /**
+     * This selector order with {@code returnInput} as its return input: the station had none when the order was
+     * created, or the player bound another before the order handed anything over (the caller checks that). An order
+     * that is not selector-bound is returned unchanged.
+     */
+    public ProductionOrder<K, L> withSelectorReturn(L returnInput) {
+        Objects.requireNonNull(returnInput, "returnInput");
+        if (!selectorBound() || selectorReturn.filter(returnInput::equals).isPresent())
+            return this;
+        return withSelector(returnInput, selectorRuns);
+    }
+
+    /**
+     * Whether this order has <b>handed something over</b> to its line (ADR-085): the crane dropped an ingredient at
+     * the station, or the order got past waiting for its ingredients. An engaged order's ingredients may be in the
+     * station, its Packager, a box on the way or the machine, which is why a Recipe Selector never switches the line to
+     * another result while one is open, and why cancelling one trims it instead of ending it
+     * ({@link #trimmedToDelivered}). A finished order is engaged only if something was delivered.
+     */
+    public boolean engaged() {
+        return deliveredIngredients() > 0 || (isOpen() && state != ProductionOrderState.WAITING_FOR_INGREDIENTS);
     }
 
     /**
@@ -423,7 +500,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     /** This order with another deadline (a world reload gives every restored order its full timeout again). */
     public ProductionOrder<K, L> withDeadline(long newDeadline) {
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, newDeadline, produced,
-                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine, selectorReturn, selectorRuns);
     }
 
     /**
@@ -474,13 +551,14 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
             return this;
         if (!isOpen())
             return new ProductionOrder<>(id, station, result, resultAmount, updated, state, deadlineTick, produced,
-                    resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
+                    resultStockSeen, backingRequest, promisedToRequest, restock, parentLine, selectorReturn,
+                    selectorRuns);
         boolean complete = true;
         for (SupplyLine<K> line : updated)
             complete &= line.isComplete();
         return new ProductionOrder<>(id, station, result, resultAmount, updated,
                 complete ? ProductionOrderState.DELIVERED : state, deadline(now, timeoutTicks), produced,
-                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine, selectorReturn, selectorRuns);
     }
 
     /**
@@ -493,7 +571,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, ProductionOrderState.WAITING_FOR_RESULT,
                 deadline(now, timeoutTicks), produced, resultStockSeen, backingRequest, promisedToRequest, restock,
-                parentLine);
+                parentLine, selectorReturn, selectorRuns);
     }
 
     /**
@@ -531,7 +609,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         boolean complete = total >= resultAmount;
         return new ProductionOrder<>(id, station, result, resultAmount, lines,
                 complete ? ProductionOrderState.COMPLETE : state, complete ? now : deadline(now, timeoutTicks), total,
-                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine, selectorReturn, selectorRuns);
     }
 
     /**
@@ -570,7 +648,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         long nextDeadline = complete ? now : counted > 0L ? deadline(now, timeoutTicks) : deadlineTick;
         return new ProductionOrder<>(id, station, result, resultAmount, lines,
                 complete ? ProductionOrderState.COMPLETE : state, nextDeadline, total, current, backingRequest,
-                promisedToRequest, restock, parentLine);
+                promisedToRequest, restock, parentLine, selectorReturn, selectorRuns);
     }
 
     /**
@@ -590,6 +668,51 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
     }
 
     /**
+     * This selector order cut down to what it has already handed over (ADR-085, design §5.5): how a cancel or a failed
+     * plan ends an {@linkplain #engaged() engaged} selector order without opening its station's line for another
+     * result while its ingredients are still in it.
+     * <p>
+     * The order keeps the <b>whole runs</b> its deliveries pay for, {@code fullRuns = min over lines of
+     * floor(delivered * selectorRuns / required)}: every line's {@code required} becomes what it delivered (nothing more
+     * is fetched), {@link #resultAmount()} and {@link #selectorRuns()} shrink to those runs (a pattern's yield is linear,
+     * {@link ProductionPattern#resultFor}), and the deadline starts over ({@code timeoutTicks} from {@code now}, never
+     * earlier than it already was). An order whose lines are now all served moves
+     * on to {@link ProductionOrderState#DELIVERED}; one that has already counted that many results is
+     * {@link ProductionOrderState#COMPLETE} at once. Whatever the deliveries hold beyond those runs is a partial run the
+     * machine cannot finish: it stays where it is and is the player's to see (a busy machine, a refused box), never a
+     * product counted for anybody.
+     * <p>
+     * When not even one whole run was handed over, nothing whole can ever come back, and an order with nothing to wait
+     * for cannot exist ({@code resultAmount >= 1}): the order is then <b>cancelled</b> exactly as any other, which ends it
+     * with lost ingredients and lets the controller stop the station visibly (design I5). An order that is finished or
+     * not selector-bound is returned unchanged.
+     */
+    public ProductionOrder<K, L> trimmedToDelivered(long now, long timeoutTicks) {
+        if (!isOpen() || !selectorBound())
+            return this;
+        long fullRuns = selectorRuns;
+        for (SupplyLine<K> line : lines)
+            fullRuns = Math.min(fullRuns, (long) line.delivered() * selectorRuns / line.required());
+        if (fullRuns <= 0L)
+            return cancelled(now);
+        List<SupplyLine<K>> trimmed = new ArrayList<>(lines.size());
+        for (SupplyLine<K> line : lines) {
+            // fullRuns > 0 means every line delivered something, so required stays at least 1.
+            trimmed.add(line.isComplete() ? line
+                    : new SupplyLine<>(line.id(), line.key(), line.delivered(), line.delivered(), line.choice()));
+        }
+        int runs = (int) fullRuns;
+        int amount = (int) Math.max(1L, Math.min(resultAmount, (long) resultAmount * runs / selectorRuns));
+        boolean complete = produced >= amount;
+        ProductionOrderState next = complete ? ProductionOrderState.COMPLETE
+                : state == ProductionOrderState.WAITING_FOR_INGREDIENTS ? ProductionOrderState.DELIVERED
+                : state;
+        return new ProductionOrder<>(id, station, result, amount, trimmed, next,
+                complete ? now : Math.max(deadlineTick, deadline(now, timeoutTicks)), produced, resultStockSeen,
+                backingRequest, promisedToRequest, restock, parentLine, selectorReturn, runs);
+    }
+
+    /**
      * The same order under another name for the <b>same</b> production station (M21, ADR-033): the warehouse was
      * rebuilt and the station's rack position is called something else now.
      * <p>
@@ -602,7 +725,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (newStation.equals(station))
             return this;
         return new ProductionOrder<>(id, newStation, result, resultAmount, lines, state, deadlineTick, produced,
-                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine);
+                resultStockSeen, backingRequest, promisedToRequest, restock, parentLine, selectorReturn, selectorRuns);
     }
 
     /**
@@ -613,7 +736,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (backingRequest.isEmpty())
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
-                resultStockSeen, Optional.empty(), 0L, restock, parentLine);
+                resultStockSeen, Optional.empty(), 0L, restock, parentLine, selectorReturn, selectorRuns);
     }
 
     /**
@@ -627,7 +750,8 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (take == 0L)
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
-                resultStockSeen, backingRequest, promisedToRequest - take, restock, parentLine);
+                resultStockSeen, backingRequest, promisedToRequest - take, restock, parentLine, selectorReturn,
+                selectorRuns);
     }
 
     /**
@@ -653,7 +777,8 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         if (parentLine.isEmpty())
             return this;
         return new ProductionOrder<>(id, station, result, resultAmount, lines, state, deadlineTick, produced,
-                BASELINE_PENDING, backingRequest, promisedToRequest, restock, Optional.empty());
+                BASELINE_PENDING, backingRequest, promisedToRequest, restock, Optional.empty(), selectorReturn,
+                selectorRuns);
     }
 
     /**
@@ -662,7 +787,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
      */
     private ProductionOrder<K, L> endedAt(ProductionOrderState next, long now) {
         return new ProductionOrder<>(id, station, result, resultAmount, lines, next, now, produced, resultStockSeen,
-                backingRequest, promisedToRequest, restock, parentLine);
+                backingRequest, promisedToRequest, restock, parentLine, selectorReturn, selectorRuns);
     }
 
     /** The deadline {@code timeoutTicks} after {@code now}, saturating instead of overflowing. */

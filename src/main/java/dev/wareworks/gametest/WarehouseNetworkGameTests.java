@@ -29,6 +29,7 @@ import dev.wareworks.content.crane.StackerCraneBlockEntity;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
+import dev.wareworks.content.station.SelectorHold;
 import dev.wareworks.content.station.TerminalDisplaySide;
 import dev.wareworks.content.station.WarehouseInputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlock;
@@ -45,6 +46,7 @@ import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.production.SelectorMode;
 import dev.wareworks.core.stock.StockRuleStatus;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.core.warehouse.LocationRecord;
@@ -422,6 +424,82 @@ public final class WarehouseNetworkGameTests {
                     helper.assertValueEqual(controller.countOf(LOG), (long) LOGS_IN_STOCK,
                             "and the first aisle still counts what it always did");
                     ItemCensus.assertEquals(helper, conserved, "after the rails were rebuilt");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Re-review fix (ADR-085, I5 and I7): a Recipe Selector station that is not loaded keeps what the controller holds
+     * for it through a rebuild that renames it. Its pending hold reaches it under its new name, and its return input on
+     * the first aisle stays guarded with what was last seen of it.
+     */
+    @GameTest(template = AISLE_PAIR_16X10X13, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void networkremapkeepsselectorstate(GameTestHelper helper) {
+        buildCorner(helper);
+        helper.setBlock(INPUT, WareworksBlocks.WAREHOUSE_INPUT.getDefaultState()
+                .setValue(WarehouseInputBlock.FACING, Direction.SOUTH));
+        helper.setBlock(CORNER_STATION, WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
+                .setValue(WarehouseProductionBlock.FACING, Direction.WEST));
+        if (!cornersEnabled()) {
+            assertCornersAreOff(helper);
+            return;
+        }
+        UUID lost = UUID.randomUUID();
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(warehouse(helper).branchCount(), 2, "the warehouse bends");
+                    helper.assertValueEqual(controller(helper).productionStations().size(), 1, "the station joined");
+                    helper.assertValueEqual(controller(helper).inputStations().size(), 1, "and the input");
+                })
+                .thenExecute(() -> {
+                    WarehouseProductionBlockEntity station = WareworksBlockEntityTypes.WAREHOUSE_PRODUCTION
+                            .getNullable(helper.getLevel(), helper.absolutePos(CORNER_STATION));
+                    helper.assertTrue(station != null, "the station");
+                    helper.assertValueEqual(station.setSelectorMode(SelectorMode.LOCAL, Optional.empty()),
+                            WarehouseProductionBlockEntity.SelectorModeChange.ACCEPTED, "local mode");
+                    helper.assertValueEqual(controller(helper).bindSelectorReturnInput(station,
+                            helper.absolutePos(INPUT)), WarehouseControllerBlockEntity.ReturnInputBinding.BOUND,
+                            "the return input on the first aisle");
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    WarehouseControllerBlockEntity controller = controller(helper);
+                    helper.assertValueEqual(rackOf(helper, CORNER_STATION), new RackPosition(1, 0, 0, Side.LEFT),
+                            "the station's name before the rebuild");
+                    controller.hideSelectorStationForTest(helper.absolutePos(CORNER_STATION), true);
+                    controller.pendSelectorHoldForTest(helper.absolutePos(CORNER_STATION),
+                            SelectorHold.lostIngredients(PLANK, lost, helper.getLevel().getGameTime(), 2));
+                    helper.assertTrue(controller.selectorQuarantines(helper.absolutePos(INPUT), PLANK),
+                            "the unloaded station's return input is guarded");
+                })
+                .thenExecute(() -> {
+                    // The rebuild, in one tick: the second aisle now runs north out of the same corner block.
+                    for (int z = 1; z <= SECOND_RAILS; z++)
+                        helper.setBlock(CORNER.south(z), Blocks.AIR);
+                    for (int z = 1; z <= SECOND_RAILS; z++)
+                        helper.setBlock(CORNER.north(z), WarehouseRailBlock.along(Direction.Axis.Z));
+                    dock(helper).refreshGeometry();
+                    WarehouseControllerBlockEntity controller = controller(helper);
+                    controller.relinkNow();
+                    helper.assertValueEqual(rackOf(helper, CORNER_STATION), new RackPosition(1, 0, 0, Side.RIGHT),
+                            "the station has another name now");
+                    // Still not loaded, under its new name.
+                    controller.hideSelectorStationForTest(helper.absolutePos(CORNER_STATION), true);
+                    helper.assertTrue(controller.selectorQuarantines(helper.absolutePos(INPUT), PLANK),
+                            "its return input is still guarded after the rebuild");
+                })
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    WarehouseControllerBlockEntity controller = controller(helper);
+                    helper.assertTrue(controller.selectorQuarantines(helper.absolutePos(INPUT), PLANK),
+                            "and stays guarded");
+                    controller.hideSelectorStationForTest(helper.absolutePos(CORNER_STATION), false);
+                })
+                .thenWaitUntil(() -> {
+                    WarehouseProductionBlockEntity station = WareworksBlockEntityTypes.WAREHOUSE_PRODUCTION
+                            .getNullable(helper.getLevel(), helper.absolutePos(CORNER_STATION));
+                    helper.assertTrue(station != null && station.selectorHold().isPresent(),
+                            "seen again, the pending hold reaches the station under its new name");
+                    helper.assertValueEqual(station.selectorHold().get().orderId(), Optional.of(lost),
+                            "the very hold");
                 })
                 .thenSucceed();
     }

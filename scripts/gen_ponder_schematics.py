@@ -80,6 +80,13 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 #   the chest at the belt's end (x = 2, z = 2) with the Schematicannon west of it and the requester north of that, the
 #   stone on the plane RIGHT and a 2 x 2 floor printed at x = 6..7, z = 0..1
 #   (dev.wareworks.client.ponder.scenes.RequesterScenes).
+# The Recipe Selector scene (ADR-085) uses the shared square 9 plate: the return input and the production station on the
+#   rack plane LEFT at positions 3 and 4, the saw behind the station at z = 2 with the selector against its west side
+#   (later a Basin there with a Mixer two above it, y = 3), and the cobbled deepslate on the plane RIGHT
+#   (dev.wareworks.client.ponder.scenes.RecipeSelectorScenes#local).
+# The Ender Recipe Selector scene (ADR-085) is aisle-free on the square 9 plate: the station, its Packager and its
+#   return input at the back right (x = 5..6, z = 6..7), the factory's Packager, chest, saw and Ender selector at the
+#   front left (x = 1..3, z = 2..3) (dev.wareworks.client.ponder.scenes.RecipeSelectorScenes#ender).
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
@@ -108,6 +115,8 @@ TEMPLATES = {
     "warehouse/ordering_to_a_door": (9, 7, 9),
     "warehouse/crafter_feeder": (9, 7, 9),
     "requester/ordering": (9, 7, 9),
+    "warehouse/recipe_selector": (9, 7, 9),
+    "warehouse/ender_recipe_selector": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

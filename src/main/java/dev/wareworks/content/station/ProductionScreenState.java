@@ -8,10 +8,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.selector.SelectorMachine;
+import dev.wareworks.content.selector.SelectorRecipeCheck;
 import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.production.ProductionOrderState;
+import dev.wareworks.core.production.SelectorMode;
+import dev.wareworks.core.production.SelectorWait;
 import dev.wareworks.core.terminal.PlanMember;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 
 /**
@@ -41,10 +46,16 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
  * @param choices  what the filter cells of the patterns would take (ADR-082): one view per filter of a slot, in slot
  *                 order, at most {@value #MAX_CHOICE_VIEWS}. Empty for a station without a filter cell, and a filter
  *                 past the bound has no view: the screen then draws the filter itself ({@link #choice})
+ * @param selector the station's Recipe Selector (ADR-085): mode, selection, hold and fault; {@link SelectorView#NONE}
+ *                 for a station without one, which then reads exactly as before
+ * @param selectorChecks the Recipe Selector pattern check of each slot, in slot order (ADR-085, design §10); empty for
+ *                 a station without a selector or whose machine is not known yet, and an empty entry for a slot that
+ *                 was not checked. A slot past the end of the list reads as not checked ({@link #selectorCheck})
  */
 public record ProductionScreenState(List<PatternView> patterns, List<OrderView> orders,
                                     List<StoppedProduct> stopped, boolean feeder, List<PatternCheckView> checks,
-                                    List<ChoiceView> choices) {
+                                    List<ChoiceView> choices, SelectorView selector,
+                                    List<Optional<SelectorRecipeCheck.Verdict>> selectorChecks) {
     /**
      * Orders one payload carries; a station with more shows the first ones.
      * <p>
@@ -88,6 +99,9 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
     /** Items an order line names that a filter chose ({@link OrderView#uses()}); the rest is a number. */
     public static final int MAX_USES_SHOWN = 4;
 
+    /** Longest enum name a payload may claim (ADR-085: selector waits, modes, causes and kinds travel by name). */
+    public static final int MAX_ENUM_NAME_LENGTH = 32;
+
     public static final ProductionScreenState NONE =
             new ProductionScreenState(List.of(), List.of(), List.of());
 
@@ -97,6 +111,19 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         stopped = List.copyOf(Objects.requireNonNull(stopped, "stopped"));
         checks = List.copyOf(Objects.requireNonNull(checks, "checks"));
         choices = List.copyOf(Objects.requireNonNull(choices, "choices"));
+        Objects.requireNonNull(selector, "selector");
+        selectorChecks = List.copyOf(Objects.requireNonNull(selectorChecks, "selectorChecks"));
+        if (selectorChecks.size() > ProductionPatterns.MAX_SLOTS)
+            selectorChecks = selectorChecks.subList(0, ProductionPatterns.MAX_SLOTS);
+    }
+
+    /**
+     * A station without a Recipe Selector: the shape every call site used before ADR-085, so a caller that says nothing
+     * about a selector keeps describing a station that makes every order as it comes.
+     */
+    public ProductionScreenState(List<PatternView> patterns, List<OrderView> orders, List<StoppedProduct> stopped,
+            boolean feeder, List<PatternCheckView> checks, List<ChoiceView> choices) {
+        this(patterns, orders, stopped, feeder, checks, choices, SelectorView.NONE, List.of());
     }
 
     /**
@@ -291,10 +318,16 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
      *                  line order, with the line's whole amount, at most {@value #MAX_USES_SHOWN}. Empty for an order of
      *                  exact ingredients, which shows nothing new
      * @param usesMore  how many more such lines the order has
+     * @param selectorWait why the order fetches nothing (or only one run) at its Recipe Selector station (ADR-085,
+     *                  design §5.1): {@link SelectorWait#NONE} for an order at an ordinary station, which reads as before
+     * @param selectorItem the item the wait text names: the result that goes first ({@code BEHIND}, {@code LINE_BUSY},
+     *                  {@code PROBE_BEHIND}) or, for a {@code HOLD}, what came back through the return input that the
+     *                  station does not make; empty otherwise (a hold without an item lost ingredients in the line)
      */
     public record OrderView(UUID id, ProductionOrderState state, ItemKey result, int amount, long produced,
                             long missing, long delivered, Optional<UUID> plan, int depth, Optional<String> address,
-                            boolean waitingForStep, List<EntryView> uses, int usesMore) {
+                            boolean waitingForStep, List<EntryView> uses, int usesMore, SelectorWait selectorWait,
+                            Optional<ItemKey> selectorItem) {
         public OrderView {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(state, "state");
@@ -311,6 +344,18 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
             if (uses.size() > MAX_USES_SHOWN)
                 uses = uses.subList(0, MAX_USES_SHOWN);
             usesMore = Math.max(0, usesMore);
+            Objects.requireNonNull(selectorWait, "selectorWait");
+            Objects.requireNonNull(selectorItem, "selectorItem");
+            if (selectorWait == SelectorWait.NONE)
+                selectorItem = Optional.empty();
+        }
+
+        /** An order at a station without a Recipe Selector: every order was one before ADR-085. */
+        public OrderView(UUID id, ProductionOrderState state, ItemKey result, int amount, long produced, long missing,
+                long delivered, Optional<UUID> plan, int depth, Optional<String> address, boolean waitingForStep,
+                List<EntryView> uses, int usesMore) {
+            this(id, state, result, amount, produced, missing, delivered, plan, depth, address, waitingForStep, uses,
+                    usesMore, SelectorWait.NONE, Optional.empty());
         }
 
         /** An order no filter chose an item for: every order was one before ADR-082. */
@@ -376,6 +421,12 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
                 buffer.writeVarInt(use.count());
             }
             buffer.writeVarInt(usesMore);
+            // Appended (ADR-085): an order at a station without a Recipe Selector pays one zero byte.
+            buffer.writeBoolean(selectorWait != SelectorWait.NONE);
+            if (selectorWait != SelectorWait.NONE) {
+                buffer.writeUtf(selectorWait.name(), MAX_ENUM_NAME_LENGTH);
+                writeKey(buffer, selectorItem);
+            }
         }
 
         /** Reads a line written by {@link #write}; an unknown state ordinal falls back to the first state. */
@@ -399,8 +450,23 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
                 ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
                 uses.add(new EntryView(i, key, buffer.readVarInt()));
             }
+            int usesMore = buffer.readVarInt();
+            SelectorWait selectorWait = SelectorWait.NONE;
+            Optional<ItemKey> selectorItem = Optional.empty();
+            if (buffer.readBoolean()) {
+                selectorWait = waitByName(buffer.readUtf(MAX_ENUM_NAME_LENGTH));
+                selectorItem = readKey(buffer);
+            }
             return new OrderView(id, state, result, amount, produced, missing, delivered, plan, depth, address,
-                    waitingForStep, uses, buffer.readVarInt());
+                    waitingForStep, uses, usesMore, selectorWait, selectorItem);
+        }
+
+        /**
+         * Whether the order waits at its Recipe Selector station for something a player has to fix (ADR-085): drawn in
+         * the error colour. A queue (grey) and a wait that runs out by itself are not faults.
+         */
+        public boolean selectorFault() {
+            return isSelectorFault(selectorWait);
         }
     }
 
@@ -440,6 +506,12 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         buffer.writeVarInt(choiceCount);
         for (int i = 0; i < choiceCount; i++)
             choices.get(i).write(buffer);
+        // Appended after the filter views (ADR-085): a station without a Recipe Selector pays two zero bytes.
+        selector.write(buffer);
+        int selectorCheckCount = Math.min(selectorChecks.size(), ProductionPatterns.MAX_SLOTS);
+        buffer.writeVarInt(selectorCheckCount);
+        for (int i = 0; i < selectorCheckCount; i++)
+            buffer.writeVarInt(selectorChecks.get(i).map(verdict -> verdict.ordinal() + 1).orElse(0));
     }
 
     /** Reads a state written by {@link #write}; bounded, and unknown ordinals fall back to the first state. */
@@ -474,7 +546,161 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         List<ChoiceView> choices = new ArrayList<>(choiceCount);
         for (int i = 0; i < choiceCount; i++)
             choices.add(ChoiceView.read(buffer));
-        return new ProductionScreenState(patterns, orders, stopped, feeder, checks, choices);
+        SelectorView selector = SelectorView.read(buffer);
+        int selectorCheckCount = Math.min(Math.max(0, buffer.readVarInt()), ProductionPatterns.MAX_SLOTS);
+        List<Optional<SelectorRecipeCheck.Verdict>> selectorChecks = new ArrayList<>(selectorCheckCount);
+        SelectorRecipeCheck.Verdict[] verdicts = SelectorRecipeCheck.Verdict.values();
+        for (int i = 0; i < selectorCheckCount; i++) {
+            int value = buffer.readVarInt();
+            selectorChecks.add(value <= 0 || value > verdicts.length ? Optional.empty()
+                    : Optional.of(verdicts[value - 1]));
+        }
+        return new ProductionScreenState(patterns, orders, stopped, feeder, checks, choices, selector,
+                selectorChecks);
+    }
+
+    /**
+     * The Recipe Selector check of pattern slot {@code pattern} (ADR-085) if the machine would not make it exactly, i.e.
+     * the reason the warehouse never orders it at this station; empty for a slot that passed or was not checked.
+     */
+    public Optional<SelectorRecipeCheck.Verdict> selectorRefusal(int pattern) {
+        return selectorCheck(pattern).filter(verdict -> verdict != SelectorRecipeCheck.Verdict.VALID);
+    }
+
+    /** The Recipe Selector check of pattern slot {@code pattern}; empty when it was not checked. */
+    public Optional<SelectorRecipeCheck.Verdict> selectorCheck(int pattern) {
+        return pattern < 0 || pattern >= selectorChecks.size() ? Optional.empty() : selectorChecks.get(pattern);
+    }
+
+    /** Writes an optional item: a flag, then the key. */
+    static void writeKey(RegistryFriendlyByteBuf buffer, Optional<ItemKey> key) {
+        buffer.writeBoolean(key.isPresent());
+        key.ifPresent(value -> ItemKey.STREAM_CODEC.encode(buffer, value));
+    }
+
+    /** Reads an optional item written by {@link #writeKey}. */
+    static Optional<ItemKey> readKey(RegistryFriendlyByteBuf buffer) {
+        return buffer.readBoolean() ? Optional.of(ItemKey.STREAM_CODEC.decode(buffer)) : Optional.empty();
+    }
+
+    /** The selector wait a payload names; {@link SelectorWait#NONE} for a name this build does not know. */
+    static SelectorWait waitByName(String name) {
+        for (SelectorWait wait : SelectorWait.values()) {
+            if (wait.name().equals(name))
+                return wait;
+        }
+        return SelectorWait.NONE;
+    }
+
+    /**
+     * Whether {@code wait} is something a player has to act on (ADR-085, design §12), drawn in the error colour: a hold
+     * and every fault. Not a queue behind another result, and not a wait that runs out by itself (the buffer, a crane
+     * trip, a Packager, a busy machine, a switch being made).
+     */
+    public static boolean isSelectorFault(SelectorWait wait) {
+        return switch (wait) {
+            case NONE, PROBE_ONE_RUN, BEHIND, LINE_BUSY, PROBE_BEHIND, BUFFER_NOT_EMPTY, CRANE_INBOUND, PACKAGER_BUSY,
+                    SWITCHING, ARMING, MACHINE_BUSY -> false;
+            default -> true;
+        };
+    }
+
+    /**
+     * What a production station's screen shows of its Recipe Selector (ADR-085, design §13). Built by the server from
+     * the station's own state, so the screen never guesses.
+     *
+     * @param mode         how the station selects; {@link SelectorMode#NONE} for a station without a selector
+     * @param selection    the result the line is set to, empty before its first switch
+     * @param epoch        how often the line switched
+     * @param hold         why the station holds, if it does
+     * @param holdItem     the item a hold names: what came back unexpectedly, else the result the line was making
+     * @param fault        the station's fault that stops its orders (no selector, no return input, ...), if any
+     * @param linked       local mode: where the registered selector stands
+     * @param kind         the machine the selector serves, as far as the station knows it
+     * @param returnInput  the station's return input
+     * @param slipsTrusted slip mode: whether a probe has shown the far factory to work since the last switch
+     * @param engaged      whether an order of the station has handed ingredients over: switching off is refused then
+     */
+    public record SelectorView(SelectorMode mode, Optional<ItemKey> selection, int epoch,
+                               Optional<SelectorHold.Cause> hold, Optional<ItemKey> holdItem,
+                               Optional<SelectorWait> fault, Optional<BlockPos> linked,
+                               Optional<SelectorMachine.Kind> kind, Optional<BlockPos> returnInput,
+                               boolean slipsTrusted, boolean engaged) {
+        public static final SelectorView NONE = new SelectorView(SelectorMode.NONE, Optional.empty(), 0,
+                Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.empty(), false, false);
+
+        public SelectorView {
+            Objects.requireNonNull(mode, "mode");
+            Objects.requireNonNull(selection, "selection");
+            epoch = Math.max(0, epoch);
+            Objects.requireNonNull(hold, "hold");
+            Objects.requireNonNull(holdItem, "holdItem");
+            Objects.requireNonNull(fault, "fault");
+            fault = fault.filter(wait -> wait != SelectorWait.NONE);
+            Objects.requireNonNull(linked, "linked");
+            Objects.requireNonNull(kind, "kind");
+            Objects.requireNonNull(returnInput, "returnInput");
+            if (hold.isEmpty())
+                holdItem = Optional.empty();
+        }
+
+        /** Whether the station selects at all; the view of a station that does not is {@link #NONE}. */
+        public boolean on() {
+            return mode.selects();
+        }
+
+        /** Whether the station is held until a player confirms (design §8). */
+        public boolean held() {
+            return hold.isPresent();
+        }
+
+        void write(RegistryFriendlyByteBuf buffer) {
+            buffer.writeBoolean(on());
+            if (!on())
+                return;
+            buffer.writeUtf(mode.name(), MAX_ENUM_NAME_LENGTH);
+            writeKey(buffer, selection);
+            buffer.writeVarInt(epoch);
+            buffer.writeOptional(hold, (out, cause) -> out.writeUtf(cause.name(), MAX_ENUM_NAME_LENGTH));
+            writeKey(buffer, holdItem);
+            buffer.writeOptional(fault, (out, wait) -> out.writeUtf(wait.name(), MAX_ENUM_NAME_LENGTH));
+            buffer.writeOptional(linked, (out, pos) -> out.writeLong(pos.asLong()));
+            buffer.writeOptional(kind, (out, value) -> out.writeUtf(value.name(), MAX_ENUM_NAME_LENGTH));
+            buffer.writeOptional(returnInput, (out, pos) -> out.writeLong(pos.asLong()));
+            buffer.writeBoolean(slipsTrusted);
+            buffer.writeBoolean(engaged);
+        }
+
+        static SelectorView read(RegistryFriendlyByteBuf buffer) {
+            if (!buffer.readBoolean())
+                return NONE;
+            String modeName = buffer.readUtf(MAX_ENUM_NAME_LENGTH);
+            SelectorMode mode = SelectorMode.NONE;
+            for (SelectorMode candidate : SelectorMode.values()) {
+                if (candidate.name().equals(modeName))
+                    mode = candidate;
+            }
+            Optional<ItemKey> selection = readKey(buffer);
+            int epoch = buffer.readVarInt();
+            Optional<String> holdName = buffer.readOptional(in -> in.readUtf(MAX_ENUM_NAME_LENGTH));
+            Optional<ItemKey> holdItem = readKey(buffer);
+            Optional<SelectorWait> fault = buffer.readOptional(in -> in.readUtf(MAX_ENUM_NAME_LENGTH))
+                    .map(ProductionScreenState::waitByName);
+            Optional<BlockPos> linked = buffer.readOptional(in -> BlockPos.of(in.readLong()));
+            Optional<SelectorMachine.Kind> kind = buffer.readOptional(in -> in.readUtf(MAX_ENUM_NAME_LENGTH))
+                    .flatMap(SelectorMachine.Kind::byName);
+            Optional<BlockPos> returnInput = buffer.readOptional(in -> BlockPos.of(in.readLong()));
+            boolean slipsTrusted = buffer.readBoolean();
+            boolean engaged = buffer.readBoolean();
+            Optional<SelectorHold.Cause> hold = Optional.empty();
+            for (SelectorHold.Cause cause : SelectorHold.Cause.values()) {
+                if (holdName.filter(cause.name()::equals).isPresent())
+                    hold = Optional.of(cause);
+            }
+            return new SelectorView(mode, selection, epoch, hold, holdItem, fault, linked, kind, returnInput,
+                    slipsTrusted, engaged);
+        }
     }
 
     /**

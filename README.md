@@ -130,6 +130,14 @@ teleported: every item you put in or take out is carried by the crane, where you
   Crafter once per run; the result goes into a Warehouse Input in front of the Crafter. While it is attached, the
   station's patterns are checked against real crafting recipes, and one that is not a recipe is shown red and never
   ordered. Needs rotation.
+* **Recipe Selector**: lets one **Mechanical Saw** (or a **Basin** under a Mixer or Press) make several products in
+  turn. Linked to a production station and placed against the machine, it sets the machine's recipe filter before
+  each order, so the saw cuts stairs, then slabs, then walls instead of cycling through every stonecutting recipe. The
+  station switches to another product only once the line is empty and the last product is back, through a **return
+  input** of its own that stores nothing but what the station makes. See **One machine, several products** below.
+* **Ender Recipe Selector**: the same for a **factory far away**. Every package the station sends carries a **recipe
+  slip**; the selector sits on the factory's unpacking Packager and sets the saw's recipe before the package is
+  opened, however the package came (Robo Bee, train, frogport or by hand).
 * **Warehouse Stock Keeper**: holds the warehouse's stock rules — one item per row plus a **minimum**, a **maximum** and
   a **reserve**. It holds no items itself; a row's item is only a name, and nothing you click into it is used up.
 * **Warehouse Optimizer**: tidies up on request. List up to 16 items (or click a clipboard onto its screen), see how
@@ -307,7 +315,12 @@ filled there and taken straight on to the terminal, the red row when no empty co
 at the bay's back for bulk. The twenty-sixth belongs to the **Schematicannon Requester**: the requester set against a
 cannon, a linked remote put in, the cannon's "Skip missing Blocks" switched off, the missing items running from the
 terminal over a funnel and a belt into the cannon's chest, and the red lamp when the warehouse has neither the item
-nor a pattern that makes it.
+nor a pattern that makes it. The twenty-seventh, **Making Several Products on One Saw**, belongs to the **Recipe
+Selector** and the production station: the unfiltered saw cycling, the selector linked, placed and given its return
+input, stairs and then slabs, the item that comes back unexpected and how to take it out, and the Basin under a Mixer.
+The twenty-eighth, **Setting a Far Factory's Recipe with Recipe Slips**, belongs to the **Ender Recipe Selector** and
+the production station: the four sneak-clicks, the saw set as a package arrives, the slab package waiting in its port
+until the line is empty, and the two ways of bypassing the selector to avoid.
 
 ## Balancing the crane
 
@@ -730,7 +743,8 @@ Practical notes:
   must be filtered to one ingredient. A crafter also accepts nothing while its group is working, so put a hopper
   between each funnel and its crafter to hold the next ingredient.
 * **Give a Mechanical Saw a recipe filter.** Saws also run stonecutting recipes and cycle through every matching
-  recipe, so an unfiltered saw makes the wrong item most of the time.
+  recipe, so an unfiltered saw makes the wrong item most of the time. For a saw that makes several products, let a
+  **Recipe Selector** set the filter (below).
 * **Wareworks does not check patterns against recipes** — unless a Crafter Feeder is attached (below). A pattern whose
   machine cannot make the result never produces anything, and the order times out.
 * **A step is completed by items really arriving in the warehouse.** Putting the intermediate into a rack by hand does not
@@ -762,6 +776,34 @@ pattern of the station is now one recipe for the Crafter, cell for cell:
   Mechanical Crafters stay the tool.
 * Server config: `crafterFeederRequiresRotation` (default on) and `crafterFeederStressImpact` (2.0, like a Mechanical
   Crafter).
+
+**One machine, several products: the Recipe Selector.** Sneak-click the production station with a **Recipe
+Selector**, place it against the saw (facing up) or against the Basin under a Mixer or Press, and sneak-click the
+Warehouse Input the products come back through. From then on:
+
+* **One product at a time.** Orders for the same product run together; an order for another product waits for its
+  turn, and the terminal, the station's screen and the goggles say so. The selector sets the saw's filter only once
+  nothing of the old product's ingredients is in the buffer, on its way, in the machine or still to come back. A
+  waiting order does not time out.
+* **Only the return input completes an order**, and it stores only what the station makes. Anything else that comes
+  back stays in the input and **stops the station**: click the input with an empty hand to take it out, then
+  sneak-click the station (or press Resume in its screen). The same stop follows an order that ended while its
+  ingredients were still in the line. It never resumes by itself.
+* **Patterns are checked against the machine's real recipes.** A pattern no recipe makes in whole runs, one with
+  several possible amounts or one that makes its result only by chance is drawn red with the reason and never ordered
+  there.
+* **A filter item you put into the machine yourself is never overwritten**, and a filter changed by hand is set back.
+  Cancelling an order already in the machine lets what is in the line come back first.
+* **For a factory far away**, use the **Ender Recipe Selector**: sneak-click the factory's saw or basin with it, then
+  the station (it now puts a recipe slip into every package it sends), then the return input, and **sneak-place** it on
+  the factory's unpacking Packager, in the Packager's chunk. A package for another product waits in its port until the
+  saw and the chest behind the Packager are empty; old packages and packages of another station are refused. Never
+  feed packages straight into the saw, and do not let a port push into the chest past the Packager: both bypass the
+  selector.
+* Switch a selector or the slips off in the station's screen. Fluid recipes, Deployers, presses on belts and Crafter
+  Feeder stations are not supported. Server config: `selector.localRange` (32), `selector.machineRange` (16) and
+  `selector.remoteProbe` (by default, after a restart, after the slips were switched on and after a stop, the first
+  order of a new product at a far factory sends one run, until the right product has come back).
 
 ## Stock rules
 

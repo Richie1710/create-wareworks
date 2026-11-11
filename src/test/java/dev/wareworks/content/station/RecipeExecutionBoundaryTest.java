@@ -38,7 +38,9 @@ import org.junit.jupiter.api.Test;
  * in game. One class is exempt from the first scan by ADR-067 (issue #34): {@code content/station/CrafterRecipeCheck.java}
  * <b>evaluates</b> recipes for the Warehouse Crafter Feeder — is a pattern a crafting recipe, and does what a vanilla
  * Crafter is about to output fit in front of it — and runs none: the vanilla Crafter crafts. It is held to that by
- * {@link #theCrafterCheckOnlyEvaluates}. A call that really belongs somewhere else needs a decision recorded as an ADR first, and then a change to
+ * {@link #theCrafterCheckOnlyEvaluates}. A second is exempt by ADR-085: {@code content/selector/SelectorRecipeCheck.java}
+ * evaluates whether a saw or basin makes a Recipe Selector station's pattern exactly, held to that by
+ * {@link #theSelectorCheckOnlyEvaluates}. A call that really belongs somewhere else needs a decision recorded as an ADR first, and then a change to
  * these lists. Two more tests keep the guard from going quiet: the allowed places really are where the calls are, so a
  * renamed or moved class cannot empty a scan, and the patterns really catch every form they are meant to.
  * <p>
@@ -50,6 +52,11 @@ class RecipeExecutionBoundaryTest {
     private static final Path TERMINAL_CRAFTING = Path.of("dev/wareworks/content/station/TerminalCrafting.java");
     /** The one class allowed to evaluate a recipe without running it (ADR-067), relative to {@link #MAIN_SOURCES}. */
     private static final Path CRAFTER_RECIPE_CHECK = Path.of("dev/wareworks/content/station/CrafterRecipeCheck.java");
+    /**
+     * The second class allowed to evaluate recipes without running them (ADR-085): the Recipe Selector's pattern check,
+     * relative to {@link #MAIN_SOURCES}.
+     */
+    private static final Path SELECTOR_RECIPE_CHECK = Path.of("dev/wareworks/content/selector/SelectorRecipeCheck.java");
     /** JEI's own recipe manager for the visual harness, which shares a method name with the game's and runs nothing. */
     private static final Path JEI_RUNTIME_ACCESS = Path.of("dev/wareworks/client/compat/jei/JeiRuntimeAccess.java");
     /** The GameTests, relative to {@link #MAIN_SOURCES}: they check recipes, they do not craft in game. */
@@ -107,7 +114,7 @@ class RecipeExecutionBoundaryTest {
         for (Path file : mainSources()) {
             Path relative = MAIN_SOURCES.relativize(file);
             if (relative.equals(TERMINAL_CRAFTING) || relative.equals(CRAFTER_RECIPE_CHECK)
-                    || relative.equals(JEI_RUNTIME_ACCESS) || relative.startsWith(GAME_TESTS))
+                    || relative.equals(SELECTOR_RECIPE_CHECK) || relative.equals(JEI_RUNTIME_ACCESS) || relative.startsWith(GAME_TESTS))
                 continue;
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
             for (int line = 0; line < lines.size(); line++) {
@@ -165,6 +172,23 @@ class RecipeExecutionBoundaryTest {
         for (String forbidden : List.of("firePlayerCraftingEvent", "onCraftedBy", "insertItem(", "setItem(",
                 "popResource(", "addFreshEntity(", "TerminalCrafting.", "TerminalCrafting::"))
             assertFalse(source.contains(forbidden), "CrafterRecipeCheck must only evaluate recipes, but uses "
+                    + forbidden);
+    }
+
+    /**
+     * The Recipe Selector's pattern check (ADR-085, design §10) really is where its recipe lookups are, so a renamed
+     * class cannot empty the exemption, and it only evaluates: it makes no result, asks for no remainder, fires no
+     * crafting event, takes no recipe through the terminal's way in and puts nothing anywhere.
+     */
+    @Test
+    void theSelectorCheckOnlyEvaluates() throws IOException {
+        String source = source(SELECTOR_RECIPE_CHECK);
+        for (String call : List.of("getRecipeManager(", ".getResultItem("))
+            assertTrue(source.contains(call), "SelectorRecipeCheck no longer calls " + call);
+        for (String forbidden : List.of(".assemble(", "getRemainingItems", "rollResults", "firePlayerCraftingEvent",
+                "onCraftedBy", "insertItem(", "setItem(", "setFilter(", "popResource(", "addFreshEntity(",
+                "BasinRecipe.apply", "TerminalCrafting.", "TerminalCrafting::"))
+            assertFalse(source.contains(forbidden), "SelectorRecipeCheck must only evaluate recipes, but uses "
                     + forbidden);
     }
 

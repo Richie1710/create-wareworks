@@ -5,9 +5,11 @@ import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalInt;
 import java.util.function.BiConsumer;
 
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.tterrag.registrate.util.entry.BlockEntry;
 
@@ -17,6 +19,7 @@ import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.requester.SchematicannonRequesterBlock;
 import dev.wareworks.content.requester.SchematicannonRequesterBlockEntity;
+import dev.wareworks.content.selector.RecipeSelectorBlock;
 import dev.wareworks.content.station.WarehouseCrafterFeederBlock;
 import dev.wareworks.content.station.WarehouseHomePointBlock;
 import dev.wareworks.content.station.WarehouseInputBlock;
@@ -40,9 +43,11 @@ import dev.wareworks.registry.WareworksItems;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -50,6 +55,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.inventory.ChestMenu;
@@ -76,8 +82,9 @@ import net.neoforged.neoforge.fluids.FluidStack;
  * the interface (framed aisle plate; brass port at the back), input and output (aisle openings; intake on top, pull port at
  * the back), since M11 the copper-bodied production station (aisle opening) and, since M20, the same station with its
  * <b>stopped</b> lamp burning, since issue #34 the Crafter Feeder in all six facings, each with the shaft axis a
- * placement gives it, and since issue #45 the Schematicannon Requester in all six facings with a Warehouse Remote
- * standing in its cradle. The warehouse terminal is the one
+ * placement gives it, since ADR-085 the Recipe Selector and the Ender Recipe Selector (each facing north, and every
+ * facing of both models checked against the block's shape on the client), and since issue #45 the Schematicannon
+ * Requester in all six facings with a Warehouse Remote standing in its cradle. The warehouse terminal is the one
  * exhibit whose front is <b>not</b> its aisle side: since ADR-022 a player stands at its screen and the crane loads it
  * through the opposite face, so the front camera sees the screen and the back camera sees the arm port.
  * <p>
@@ -113,11 +120,12 @@ public final class BlocksVisualScenario implements VisualScenario {
     private static final int SCREEN_SETTLE_TICKS = 10;
     private static final int CHEST_SLOTS = 27;
     /**
-     * First slot the items start at, so the twenty-three of them end in the chest's last slot: the last five slots of
-     * the top row, then the middle and bottom rows (ADR-083's three upgrade kits made them twenty-three, issue #45
-     * twenty, issue #46 nineteen; the middle row's first slot was first while eighteen fitted after it).
+     * First slot the items start at, so the twenty-five of them end in the chest's last slot: the last seven slots of
+     * the top row, then the middle and bottom rows (ADR-085's two Recipe Selectors made them twenty-five, ADR-083's
+     * three upgrade kits twenty-three, issue #45 twenty, issue #46 nineteen; the middle row's first slot was first
+     * while eighteen fitted after it).
      */
-    private static final int FIRST_ITEM_SLOT = 4;
+    private static final int FIRST_ITEM_SLOT = CHEST_SLOTS - 25;
 
     /** Close-up cameras relative to an exhibit's block centre: to the side, above and in front of or behind it. */
     private static final double CLOSE_SIDE = 1.4;
@@ -347,6 +355,12 @@ public final class BlocksVisualScenario implements VisualScenario {
             feederExhibit("feeder_west", Direction.WEST, false),
             feederExhibit("feeder_up", Direction.UP, true),
             feederExhibit("feeder_down", Direction.DOWN, false),
+            // The two Recipe Selectors (ADR-085), after the feeder as in the creative tab. A selector is a plate set
+            // against a machine; facing north, the face with its lamp looks at the front camera and the side that
+            // touches the machine at the back camera. Every other facing is checked on the client against the block's
+            // own shape (checkSelectorModels).
+            selectorExhibit("recipe_selector", WareworksBlocks.RECIPE_SELECTOR),
+            selectorExhibit("ender_recipe_selector", WareworksBlocks.ENDER_RECIPE_SELECTOR),
             // The stock keeper faces the aisle like the stations, so its panel looks at the front camera. Its lamp is
             // shown lit, which is the only state that differs from the item model (M15).
             new Exhibit("stock_keeper", (level, pos) -> level.setBlockAndUpdate(pos,
@@ -395,6 +409,12 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.getDefaultState()
                         .setValue(WarehouseCrafterFeederBlock.FACING, facing)
                         .setValue(WarehouseCrafterFeederBlock.AXIS_ALONG_FIRST_COORDINATE, alongFirst)));
+    }
+
+    /** A Recipe Selector exhibit of {@code tier}, facing north: its machine would stand behind it. */
+    private static Exhibit selectorExhibit(String label, BlockEntry<RecipeSelectorBlock> tier) {
+        return new Exhibit(label, (level, pos) -> level.setBlockAndUpdate(pos, tier.getDefaultState()
+                .setValue(RecipeSelectorBlock.FACING, Direction.NORTH)));
     }
 
     /** A Schematicannon Requester exhibit facing {@code facing}, with a Warehouse Remote in its cradle. */
@@ -605,7 +625,9 @@ public final class BlocksVisualScenario implements VisualScenario {
         script.server("blocks: clear the area and place the exhibits", BlocksVisualScenario::build)
                 .camera(CameraView.of("middle", middle, FAR_HEIGHT, FAR_DISTANCE, middle, BLOCK_CENTER, BLOCK_CENTER))
                 .until("blocks: wait until the client has every exhibit", BlocksVisualScenario::clientReady,
-                        SCENE_READY_TIMEOUT_TICKS);
+                        SCENE_READY_TIMEOUT_TICKS)
+                .client("blocks: check both Recipe Selector models in every facing",
+                        BlocksVisualScenario::checkSelectorModels);
     }
 
     @Override
@@ -827,6 +849,80 @@ public final class BlocksVisualScenario implements VisualScenario {
                     + " there");
     }
 
+    /** How far a Recipe Selector's model reaches from the face it is set against at most: its lamp (6 px). */
+    private static final double SELECTOR_MAX_DEPTH = 6.0 / 16.0;
+    /** How far it reaches at least: its plate (3 px). */
+    private static final double SELECTOR_MIN_DEPTH = 3.0 / 16.0;
+    /** The plate's span across the face: 2 px to 14 px, as the block's shape. */
+    private static final double SELECTOR_SPAN_MIN = 2.0 / 16.0;
+    private static final double SELECTOR_SPAN_MAX = 14.0 / 16.0;
+    private static final double MODEL_EPSILON = 1.0e-4;
+
+    /**
+     * Both Recipe Selector models in all six facings (ADR-085): the baked model of every state is not the missing model,
+     * and its quads lie against the face {@code FACING} points at (the machine's), span the plate's 12 px across it and
+     * reach no further than the lamp. A wrong blockstate rotation puts the plate on another face and fails here, for the
+     * facings no exhibit shows.
+     */
+    private static void checkSelectorModels(VisualContext context) {
+        Minecraft minecraft = context.minecraft();
+        BakedModel missing = minecraft.getModelManager().getMissingModel();
+        int stride = DefaultVertexFormat.BLOCK.getVertexSize() / Integer.BYTES;
+        List<String> checked = new ArrayList<>();
+        List<Direction> sides = new ArrayList<>(List.of(Direction.values()));
+        sides.add(null);
+        for (BlockEntry<RecipeSelectorBlock> tier : List.of(WareworksBlocks.RECIPE_SELECTOR,
+                WareworksBlocks.ENDER_RECIPE_SELECTOR)) {
+            for (Direction facing : Direction.values()) {
+                BlockState state = tier.getDefaultState().setValue(RecipeSelectorBlock.FACING, facing);
+                BakedModel model = minecraft.getBlockRenderer().getBlockModel(state);
+                if (model == missing)
+                    throw new VisualTestException("the model of " + state + " is missing");
+                double[] min = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE};
+                double[] max = {-Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
+                int quads = 0;
+                for (Direction side : sides) {
+                    for (BakedQuad quad : model.getQuads(state, side, RandomSource.create(42L))) {
+                        quads++;
+                        int[] vertices = quad.getVertices();
+                        for (int start = 0; start + 2 < vertices.length; start += stride) {
+                            for (int axis = 0; axis < 3; axis++) {
+                                double value = Float.intBitsToFloat(vertices[start + axis]);
+                                min[axis] = Math.min(min[axis], value);
+                                max[axis] = Math.max(max[axis], value);
+                            }
+                        }
+                    }
+                }
+                if (quads == 0)
+                    throw new VisualTestException("the model of " + state + " has no quads");
+                int along = facing.getAxis().ordinal();
+                boolean positive = facing.getAxisDirection() == Direction.AxisDirection.POSITIVE;
+                double touching = positive ? max[along] : min[along];
+                double depth = max[along] - min[along];
+                if (Math.abs(touching - (positive ? 1.0 : 0.0)) > MODEL_EPSILON
+                        || depth < SELECTOR_MIN_DEPTH - MODEL_EPSILON || depth > SELECTOR_MAX_DEPTH + MODEL_EPSILON)
+                    throw new VisualTestException("the model of " + state + " does not lie against its " + facing
+                            + " face: " + describeBounds(min, max));
+                for (int axis = 0; axis < 3; axis++) {
+                    if (axis != along && (Math.abs(min[axis] - SELECTOR_SPAN_MIN) > MODEL_EPSILON
+                            || Math.abs(max[axis] - SELECTOR_SPAN_MAX) > MODEL_EPSILON))
+                        throw new VisualTestException("the model of " + state + " does not span the plate across its "
+                                + facing + " face: " + describeBounds(min, max));
+                }
+                checked.add(BuiltInRegistries.BLOCK.getKey(tier.get()).getPath() + "/" + facing.getSerializedName()
+                        + " " + describeBounds(min, max));
+            }
+        }
+        LOGGER.info(PREFIX + "blocks: CHECK PASS both Recipe Selector models lie against the face they point at in "
+                + "every facing: {}", checked);
+    }
+
+    private static String describeBounds(double[] min, double[] max) {
+        return String.format(Locale.ROOT, "[%.3f %.3f %.3f]..[%.3f %.3f %.3f]", min[0], min[1], min[2], max[0],
+                max[1], max[2]);
+    }
+
     /** Rebuilds the creative tabs like the creative inventory does and checks the Wareworks tab's order and icon. */
     private void checkCreativeTab(VisualContext context) {
         ClientLevel level = context.minecraft().level;
@@ -848,6 +944,8 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 // The Crafter Feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
+                // The Recipe Selector after the feeder, the Ender Recipe Selector after it (ADR-085).
+                WareworksBlocks.RECIPE_SELECTOR.asItem(), WareworksBlocks.ENDER_RECIPE_SELECTOR.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(),
                 WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
                 // The Schematicannon Requester is the last block (issue #45).

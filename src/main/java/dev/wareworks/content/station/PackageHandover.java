@@ -81,6 +81,48 @@ public final class PackageHandover {
     }
 
     /**
+     * <b>Every</b> Packager that packs from the station at {@code stationPos}, by the same test as {@link #packagerFor}
+     * (at most six, one per side; a Repackager never counts). A Recipe Selector station in slip mode asks for all of
+     * them (ADR-085, design §5.3): a second Packager really packs from the station too, and its box must be gone before
+     * the line may switch. Never loads a chunk.
+     */
+    public static List<BlockPos> packagersOf(Level level, BlockPos stationPos) {
+        if (level == null)
+            return List.of();
+        List<BlockPos> found = new ArrayList<>(1);
+        for (Direction side : Iterate.directions) {
+            BlockPos pos = stationPos.relative(side);
+            if (!level.isLoaded(pos))
+                continue;
+            BlockState state = level.getBlockState(pos);
+            if (state.getOptionalValue(PackagerBlock.FACING).orElse(null) != side)
+                continue;
+            if (level.getBlockEntity(pos) instanceof PackagerBlockEntity packager
+                    && !(packager instanceof RepackagerBlockEntity))
+                found.add(pos);
+        }
+        return List.copyOf(found);
+    }
+
+    /**
+     * Whether none of {@code packagers} holds a box or queues one to send: the public {@code heldBox} and
+     * {@code queuedExitingPackages} of {@code PackagerBlockEntity} ({@code :79}, {@code :82}). A position that holds no
+     * Packager any more counts as idle; one in an unloaded chunk does not (unknown means wait, ADR-085 I4).
+     */
+    public static boolean packagersIdle(Level level, List<BlockPos> packagers) {
+        if (level == null)
+            return false;
+        for (BlockPos pos : packagers) {
+            if (!level.isLoaded(pos))
+                return false;
+            if (level.getBlockEntity(pos) instanceof PackagerBlockEntity packager
+                    && (!packager.heldBox.isEmpty() || !packager.queuedExitingPackages.isEmpty()))
+                return false;
+        }
+        return true;
+    }
+
+    /**
      * The address the <b>next redstone-driven</b> box this Packager sends would carry: the signs around it, read by
      * Create's own rule ({@link PackagerSignAddress}).
      * <p>

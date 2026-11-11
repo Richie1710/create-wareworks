@@ -14,6 +14,7 @@ import dev.wareworks.content.controller.AisleChunkTickets;
 import dev.wareworks.content.crane.CraneServerHooks;
 import dev.wareworks.content.handtruck.HandTruckHooks;
 import dev.wareworks.content.requester.SchematicannonRequesterHooks;
+import dev.wareworks.content.selector.EnderSelectorHooks;
 import dev.wareworks.content.station.ProductionStationHooks;
 import dev.wareworks.content.storage.RackBayGestures;
 import dev.wareworks.content.storage.StorageFilterClicks;
@@ -99,6 +100,9 @@ public final class Wareworks {
         WareworksUnpackingHandlers.register(modEventBus);
 
         modEventBus.addListener(WareworksCapabilities::register);
+        // ADR-085: the Ender Recipe Selector's veto in front of Create's Packager, a capability provider at HIGH
+        // priority so it is asked before Create's own (EnderSelectorHooks).
+        EnderSelectorHooks.registerCapabilities(modEventBus);
         modEventBus.addListener(WareworksNetwork::register);
         modEventBus.addListener(EventPriority.HIGHEST, WareworksDatagen::gatherDataHighPriority);
         modEventBus.addListener(EventPriority.LOWEST, WareworksDatagen::gatherData);
@@ -123,6 +127,9 @@ public final class Wareworks {
         // Issue #45: the Schematicannon Requester's sneak-click take-out, which vanilla would otherwise swallow whenever
         // the player carries anything in the off hand (SchematicannonRequesterHooks).
         SchematicannonRequesterHooks.register(NeoForge.EVENT_BUS);
+        // ADR-085: a package handed to a far factory's Packager by hand is judged by its Ender Recipe Selector too,
+        // since Create unpacks it past the item capability (EnderSelectorHooks).
+        EnderSelectorHooks.register(NeoForge.EVENT_BUS);
         // 5. Optional chunk loading for aisles that have work (M19, issue #10, ADR-031). The ticket controller must be
         //    registered on the MOD bus and unconditionally: an unregistered controller has its saved tickets stripped
         //    from the level. Its lifecycle hooks and the operator command live on the game bus.

@@ -74,7 +74,8 @@ public final class TooltipsVisualScenario implements VisualScenario {
     private static final List<String> ITEM_IDS = List.of("stacker_crane", "warehouse_rail", "warehouse_controller",
             "warehouse_interface", "rack_bay_wood", "rack_bay_andesite", "rack_bay_brass", "fluid_bay_copper",
             "fluid_bay_brass", "warehouse_input", "warehouse_output", "warehouse_terminal", "warehouse_production",
-            "warehouse_crafter_feeder", "warehouse_stock_keeper", "warehouse_optimizer", "warehouse_home_point",
+            "warehouse_crafter_feeder", "recipe_selector", "ender_recipe_selector", "warehouse_stock_keeper",
+            "warehouse_optimizer", "warehouse_home_point",
             "schematicannon_requester", "rack_upgrade_kit_andesite", "rack_upgrade_kit_brass",
             "fluid_bay_upgrade_kit_brass", "hand_truck", "warehouse_remote");
 

@@ -99,7 +99,7 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * the terminal row, a keeper's levels and a stock rule's maximum all see the whole stack, counted once;</li>
  * <li>{@code optimizerstopsatthetripcap} ({@link #CONFIG_BATCH}) — {@code optimizer.tripsPerRequest} bounds an order:
  * two trips, then it is out of trips and nothing more moves;</li>
- * <li>{@code optimizerrunsbesideafullinput} ({@link #CONFIG_BATCH}) — an input whose items fit nowhere: the relocation
+ * <li>{@code optimizerrunsbesideafullinput} ({@link #BACKOFF_BATCH}) — an input whose items fit nowhere: the relocation
  * planned beside it arms the "warehouse full" back-off itself, and the order goes on during that back-off;</li>
  * <li>{@code optimizernevermovesintoafluidbay} — lava buckets go up into a plain chest and never into a better fluid
  * bay dedicated to lava, which would drain them;</li>
@@ -120,6 +120,12 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
 public final class OptimizerGameTests {
     /** Config overrides need their own batch, because the tests of one batch run at the same time. */
     static final String CONFIG_BATCH = "wareworksoptimizerconfig";
+    /**
+     * The back-off test's own batch: it must not share one with {@code optimizerstopsatthetripcap}, whose trip cap of
+     * {@value #CAPPED_TRIPS} it would otherwise see (and whose {@code restoreAll} would undo its back-off) while both run
+     * at the same time.
+     */
+    static final String BACKOFF_BATCH = "wareworksoptimizerbackoff";
 
     private static final int AISLE_Z = 3;
     private static final int RAILS = 6;
@@ -555,7 +561,7 @@ public final class OptimizerGameTests {
      * dispatch — and keeps the goggles' reason; and the order's second trip is planned during the back-off, because a
      * relocation is no arrival: the whole order is done long before the back-off ends.
      */
-    @GameTest(template = AISLE_16X10X7, batch = CONFIG_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
+    @GameTest(template = AISLE_16X10X7, batch = BACKOFF_BATCH, timeoutTicks = LONG_TIMEOUT_TICKS)
     public static void optimizerRunsBesideAFullInput(GameTestHelper helper) {
         AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(true);
         aisle.storage(LOW, IRON.toStack(STACK), IRON.toStack(STACK));
@@ -625,6 +631,12 @@ public final class OptimizerGameTests {
     /** Restores the config even when a test of {@link #CONFIG_BATCH} fails before its own cleanup. */
     @AfterBatch(batch = CONFIG_BATCH)
     public static void restoreConfig(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /** The same for {@link #BACKOFF_BATCH}. */
+    @AfterBatch(batch = BACKOFF_BATCH)
+    public static void restoreBackoffConfig(ServerLevel level) {
         ConfigOverrides.restoreAll();
     }
 

@@ -44,6 +44,7 @@ import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeManager;
 import net.minecraft.world.item.crafting.RecipeType;
+import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -93,6 +94,7 @@ public final class WareworksItemGameTests {
     private static final String CRAFTER = "crafter";
     private static final String ELECTRON_TUBE = "electron_tube";
     private static final String EMPTY_SCHEMATIC = "empty_schematic";
+    private static final String FILTER = "filter";
     private static final String ENDER_PEARL = "ender_pearl";
     private static final String INDUSTRIAL_IRON_BLOCK = "industrial_iron_block";
     private static final String IRON_SHEET = "iron_sheet";
@@ -271,6 +273,15 @@ public final class WareworksItemGameTests {
         CraftingInput feeder = grid(1, 3, mechanism, brass, vanilla(CRAFTER));
         assertCrafts(helper, recipes, level, feeder, WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(), ONE);
         assertCrafts(helper, recipes, level, keeper, WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(), ONE);
+        // The Recipe Selector (ADR-085) is a column - a List Filter over an andesite casing over an electron tube -
+        // the filter it sets, and no Create recipe uses that column.
+        CraftingInput selector = grid(1, 3, stack(FILTER), casing, tube);
+        assertCrafts(helper, recipes, level, selector, WareworksBlocks.RECIPE_SELECTOR.asItem(), ONE);
+        // The Ender Recipe Selector (ADR-085) is the local one's upgrade, a column again: an ender pearl over the
+        // Recipe Selector over a brass casing.
+        CraftingInput enderSelector = grid(1, 3, vanilla(ENDER_PEARL),
+                new ItemStack(WareworksBlocks.RECIPE_SELECTOR.asItem()), brass);
+        assertCrafts(helper, recipes, level, enderSelector, WareworksBlocks.ENDER_RECIPE_SELECTOR.asItem(), ONE);
         // The optimizer (issue #46) is the keeper's shape with Create's brass hand on top, the crane's own grabber: it
         // is the block that sets the crane moving stock about, where the keeper's comparator only reads it.
         CraftingInput optimizer = grid(3, 3, none, stack(BRASS_HAND), none, tube, brass, tube, none, alloy, none);
@@ -368,6 +379,11 @@ public final class WareworksItemGameTests {
                 WareworksBlocks.WAREHOUSE_TERMINAL.asItem(), WareworksBlocks.WAREHOUSE_PRODUCTION.asItem(),
                 // The crafter feeder directly after the station whose machine it is (issue #34).
                 WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER.asItem(),
+                // The Recipe Selector after the feeder (ADR-085): the other way a station gets its machine to make
+                // the right thing.
+                WareworksBlocks.RECIPE_SELECTOR.asItem(),
+                // The Ender Recipe Selector right after the local one, of which it is the upgrade.
+                WareworksBlocks.ENDER_RECIPE_SELECTOR.asItem(),
                 WareworksBlocks.WAREHOUSE_STOCK_KEEPER.asItem(),
                 // The optimizer directly after the keeper (issue #46): both act on what the warehouse holds.
                 WareworksBlocks.WAREHOUSE_OPTIMIZER.asItem(), WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
@@ -463,6 +479,17 @@ public final class WareworksItemGameTests {
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(PRECISION_MECHANISM), IngredientSpec.of(BRASS_CASING),
                                 IngredientSpec.ofVanilla(CRAFTER))),
+                // The Recipe Selector (ADR-085): andesite tier, the List Filter it stands for and an electron tube.
+                new ExpectedRecipe(WareworksBlocks.RECIPE_SELECTOR, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(FILTER), IngredientSpec.of(ANDESITE_CASING),
+                                IngredientSpec.of(ELECTRON_TUBE))),
+                // The Ender Recipe Selector (ADR-085): the local one, an ender pearl (by tag, as Create's own Wand of
+                // Symmetry asks for it) and a brass casing for the far tier.
+                new ExpectedRecipe(WareworksBlocks.ENDER_RECIPE_SELECTOR, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofTag(Tags.Items.ENDER_PEARLS),
+                                new IngredientSpec(
+                                        BuiltInRegistries.ITEM.getKey(WareworksBlocks.RECIPE_SELECTOR.asItem()), null),
+                                IngredientSpec.of(BRASS_CASING))),
                 new ExpectedRecipe(WareworksBlocks.WAREHOUSE_STOCK_KEEPER, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.ofVanilla(COMPARATOR), IngredientSpec.of(ELECTRON_TUBE),
                                 IngredientSpec.of(BRASS_CASING), IngredientSpec.of(ELECTRON_TUBE),

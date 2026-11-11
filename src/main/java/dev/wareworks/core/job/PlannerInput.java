@@ -158,6 +158,14 @@ import dev.wareworks.core.inventory.StockView;
  *                             half of the strictly-better rule ({@link RelocationRule}), which the content layer answers
  *                             with "not a fluid bay". Consulted for the relocation stage and the {@code RELOCATE} reroute
  *                             only; the default lets every location through
+ * @param storeHeld            whether the items of a key in an input station must <b>stay</b> there (Recipe Selector
+ *                             quarantine, ADR-085): a selector station's own return input stores only the products
+ *                             that station expects, anything else is left in the input for the player to see. Asked
+ *                             once per input and key before anything else of the store plan, so a held key costs no
+ *                             estimate and no live call, adds no reason and does not count as work. Inputs only:
+ *                             collecting ports, reroutes and requests never ask it. The default holds nothing, which
+ *                             makes an input built without it <b>literally</b> the input the planner received before
+ *                             ADR-085
  * @param liveSimulationBudget maximum number of live callback calls per planner run (bounds the cost of a full
  *                             warehouse or a long fall-through)
  * @param <K>                  item key type
@@ -177,7 +185,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
         ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, FillSupply<K, L> fillSupply,
         List<RelocateNeed<K>> relocations, BiPredicate<? super L, ? super K> relocateTarget,
-        int liveSimulationBudget) {
+        BiPredicate<? super L, ? super K> storeHeld, int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
      * the builder's default, so an aisle without rules plans exactly as it did before M15.
@@ -271,6 +279,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Objects.requireNonNull(fillSupply, "fillSupply");
         relocations = List.copyOf(relocations);
         Objects.requireNonNull(relocateTarget, "relocateTarget");
+        Objects.requireNonNull(storeHeld, "storeHeld");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
     }
@@ -489,6 +498,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private FillSupply<K, L> fillSupply = FillSupply.none();
         private List<RelocateNeed<K>> relocations = List.of();
         private BiPredicate<? super L, ? super K> relocateTarget = (location, key) -> true;
+        private BiPredicate<? super L, ? super K> storeHeld = (location, key) -> false;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
         private Builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
@@ -720,6 +730,15 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * Which keys must stay in which input station ({@link PlannerInput#storeHeld()}, ADR-085). Left out, nothing is
+         * held, which is the input the planner received before the Recipe Selector.
+         */
+        public Builder<K, L> storeHeld(BiPredicate<? super L, ? super K> storeHeld) {
+            this.storeHeld = storeHeld;
+            return this;
+        }
+
         public Builder<K, L> liveSimulationBudget(int liveSimulationBudget) {
             this.liveSimulationBudget = liveSimulationBudget;
             return this;
@@ -733,7 +752,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     inputBuffers, inputCursor, LocationAvailability.of(available),
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, roomBound,
                     stackSize, storeFilter, storePriority,
-                    portRank, storeHeadroom, fillSupply, relocations, relocateTarget, liveSimulationBudget);
+                    portRank, storeHeadroom, fillSupply, relocations, relocateTarget, storeHeld,
+                    liveSimulationBudget);
         }
     }
 }

@@ -217,8 +217,16 @@ public final class WareworksNetwork {
      * stack that has one. As for {@code "23"}, NeoForge's registry sync only keeps an older client off a newer server,
      * so the version is raised for mixed pairs to be refused both ways. An older build cannot decode the component and
      * drops a truck that carries a pallet from the inventory, so pallets are set down before going back.
+     * <p>
+     * <b>{@code "27"} is ADR-085</b> (M36, the Recipe Selector): {@link ProductionScreenPayload}'s
+     * {@code ProductionScreenState} carries a selector view and the per-slot selector checks after its filter views, and
+     * every {@code OrderView} (also in {@link TerminalOrdersPayload}) a selector wait and its item after the items it
+     * uses; a reader of the old shape would leave them in the buffer. The new {@link ProductionSelectorPayload} (client
+     * → server) switches a station's selector off. New blocks ({@code recipe_selector}, {@code ender_recipe_selector}),
+     * the {@code selector_link} item component, and the goggle data of the production station and of the two selectors
+     * grew; a box's recipe slip is vanilla {@code custom_data} and needs no version.
      */
-    public static final String VERSION = "26";
+    public static final String VERSION = "27";
 
     private WareworksNetwork() {
     }
@@ -276,6 +284,8 @@ public final class WareworksNetwork {
                 WareworksNetwork::onProductionCancel);
         registrar.playToServer(ProductionResumePayload.TYPE, ProductionResumePayload.STREAM_CODEC,
                 WareworksNetwork::onProductionResume);
+        registrar.playToServer(ProductionSelectorPayload.TYPE, ProductionSelectorPayload.STREAM_CODEC,
+                WareworksNetwork::onProductionSelector);
         registrar.playToClient(StockKeeperScreenPayload.TYPE, StockKeeperScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onStockKeeperScreen);
         registrar.playToServer(StockKeeperRulePayload.TYPE, StockKeeperRulePayload.STREAM_CODEC,
@@ -465,6 +475,14 @@ public final class WareworksNetwork {
      */
     private static void onProductionResume(ProductionResumePayload payload, IPayloadContext context) {
         ProductionMenu.submitResume(context.player(), payload.containerId());
+    }
+
+    /**
+     * A player clicked the Recipe Selector row of a production station's screen (ADR-085): the red mark switches the
+     * selector off. The payload names only the menu and the action; the station decides whether it may.
+     */
+    private static void onProductionSelector(ProductionSelectorPayload payload, IPayloadContext context) {
+        ProductionMenu.submitSelector(context.player(), payload.containerId(), payload.action());
     }
 
     /**
