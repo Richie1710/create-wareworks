@@ -4,8 +4,10 @@ import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.tterrag.registrate.util.entry.ItemEntry;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.storage.BayUpgradeKitItem;
 import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.remote.WarehouseRemoteItem;
+import dev.wareworks.core.storage.BayUpgrade;
 
 /**
  * Item registrations that are not block items.
@@ -16,6 +18,29 @@ import dev.wareworks.content.remote.WarehouseRemoteItem;
  */
 public final class WareworksItems {
     private static final CreateRegistrate REGISTRATE = Wareworks.registrate();
+
+    /**
+     * The rack upgrade kit for the step wood to andesite (ADR-083): right-clicked on a Wooden Rack Bay, that bay becomes
+     * an Andesite Rack Bay where it stands, with its goods, filter and priority. One kit per step, and the three kits
+     * stand together before the hand truck. Their look is one hand-made parent,
+     * {@code models/item/upgrade_kit/item.json}, with the target bay's frame texture.
+     */
+    public static final ItemEntry<BayUpgradeKitItem> RACK_UPGRADE_KIT_ANDESITE = upgradeKit(
+            "rack_upgrade_kit_andesite", BayUpgrade.ANDESITE_RACK, "Andesite Rack Upgrade Kit",
+            "andesite_block", "andesite_casing");
+
+    /** The rack upgrade kit for the step andesite to brass (ADR-083), see {@link #RACK_UPGRADE_KIT_ANDESITE}. */
+    public static final ItemEntry<BayUpgradeKitItem> RACK_UPGRADE_KIT_BRASS = upgradeKit(
+            "rack_upgrade_kit_brass", BayUpgrade.BRASS_RACK, "Brass Rack Upgrade Kit", "brass_block",
+            "brass_casing");
+
+    /**
+     * The fluid bay upgrade kit for the step copper to brass (ADR-083): the one that matters most, because breaking a
+     * fluid bay to replace it loses the fluid. See {@link #RACK_UPGRADE_KIT_ANDESITE}.
+     */
+    public static final ItemEntry<BayUpgradeKitItem> FLUID_BAY_UPGRADE_KIT_BRASS = upgradeKit(
+            "fluid_bay_upgrade_kit_brass", BayUpgrade.BRASS_FLUID, "Brass Fluid Bay Upgrade Kit", "brass_block",
+            "fluid_tank");
 
     /**
      * The hand truck (issue #37, ADR-070, {@code docs/hand-truck.md}): right-click a chest or barrel with the empty
@@ -43,6 +68,24 @@ public final class WareworksItems {
             .register();
 
     private WareworksItems() {
+    }
+
+    /**
+     * One upgrade kit: the shared parent model with the target bay's frame texture, the step's own beam texture and a
+     * belt strap; stacks to 64.
+     */
+    private static ItemEntry<BayUpgradeKitItem> upgradeKit(String name, BayUpgrade step, String lang, String frame,
+            String beam) {
+        return REGISTRATE.item(name, properties -> new BayUpgradeKitItem(properties, step))
+                .properties(p -> p.stacksTo(64))
+                .lang(lang)
+                .model((context, provider) -> provider.withExistingParent(context.getName(),
+                                provider.modLoc("item/upgrade_kit/item"))
+                        .texture("frame", "create:block/" + frame)
+                        .texture("beam", "create:block/" + beam)
+                        .texture("strap", "create:block/belt")
+                        .texture("particle", "create:block/" + frame))
+                .register();
     }
 
     /** Loads this class so that its static entries are built. */

@@ -1,5 +1,7 @@
 package dev.wareworks.core.storage;
 
+import org.jetbrains.annotations.Nullable;
+
 import dev.wareworks.core.inventory.CapacityMath;
 
 /**
@@ -82,6 +84,23 @@ public enum BayTier {
      */
     public int strength() {
         return ordinal();
+    }
+
+    /**
+     * The tier one step up the ladder, or {@code null} for the top one: what an upgrade kit turns a bay of this tier
+     * into (ADR-083). By declaration order, which is the strength order, so a tier appended later is reached by the
+     * tier below it without a change here.
+     */
+    @Nullable
+    public BayTier next() {
+        int next = ordinal() + 1;
+        return next < values().length ? values()[next] : null;
+    }
+
+    /** The tier of {@code strength}, or {@code null} when no tier has it; the inverse of {@link #strength()}. */
+    @Nullable
+    public static BayTier ofStrength(int strength) {
+        return strength >= 0 && strength < values().length ? values()[strength] : null;
     }
 
     /** Whether this tier carries more weight than {@code other}, i.e. stands further up the ladder. */

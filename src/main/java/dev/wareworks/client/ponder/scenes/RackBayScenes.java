@@ -17,6 +17,7 @@ import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.storage.BayTier;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksEntityTypes;
+import dev.wareworks.registry.WareworksItems;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
 import net.createmod.ponder.api.scene.SceneBuilder;
@@ -28,6 +29,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
@@ -472,7 +474,50 @@ public final class RackBayScenes {
                 .pointAt(util.vector().blockSurface(bottom, VIEWED_FRONT));
         scene.idle(TEXT_IDLE);
 
+        // ADR-083: upgrading a column in place, bottom up. The wall makes way for a two-high wooden column in its
+        // middle; each kit click swaps the block for the next tier and the bay keeps its goods. A PonderLevel builds a
+        // new block entity for the new block, so the load is put back by hand, as everywhere in these scenes.
+        Selection wall = util.select().fromTo(firstX, FLOOR_Y, wallZ, lastX, FLOOR_Y + 2, wallZ);
+        scene.world().hideSection(wall, Direction.UP);
+        scene.idle(FADE_IDLE);
+        scene.world().setBlocks(wall, Blocks.AIR.defaultBlockState(), false);
+        BlockPos lowBay = util.grid().at(firstX + 1, FLOOR_Y, wallZ);
+        BlockPos highBay = lowBay.above();
+        Selection upgradeColumn = util.select().fromTo(lowBay, highBay);
+        scene.world().setBlocks(upgradeColumn, bayState(BayTier.WOOD, 2, VIEWED_FACING), false);
+        store(scene, lowBay, BULK);
+        store(scene, highBay, BULK);
+        scene.world().showSection(upgradeColumn, Direction.DOWN);
+        scene.idle(FADE_IDLE);
+
+        upgradeWithKit(scene, util, lowBay);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("An upgrade kit makes a bay the next tier where it stands, with everything in it. Start at the "
+                        + "bottom: no bay may carry a stronger one")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(lowBay, VIEWED_FRONT));
+        scene.idle(TEXT_IDLE);
+        upgradeWithKit(scene, util, highBay);
+        scene.idle(SHORT_IDLE);
+
         scene.markAsFinished();
+    }
+
+    /**
+     * One click of the andesite upgrade kit on the wooden bay at {@code pos} (ADR-083): the block becomes the andesite
+     * bay with the same look, and the scene's one item goes back in, because a PonderLevel replaces the block entity
+     * where the real swap keeps it.
+     */
+    private static void upgradeWithKit(CreateSceneBuilder scene, SceneBuildingUtil util, BlockPos pos) {
+        scene.overlay().showControls(util.vector().blockSurface(pos, VIEWED_FRONT), Pointing.RIGHT, CONTROL_TICKS)
+                .rightClick()
+                .withItem(WareworksItems.RACK_UPGRADE_KIT_ANDESITE.asStack());
+        scene.idle(CONTROL_LEAD);
+        scene.world().modifyBlock(pos, state -> WareworksBlocks.RACK_BAY_ANDESITE.get().withPropertiesOf(state),
+                false);
+        store(scene, pos, BULK);
+        scene.idle(FADE_IDLE);
     }
 
     // --- 3. the warehouse arrives -----------------------------------------------------------------------------------

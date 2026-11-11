@@ -22,14 +22,18 @@ import net.minecraft.world.level.Level;
 
 /**
  * The hand truck (issue #37, ADR-070, {@code docs/hand-truck.md}): a held item that carries one chest or barrel with
- * everything in it.
+ * everything in it, or one pallet (ADR-084).
  * <ul>
  * <li><b>Empty</b>, right-clicked on a carriable container: the container goes onto the truck
- * ({@link HandTruckPickup}). It costs nothing to have an empty truck in the inventory.</li>
+ * ({@link HandTruckPickup}). Right-clicked on a pallet lying in the world: the whole pallet goes onto it
+ * ({@link HandTruckPalletPickup}). It costs nothing to have an empty truck in the inventory.</li>
  * <li><b>Loaded</b>, right-clicked on a surface: the container is set down again, facing the player, with exactly what
- * it held ({@link HandTruckPlacement}). While it is anywhere in the inventory, the player walks slowly, cannot sprint
- * and cannot glide ({@link HandTruckCarry}).</li>
+ * it held ({@link HandTruckPlacement}); a pallet is set down as a pallet again, or goes whole into an empty rack bay
+ * that holds it all ({@link HandTruckPalletUnload}). While a loaded truck is anywhere in the inventory, the player
+ * walks slowly, cannot sprint and cannot glide ({@link HandTruckCarry}).</li>
  * </ul>
+ * The two loads are two components, {@code hand_truck_load} ({@link HandTruckLoad}) and {@code hand_truck_pallet}
+ * ({@link HandTruckPallet}); {@link #isLoaded} asks for either, so every rule below holds for both.
  * Both clicks are answered in {@link #onItemUseFirst}, which NeoForge runs <b>before</b> the clicked block's own use:
  * a carriable chest never opens under an empty truck, and no block's own click — a depot, a deployer, a station — ever
  * receives a loaded one.
@@ -45,12 +49,31 @@ public class HandTruckItem extends Item {
         super(properties);
     }
 
-    /** Whether {@code stack} is a hand truck with a container on it. */
+    /** Whether {@code stack} is a hand truck with a container or a pallet on it. */
     public static boolean isLoaded(ItemStack stack) {
-        return stack.getItem() instanceof HandTruckItem && stack.has(WareworksDataComponents.HAND_TRUCK_LOAD.get());
+        return stack.getItem() instanceof HandTruckItem && (stack.has(WareworksDataComponents.HAND_TRUCK_LOAD.get())
+                || stack.has(WareworksDataComponents.HAND_TRUCK_PALLET.get()));
     }
 
-    /** What a loaded truck carries, or {@code null} for anything else. */
+    /** The pallet a truck carries, or {@code null} for anything else. */
+    @Nullable
+    public static HandTruckPallet palletLoad(ItemStack stack) {
+        return stack.getItem() instanceof HandTruckItem ? stack.get(WareworksDataComponents.HAND_TRUCK_PALLET.get())
+                : null;
+    }
+
+    /**
+     * A copy of {@code truck} with nothing on it: both load components removed. What a census counts the truck itself
+     * as, and what is left of a truck that tipped over or was unloaded.
+     */
+    public static ItemStack emptied(ItemStack truck) {
+        ItemStack empty = truck.copy();
+        empty.remove(WareworksDataComponents.HAND_TRUCK_LOAD.get());
+        empty.remove(WareworksDataComponents.HAND_TRUCK_PALLET.get());
+        return empty;
+    }
+
+    /** The container a loaded truck carries, or {@code null} for anything else (a pallet truck included). */
     @Nullable
     public static HandTruckLoad load(ItemStack stack) {
         return stack.getItem() instanceof HandTruckItem ? stack.get(WareworksDataComponents.HAND_TRUCK_LOAD.get())
@@ -70,6 +93,8 @@ public class HandTruckItem extends Item {
 
     @Override
     public InteractionResult onItemUseFirst(ItemStack stack, UseOnContext context) {
+        if (palletLoad(stack) != null)
+            return HandTruckPalletUnload.unload(stack, context);
         if (isLoaded(stack))
             return HandTruckPlacement.unload(stack, context);
         return HandTruckPickup.load(stack, context);
@@ -101,7 +126,7 @@ public class HandTruckItem extends Item {
 
     /**
      * A loaded truck that became an item entity tips over on its first tick: its contents, the container's block item
-     * and the empty truck lie there instead. Entities tick before block entities, so no hopper, funnel or chute ever
+     * and the empty truck lie there instead, or a pallet and the empty truck. Entities tick before block entities, so no hopper, funnel or chute ever
      * sees the loaded truck.
      */
     @Override
@@ -122,6 +147,9 @@ public class HandTruckItem extends Item {
 
     @Override
     public Component getName(ItemStack stack) {
+        HandTruckPallet pallet = palletLoad(stack);
+        if (pallet != null)
+            return WareworksLang.translateDirect(WareworksLang.HAND_TRUCK_LOADED_PALLET, pallet.displayName());
         HandTruckLoad load = load(stack);
         if (load == null)
             return super.getName(stack);
@@ -130,6 +158,13 @@ public class HandTruckItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
+        HandTruckPallet pallet = palletLoad(stack);
+        if (pallet != null) {
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.HAND_TRUCK_CARRYING_PALLET, pallet.count())
+                    .withStyle(ChatFormatting.GRAY));
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.HAND_TRUCK_SLOWED).withStyle(ChatFormatting.GOLD));
+            return;
+        }
         HandTruckLoad load = load(stack);
         if (load == null)
             return;

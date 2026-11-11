@@ -290,6 +290,14 @@ public final class WareworksItemGameTests {
         CraftingInput remote = grid(3, 3, none, stack(TRANSMITTER), none, sheet, vanilla(ENDER_PEARL), sheet, none,
                 sheet, none);
         assertCrafts(helper, recipes, level, remote, WareworksItems.WAREHOUSE_REMOTE.asItem(), ONE);
+        // The three upgrade kits (ADR-083): each is its target bay's grid less what the old bay keeps, so a kit is
+        // the bay's frame material in two columns around the casings, and the fluid kit the brass tank's shell.
+        CraftingInput andesiteKit = grid(3, 2, alloy, casing, alloy, alloy, casing, alloy);
+        CraftingInput brassKit = grid(3, 2, sheet, brass, sheet, sheet, brass, sheet);
+        CraftingInput fluidKit = grid(3, 3, sheet, sheet, sheet, none, sheet, none, sheet, sheet, sheet);
+        assertCrafts(helper, recipes, level, andesiteKit, WareworksItems.RACK_UPGRADE_KIT_ANDESITE.asItem(), ONE);
+        assertCrafts(helper, recipes, level, brassKit, WareworksItems.RACK_UPGRADE_KIT_BRASS.asItem(), ONE);
+        assertCrafts(helper, recipes, level, fluidKit, WareworksItems.FLUID_BAY_UPGRADE_KIT_BRASS.asItem(), ONE);
 
         // The crane is mechanical crafting. MechanicalCraftingRecipe#matches rejects every input that is not a
         // MechanicalCraftingInput, so the grid has to be built the way a crafter tower builds it.
@@ -366,6 +374,10 @@ public final class WareworksItemGameTests {
                 // The Schematicannon Requester is the last block (issue #45): it reaches out of the warehouse to
                 // another machine.
                 WareworksBlocks.SCHEMATICANNON_REQUESTER.asItem(),
+                // The three upgrade kits are the first items after the blocks (ADR-083), rack kits weakest first,
+                // then the fluid kit.
+                WareworksItems.RACK_UPGRADE_KIT_ANDESITE.asItem(), WareworksItems.RACK_UPGRADE_KIT_BRASS.asItem(),
+                WareworksItems.FLUID_BAY_UPGRADE_KIT_BRASS.asItem(),
                 // The hand truck is no block, so it stands after every block (issue #37), and the Warehouse Remote
                 // after it (issue #44).
                 WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem()),
@@ -479,6 +491,23 @@ public final class WareworksItemGameTests {
                 new ExpectedRecipe(WareworksItems.WAREHOUSE_REMOTE, RecipeType.CRAFTING, ONE,
                         List.of(IngredientSpec.of(TRANSMITTER), IngredientSpec.ofTag(BRASS_PLATES),
                                 IngredientSpec.ofVanilla(ENDER_PEARL), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES))),
+                // The three upgrade kits (ADR-083): the target bay's recipe less what carries over from the old bay -
+                // the andesite kit is the andesite bay without the wood bay's two alloys, the brass kit the brass bay
+                // less two sheets for the frame the old bay keeps, the fluid kit the brass tank without the two copper
+                // casings both fluid tiers share. A kit is always cheaper than a new bay of its target tier.
+                new ExpectedRecipe(WareworksItems.RACK_UPGRADE_KIT_ANDESITE, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.of(ANDESITE_CASING),
+                                IngredientSpec.of(ANDESITE_ALLOY), IngredientSpec.of(ANDESITE_ALLOY),
+                                IngredientSpec.of(ANDESITE_CASING), IngredientSpec.of(ANDESITE_ALLOY))),
+                new ExpectedRecipe(WareworksItems.RACK_UPGRADE_KIT_BRASS, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.of(BRASS_CASING),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.of(BRASS_CASING), IngredientSpec.ofTag(BRASS_PLATES))),
+                new ExpectedRecipe(WareworksItems.FLUID_BAY_UPGRADE_KIT_BRASS, RecipeType.CRAFTING, ONE,
+                        List.of(IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES),
+                                IngredientSpec.ofTag(BRASS_PLATES), IngredientSpec.ofTag(BRASS_PLATES),
                                 IngredientSpec.ofTag(BRASS_PLATES))));
     }
 

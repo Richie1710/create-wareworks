@@ -46,10 +46,12 @@ dev.wareworks
 │                              WareworksEntityTypes (the mod's only entity: PALLET, the load of a broken rack bay -
 │                              no spawn egg, no item form, M28, issue #20, ADR-046)
 │                              WareworksItems (plain items that are not block items, after every block in the
-│                              creative tab: HAND_TRUCK, issue #37, ADR-070, and WAREHOUSE_REMOTE, issue #44,
-│                              ADR-077); WareworksDataComponents (the mod's item data components: HAND_TRUCK_LOAD,
-│                              the container a hand truck carries, ADR-070, and REMOTE_LINK, the terminal a remote
-│                              opens, ADR-077)
+│                              creative tab: RACK_UPGRADE_KIT_ANDESITE, RACK_UPGRADE_KIT_BRASS and
+│                              FLUID_BAY_UPGRADE_KIT_BRASS, ADR-083, then HAND_TRUCK, issue #37, ADR-070, and
+│                              WAREHOUSE_REMOTE, issue #44, ADR-077); WareworksDataComponents (the mod's item data
+│                              components: HAND_TRUCK_LOAD, the container a hand truck carries, ADR-070,
+│                              HAND_TRUCK_PALLET, the pallet a hand truck carries, ADR-084, and REMOTE_LINK, the
+│                              terminal a remote opens, ADR-077)
 ├── command                    WareworksCommands (`/wareworks chunks`, permission 2: what the mod holds force-loaded per
 │                              dimension, and the release valve — a hard requirement of M19, because nothing outside
 │                              NeoForge's own validation callback can enumerate a mod's chunk tickets, ADR-031)
@@ -228,7 +230,15 @@ dev.wareworks
 │   │                          from looks, never from a tick)
 │   ├── handtruck              the hand truck's pure numbers (issue #37, ADR-070): HandTruckPenalty (the movement input
 │   │                          scaled by the speed multiplier, the forward impulse capped below a sprint's 0.8, the
-│   │                          one-tick carry window) and HandTruckLimits (the size budget of one carried container)
+│   │                          one-tick carry window) and HandTruckLimits (the size budget of one carried container;
+│   │                          since ADR-084 also palletCount, a carried pallet's count clamped into what a bay can
+│   │                          hold); PalletIntoBay (ADR-084: whether a carried pallet goes whole into a rack bay -
+│   │                          not empty, a crane bringing goods, filtered, too small, in that order)
+│   ├── storage                the bays' pure model (M28/M30): BayContents (one key and a count, ADR-043, ADR-051),
+│   │                          BayTier and FluidBayTier (the two ladders, strength = declaration order; since ADR-083
+│   │                          next and ofStrength), BayFamily (rack or fluid: a column is one family, ADR-044) and
+│   │                          BayUpgrade (ADR-083: the three upgrade kit steps, one tier each, and which bay a kit
+│   │                          fits)
 │   ├── optimizer              the Warehouse Optimizer's orders (issue #46, ADR-079): OptimizerOrders (a warehouse's
 │   │                          orders, oldest first, one per optimizer: the open entries the planner gets, a trip spent,
 │   │                          counted and ended, an item exhausted in every order), OptimizerOrder (one order: entries,
@@ -297,7 +307,8 @@ dev.wareworks
 │   │                          reaches a block at all);
 │   │                          PalletEntity (M28, ADR-046: the load of a broken bay as ONE plain Entity - one item
 │   │                          key and a count, extract-only, no item form so it can never be pocketed, and no
-│   │                          override needed for "survives fire, lava, damage and a reload");
+│   │                          override needed for "survives fire, lava, damage and a reload"; since ADR-084 also
+│   │                          takeWholeLoad, the hand truck's lift, and a spawn turned towards the player);
 │   │                          StorageFilterBehaviour (the store filter slot, empty filters not synced; since M16 the
 │   │                          same box also carries the storage priority as a hold-to-edit board row, written only
 │   │                          while it is not 0, ADR-028),
@@ -309,10 +320,15 @@ dev.wareworks
 │   │                          inventory, extracted here in M18 and shared with the collecting warehouse port,
 │   │                          ADR-030);
 │   │                          BayColumn and TieredBay (M30: the column rule, the shared uprights and the derived
-│   │                          state both bay families share, lifted out of RackBayBlock, ADR-044);
+│   │                          state both bay families share, lifted out of RackBayBlock, ADR-044; since ADR-083 the
+│   │                          rule's two walks, carriesEverythingAbove and carriedByEverythingBelow, apart);
 │   │                          FluidBayBlock / BlockEntity, FluidBayHandler and FluidBayGestures (M30, ADR-051..054:
 │   │                          the same storage location for ONE fluid - 64/256 buckets by tier, pipes on every face
-│   │                          but the aisle one, no item capability at all, and breaking it loses the fluid)
+│   │                          but the aisle one, no item capability at all, and breaking it loses the fluid);
+│   │                          the upgrade kits (ADR-083): BayUpgradeKitItem (the click in onItemUseFirst),
+│   │                          BayUpgrades (the checks and swapInPlace: the block changes, the block entity stays the
+│   │                          same object, swapped back when a place event is cancelled) and TierChangeable (the
+│   │                          transient flag that lets a bay's onRemove skip destroy() for exactly that one setBlock)
 │   ├── fluid                  FluidKey (fluid + components, amount-less, ItemKey's sibling), FluidTypeSummaries,
 │   │                          FluidContainers (the one place "is this a filled container, and what comes back when
 │   │                          it is drained" is answered) and FluidDedication (this fluid / whichever arrives first /
@@ -486,7 +502,12 @@ dev.wareworks
 │   │                          action bar), HandTruckPickup / HandTruckPlacement (load and set down without a drop or a
 │   │                          second copy), HandTruckSpill (a loaded truck as plain stacks), HandTruckCarry (the carry
 │   │                          stamp and the server half of the penalty), HandTruckSlotGuard (a menu listener that
-│   │                          hands a loaded truck back) and HandTruckHooks (every game-bus listener)
+│   │                          hands a loaded truck back) and HandTruckHooks (every game-bus listener);
+│   │                          pallets on the truck (ADR-084): HandTruckPallet (the second component's value: item
+│   │                          key and an int count, clamped on decode, never failing), HandTruckPalletPickup (the
+│   │                          lift, an EntityInteract listener at LOW) and HandTruckPalletUnload (whole into an empty
+│   │                          rack bay, or set down as a pallet); HandTruckSpill#setPalletDown sets a tipped-over or
+│   │                          dead player's pallet down as a pallet
 │   ├── remote                 the Warehouse Remote (issue #44, ADR-077): WarehouseRemoteItem (the link click in
 │   │                          onItemUseFirst, open and unlink in use, the link tooltip), RemoteLink (the component
 │   │                          value: the terminal's GlobalPos and identity), RemoteAccess (the server's rules for
@@ -612,9 +633,12 @@ dev.wareworks
 │   │                          rank magnitude, M18);
 │   │                          PalletRenderer (the mod's only EntityRenderer: a broken bay's load - a low deck, the
 │   │                          item on it and the count above it, because Create's goggles are block-entity-only and
-│   │                          an entity carries no tooltip at all, M28, ADR-046);
+│   │                          an entity carries no tooltip at all, M28, ADR-046; since ADR-084 turned by the pallet's
+│   │                          yaw); PalletLook (ADR-084: the deck and its item, drawn by both the pallet and the
+│   │                          truck);
 │   │                          HandTruckItemRenderer / HandTruckClientExtensions (the hand truck's model with the
-│   │                          carried container on its nose plate, drawn as a single block, issue #37, ADR-070);
+│   │                          carried container on its nose plate, drawn as a single block, issue #37, ADR-070; or a
+│   │                          carried pallet through PalletLook, without the count, ADR-084);
 │   │                          SchematicannonRequesterRenderer (the remote in the requester's cradle, turned with the
 │   │                          block's facing; nothing while the slot is empty; no Flywheel visual, issue #45, ADR-080)
 │   └── ponder                 WareworksPonderPlugin (the one PonderPlugin), WareworksPonderScenes (which scene belongs
@@ -762,6 +786,16 @@ dev.wareworks
 │                              input, a menu, a container item, a hopper, a tossed truck and a death that each end
 │                              with no loaded truck outside the player's inventory, and the penalty flags (issue #37,
 │                              ADR-070);
+│                              HandTruckPalletGameTests: a pallet lifted and set down, put whole into an empty brass
+│                              bay, the bay refusals (not empty, a crane bringing goods, filtered, too small, a fluid
+│                              bay), the value box, fake players, one load per player, protection, death, tipping
+│                              over, the slot guard, save and wire with a forged count, the size budget, the penalty
+│                              and the bay and buffer handlers refusing a pallet truck (ADR-084);
+│                              BayUpgradeGameTests: an upgrade keeping the same block entity with goods, filter and
+│                              priority, creative, the column refused and done bottom up, wrong kits, an overloaded
+│                              bay repaired, a cancelled place event swapped back, adventure, the fluid kit, a plain
+│                              setBlock still resetting, persistence, the value box, a real Deployer, and the crane
+│                              storing into and delivering through an upgraded bay (ADR-083);
 │                              ComputerAccessGameTests: the terminal's computer access without CC - stock pages, item
 │                              arguments, requests delivered by the crane, refusals, a stock rule's reserve held back
 │                              from a computer only, door requests, merging with a player's request, the config switch,
@@ -3947,6 +3981,12 @@ count the location as player-partitioned, and propagate a learned type as a set 
 
 ### ADR-043 — A rack bay is one item key and a count, in a hand-written handler, and the block is the storage location (M28, issue #20)
 
+> **Amended by ADR-083 (2026-11-09): a bay's tier can change while it stands.** Because the three blocks share **one**
+> block entity type (below, *Alternatives rejected*), an upgrade kit can swap the block for the next tier and leave the
+> block entity — contents, handler, filter, priority — the same object. The tier is still the block id and nothing about
+> the save changed; a changed tier is told to the controllers as a content change, because the slot limit is read from
+> it live.
+
 *Context:* M28's rack bay holds **one item type** and a very great deal of it — 64, 256 or 1 024 stacks by tier, so
 65 536 cobblestone in one block. Every storage location before it was a *foreign* inventory read through a warehouse
 interface, and every item store this mod owns (the station buffer, the handling head) holds at most a stack per slot.
@@ -4029,6 +4069,13 @@ nothing to reconcile: the bay is the inventory, so it knows every change exactly
 > refuse one. **Joining is across families** (ADR-050 asks for the same facing and deliberately not the same tier), and
 > the refusal sentence is per family, because *"A rack bay may carry nothing stronger above it"* is the wrong sentence
 > for a tank.
+>
+> **Amended by ADR-083 (2026-11-09): upgrading no longer means rebuilding.** An upgrade kit makes a standing bay the next
+> tier with everything in it, so "a rebuild from the bottom up" below now reads "an upgrade from the bottom up". The rule
+> itself is unchanged and written once: `BayColumn#accepts` is split into its two walks, `carriesEverythingAbove` and
+> `carriedByEverythingBelow`, and a kit asks only the second, because an upgrade only raises strength and "may carry"
+> is monotone, so the bays above can never refuse it. An overloaded bay may be upgraded when the bays below carry the
+> new tier, which repairs a column a command broke from the bottom up; its flag clears through the same derived state.
 
 *Context:* a rack bay may have **nothing stronger anywhere above it** in its column — no andesite on top of wood,
 because the rack below would give way. That rule is what makes upgrading a wall a rebuild from the bottom up and the
@@ -4208,6 +4255,14 @@ and no observer can never be flushed, and the front would be stale exactly for t
 
 ### ADR-046 — Breaking a rack bay resets it: the load leaves as one plain `Entity` that cannot be pocketed, and both item censuses count a pallet as its contents (M28, issue #20)
 
+> **Amended by ADR-084 (2026-11-09): a pallet can be carried whole on a hand truck.** The owner found a pallet that could
+> only be pushed. An empty hand truck now lifts the whole pallet (key and count) into a component of the truck, carried
+> under a carried chest's rules, and sets it down again as a pallet or puts it whole into an **empty** rack bay that
+> holds the whole count. What stays: still **no item form and no spawn egg**, never a filled bay item, never despawning,
+> extract-only for machines, pushing unchanged; the truck's load is a component no container, machine or other entity
+> ever receives. Both item censuses count a pallet truck as the empty truck plus item × count, as they count a pallet.
+> An upgrade kit (ADR-083) is the other answer to "breaking a bay to upgrade it": it upgrades without a pallet at all.
+
 *Context:* a bay holds up to 65 536 items and a single `ItemStack` caps at `Item.ABSOLUTE_MAX_STACK_SIZE` = 99, so
 breaking a full bay is the largest item-conservation event this mod can cause. Three answers were on the table and two
 were refused by the owner. **Indestructibility** — "a rack is not made of obsidian, and a block that shrugs off a
@@ -4241,7 +4296,8 @@ brass bay is roughly **3 300** item entities, and a rack wall of them is a serve
   item form and no spawn egg at all**, so both pick hooks can be left at their defaults (`Entity#getPickResult`
   answers `null`, `IEntityExtension#getPickedResult` delegates to it) and the rule needs nothing maintained to stay
   true. It also rides nothing (`canRide` false, not `Leashable`) and changes no dimension, so it cannot be carried out
-  of the warehouse by any route.
+  of the warehouse by any route. *(Amended by ADR-084: on a hand truck it can, whole, wherever its player goes, a
+  portal included; the pallet entity itself still rides nothing and changes no dimension.)*
 * **It is pushable and it falls.** `isPushable()` true and `canBeCollidedWith()` left at its `false` default: a player
   walks through a pallet and shoves it along, which is the picture the feature is built on. A minimal physics tick
   (gravity, move, drag — the shape `PrimedTnt` uses) is therefore real behaviour and not decoration: without it a bay
@@ -7159,6 +7215,13 @@ player.
 
 ### ADR-070 — The hand truck carries a container as its block entity's own save data in a component of ours; a loaded truck never leaves its player's inventory; the slow walk is applied to the movement input like sneaking ([issue #37](https://github.com/Richie1710/create-wareworks/issues/37))
 
+> **Amended by ADR-084 (2026-11-09): a second load kind, the pallet.** A truck can carry a broken rack bay's pallet in a
+> component of its own, `wareworks:hand_truck_pallet` (item key and an `int` count); `hand_truck_load` and every chest
+> path below are unchanged. `HandTruckItem#isLoaded` asks for either component, so every rule here that keeps a loaded
+> truck with its player, and the penalty, hold for a pallet without a rule of its own. The size budget is asked of the
+> item key only. Tipping over and death set the pallet down as a pallet and drop the emptied truck. Since ADR-083 a
+> loaded truck of either kind is also let through every storage and port filter slot instead of becoming its filter.
+
 *Context:* The owner asked for a hand truck (German "Sackkarre"): a held item that picks up a chest, trapped chest or
 barrel "etc." with everything in it and sets it down again elsewhere, with a penalty **only while it is loaded** (half
 walking speed, no sprint, no elytra; an empty truck in the inventory costs nothing). The hard rule of the mod is that
@@ -8653,6 +8716,151 @@ that JEI lacks their categories. The cost of the producible pass at a deliberate
 two filters of 64 candidates each, 2000 stock keys) is about 4 to 7 ms (`ProductionScaleTest`), over the 1 ms the design
 aimed at; a real aisle is far below that case.
 
+### ADR-083 — An upgrade kit changes a bay's tier in place: the block changes, the block entity stays (amends ADR-043 and ADR-044)
+
+*Context:* the owner asked on 2026-11-09 for a way to upgrade a standing rack bay without emptying it and sorting the
+goods back in: breaking a bay resets it to an empty bay item and one pallet (ADR-046), and breaking a fluid bay loses the
+fluid (§3.9, D7). Binding decisions: one item per upgrade step, crafted at the matching Create tier for about the
+material difference; a right-click turns a bay of the previous tier into the next one where it stands, with contents,
+filter, priority, address and every other state; the kit is used up (not in creative); the column rule still holds and
+an upgrade is refused when the bay below would then be weaker; no downgrade.
+
+*Decision:*
+
+* **Three kits, one step each** (`core.storage.BayUpgrade`): `rack_upgrade_kit_andesite` (wood to andesite),
+  `rack_upgrade_kit_brass` (andesite to brass) and `fluid_bay_upgrade_kit_brass` (copper to brass; the fluid bay needs it
+  most). A kit fits exactly its source tier of its own family (`BayUpgrade#fits`); no tier is skipped and nothing goes
+  down. `BayTier#next`/`ofStrength` and their fluid twins name the ladder; a JUnit test fails when a tier is appended to
+  either ladder without a kit.
+* **The block entity stays.** "Save the data, set the next block, load the data back" was rejected: the `setBlock` runs
+  `IBE.onRemove`, i.e. `destroy()` — a pallet for a rack bay, the fluid lost for a fluid bay, a List or Attribute Filter
+  dropped as an item that the reload then duplicates — and a fresh block entity fires `memberChanged` and loses a crane's
+  target. Instead `BayUpgrades#swapInPlace` raises a transient flag on the bay (`TierChangeable`, never saved, never
+  static) for exactly one `setBlock`; the bay's `onRemove` then skips `IBE.onRemove` when the new block is a bay of the
+  same family, and `LevelChunk#setBlockState` hands the **same object** the new state, because the family's block entity
+  type is valid for every tier. The swap checks the identity afterwards and logs an error if another mod replaced it.
+  Every other route (breaking, `/setblock`, a schematic print) finds the flag clear and behaves as before.
+* **The new state** is the target block with the old state's properties (facing, joins, fill) and `OVERLOADED`
+  computed up front, so `BayColumn#onPlace` schedules nothing; `BayColumn#publishState` then brings the fill level in
+  line with the new capacity, and `ServerLevel#invalidateCapabilities` lets other mods' caches re-ask the same handler.
+* **What the block entity tells:** a changed tier in `setBlockState` is `WarehouseRegistry#contentChanged` (the
+  controllers re-read the slot limit); no `memberChanged` (same position, kind, address and alignment) and no
+  `sendData` (the client recreates its block entity on the block change and gets the block entity packet right after).
+  Nothing new is saved: the tier is the block id.
+* **Column rule:** an upgrade only raises strength and "may carry" is monotone, so only a weaker bay **below** can
+  refuse; `BayColumn#accepts` is split into `carriesEverythingAbove` and `carriedByEverythingBelow`, and the kit asks the
+  second one. An overloaded bay may be upgraded when the bays below carry the target, which is how a column a command
+  broke is repaired bottom up.
+* **The click** is `onItemUseFirst` (before the bay's own gesture; no snapshot capture from `Item#useOn`), with the
+  protection a placed block passes: `mayInteract`, `mayUseItemAt`, adventure's `blockActionRestricted`, then NeoForge's
+  block place event. A cancelled event swaps the bay **back** in place, never `BlockSnapshot#restore`, which would run
+  without the flag, destroy the bay and duplicate its filter; the kit is kept. Lines over the hotbar:
+  `message.bay_upgrade_fits`, `message.bay_upgrade_column`, `message.bay_upgrade_not_allowed`; no success line.
+* **Deployers may use a kit.** An upgrade moves no item, which is the reason bays refuse fake players elsewhere; a
+  Deployer can already break a bay, which is worse; a contraption sweeping a rack wall is the most useful automation for
+  this item. The protection checks run for the fake player too, its kit is used up, and its refusals are silent.
+  Reversible by one `FakePlayer` check.
+* **Filter slots let the kit through** on a bay (`StorageFilterBehaviour#bypassesInput`/`#mayInteract`), so a click in
+  the value box upgrades the bay instead of making the kit its filter; on a warehouse interface a kit is still an
+  ordinary filter item. A **loaded hand truck** is let through by every storage and port filter slot: it used to become
+  the slot's ghost filter with its whole load in its components.
+* **Recipes** (hand-written JSON like every other): a kit is its target bay's recipe less what carries over; where
+  nothing does, two sheets less for the frame the old bay keeps. Andesite: 4 alloy, 2 andesite casings (`ACA`/`ACA`);
+  brass: 4 brass sheets, 2 brass casings (`BCB`/`BCB`); fluid: 7 brass sheets (`BBB`, ` B `, `BBB`). Each unlocks with
+  the bay it upgrades.
+* **Network version 26:** three new items in the synced registries; mixed pairs are refused both ways.
+
+*Alternatives rejected:* save and reload (above); clearing the bay before a reload (avoids only the pallet); a
+`ThreadLocal` or static flag (could leak to another position); refusing Deployers (no item moves, so nothing to
+protect); one kit that skips tiers (a second recipe ladder for no gain); a check of the bays above (cannot fail).
+
+*Limitations accepted:* if a modpack makes a higher tier smaller than a lower one, an upgraded bay can be over-full; it
+keeps everything and accepts nothing until it drains, as a lowered config already does. The fluid kit has no Ponder
+subject: no fluid scene shows the column rule, and its description says it.
+
+*Consequences:* `core.storage` gains `BayUpgrade`; `content.storage` gains `TierChangeable`, `BayUpgrades` and
+`BayUpgradeKitItem`; `RackBayBlock`/`FluidBayBlock#onRemove` and both block entities' `setBlockState` learn the tier
+change. JUnit: `BayUpgradeTest`, `BayTierTest` and `FluidBayTierTest` (`next`, `ofStrength`). GameTests:
+`BayUpgradeGameTests` (everything kept with the same block entity, creative, the column refused and bottom up, wrong
+kits, an overloaded bay repaired, a cancelled place event, adventure, the fluid kit, a plain `setBlock` still resetting,
+persistence, the value box, a loaded truck on a filter slot, a real Deployer, the crane storing into the upgraded bay
+and a crane job running through the upgrade), and `WareworksItemGameTests` (recipes, creative tab order). The Ponder
+scene `warehouse/rack_wall` gains a closing beat and the two rack kits as subjects.
+
+### ADR-084 — A hand truck carries a pallet as key and count in a component of its own: lifted whole, set down as a pallet or put whole into an empty rack bay (amends ADR-046 and ADR-070)
+
+*Context:* the owner broke a rack bay on 2026-11-09 and found the pallet it left could neither be picked up nor moved
+in any sensible way (pushing works at the right angle only). Binding decisions: an empty hand truck right-clicked on a
+pallet loads it (key and count) under the rules and penalties of a carried chest — it never leaves the player's
+inventory, slow walk, no sprint, no glide, one load per player, fake players refused, protection respected; unloading
+sets it down on the floor as a pallet again, or puts the whole load into an **empty** rack bay of the item family whose
+capacity holds the whole count and whose filter allows the item, refused with a line otherwise; pallets never despawn
+and pushing stays as it is.
+
+*Decision:*
+
+* **A second component, not a second meaning of the first.** `wareworks:hand_truck_pallet` (`HandTruckPallet`): a
+  count-less `ItemKey` (`ItemStack.SINGLE_ITEM_CODEC`, components kept) and an `int` count of our own — never an
+  `ItemStack` count, whose codec bounds it at 99 (ADR-013/046). Persistent and synced in full, for the chest's reason.
+  `hand_truck_load` and every chest path stay as they were; an old truck loads unchanged. `HandTruckItem#isLoaded`
+  asks for either component, so every rule that keeps a loaded truck with its player (slot guard, drop key, toss,
+  entity join, carry stamp, container items, bay and buffer inserts, filter slots) holds for a pallet without a line of
+  its own. Both components on one stack can only be forged; it is tolerated, never produced.
+* **Lenient decode.** A count outside `1..HandTruckLimits#MAX_PALLET_COUNT` (= `BayTier.MAX_CAPACITY_ITEMS`, the
+  pallet's own ceiling) is clamped in the record's constructor and logged, from above as the loss it is. A range codec
+  was rejected: a failed decode makes `ItemStack.parse` drop the truck from the player's inventory with the whole load.
+* **Lifting** (`HandTruckPalletPickup`) listens to `PlayerInteractEvent.EntityInteract` at `LOW`, so a protection mod
+  that cancels the click at its usual priority has already decided. Order: fake player or no player `PASS`; a pallet on
+  its way out `PASS`; another loaded truck `FAIL` (`already_loaded`); adventure mode or `mayInteract` `FAIL`
+  (`not_allowed`); the key over the size budget `FAIL` (`too_heavy`, only a key with huge components); then, source
+  first, `PalletEntity#takeWholeLoad` (clears, publishes, discards) and the component. The existing `NORMAL` listener
+  still cancels every entity click with a loaded truck and now says `already_loaded` on a pallet.
+* **Unloading** (`HandTruckPalletUnload`, in `onItemUseFirst`, so no block's own use sees the truck): on a **rack bay**
+  the pure `core.handtruck.PalletIntoBay#verdict` decides in this order — `NOT_EMPTY`, `CRANE_BRINGING` (an incoming
+  reservation at the bay, one registry scan per click: a crane on its way would find the bay filled), `FILTERED`,
+  `TOO_SMALL` — then a simulated insert, then one real `insert` of the whole oversized stack (the bay's handler already
+  takes one, so no `insertWhole`); the column rule and the overload flag do not apply, as for every hand insert
+  (ADR-044). A **fluid bay** refuses (`bay_wrong_kind`). **Anything else**: a pallet is set down where a block item
+  would be placed (`BlockPlaceContext`, `mayPlace`, a block-free spawn box), turned towards the player
+  (`PalletEntity#spawn` with a yaw, which the renderer now applies; a broken bay's pallet keeps yaw 0). Before it is
+  spawned, NeoForge's block place event is posted for the landing position (`EventHooks#onBlockPlace` with a snapshot
+  of that position), as the chest's set-down does: the landing position may lie in another claim than the clicked
+  block, claim mods forbid building through that event, and common ones do not guard a player-made entity's
+  `EntityJoinLevelEvent`. No block is written, so a cancel has nothing to revert; it refuses with `place_not_allowed`
+  and the truck stays loaded, as does a refused join (GameTest `handtruckpalletplaceeventcancelled`). A key that is
+  itself a loaded truck is refused. No success line, as for the chest.
+* **Never topping a bay up.** Only an empty bay takes a pallet: a truck that could pour any amount into any bay would
+  be a second, unrestricted way of filling a rack wall, which is the crane's job and the bay's own gesture's.
+* **Tipping over, death:** `HandTruckSpill#setPalletDown` spawns a `PalletEntity` with the whole count where the truck
+  tipped over (a refused spawn spills the load loudly, as `RackBayBlockEntity#destroy` does), and only the emptied
+  truck becomes an item stack. A dead player's pallet is spawned into the level from `LivingDropsEvent` at `HIGHEST`,
+  so a gravestone mod captures the empty truck; `keepInventory` keeps it loaded.
+* **Censuses:** `ItemCensus` and `SceneItemCensus` count a pallet truck as the emptied truck plus item × count, exactly
+  as a `PalletEntity`, so lifting, carrying, both unloads and tipping over conserve exactly.
+* **Render:** `client.render.PalletLook` draws the deck and the load for both the pallet entity and the truck (on the
+  nose plate, at the chest's place and scale; no count label, the name and tooltip carry it; a hand truck as key is not
+  drawn).
+* **Portals, pearls, vehicles: parity with a carried chest.** The player carries the truck; nothing new is listened to.
+
+*Alternatives rejected:* an item form for the pallet (still refused, ADR-046: the truck's load is a component no
+container, machine or other entity ever receives); a third meaning inside `hand_truck_load` (would touch every chest
+path); `Codec.intRange` for the count (drops the truck on a bad save); topping up a bay or splitting a pallet over
+several bays (a second way of filling a rack wall); falling through to the floor on a fluid bay (confusing); a config
+key to switch the feature off (the owner decided it); despawning pallets (the owner refused it).
+
+*Limitations accepted:* an older build cannot decode the component and drops a pallet truck from the inventory on load,
+so carried pallets are set down before going back (CHANGELOG). A creative middle-click copies a loaded truck, as for a
+chest. A pallet truck carried into the void is lost with its player's items.
+
+*Consequences:* `core.handtruck` gains `PalletIntoBay` and `HandTruckLimits#palletCount`; `content.handtruck` gains
+`HandTruckPallet`, `HandTruckPalletPickup` and `HandTruckPalletUnload`; `PalletEntity` gains `takeWholeLoad` and a yaw
+overload of `spawn`; `RackBayBlockEntity#storeFilterAllows`; `HandTruckItem#palletLoad`/`#emptied`. JUnit:
+`PalletIntoBayTest`, `HandTruckLimitsTest#aPalletCountIsClampedIntoWhatABayCanHold`. GameTests:
+`HandTruckPalletGameTests` (round trip, into an empty brass bay, the refusals, a crane on its way, the value box, fake
+players, one load per player, protection, death, tipping over, the slot guard, save and wire with a forged count, the
+size budget, the penalty, bay and buffer handlers). Ponder: `hand_truck` gains a closing pallet beat (`text_6`,
+`text_7`). Network version 26 (with ADR-083).
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -8703,6 +8911,10 @@ aimed at; a real aisle is far below that case.
   as a separate `int`, so no oversized stack ever exists where a codec could truncate it — and because this is entity
   **tracker** traffic rather than a chunk packet it is the one place this mod can afford to carry an item's real
   components, so a renamed item reads correctly on a pallet.
+* A **pallet on a hand truck** (ADR-084) is the item component `wareworks:hand_truck_pallet`,
+  `{item: <ItemKey>, count: int}`, on the player's truck stack, saved with the player and synced in full; the count is
+  its own `int`, never a stack count, and a decode clamps rather than fails. Nothing else about pallets, bays or chest
+  loads changed, so old saves load unchanged.
 * **Crafting at a terminal** (M32, ADR-059) saves **nothing**. The grid and the ghost on the cursor are the player's
   own client state, the grid remembered per terminal only for as long as the player stays connected (a grid's item
   keys hold registry entries of the connection that decoded them, which no later connection can write into a

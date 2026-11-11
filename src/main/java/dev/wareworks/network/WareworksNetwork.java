@@ -210,8 +210,15 @@ public final class WareworksNetwork {
      * {@link ProductionPatternPayload} is unchanged: the server tells a filter cell from the item. Saves gained
      * {@code Filter} on pattern entries and {@code Choice} on supply lines, and an order may hold up to 72 lines; an older
      * build reads a filter cell as an exact ingredient that is never in stock.
+     * <p>
+     * <b>{@code "26"} is ADR-083</b> (rack and fluid bay upgrade kits): no payload changed, but three new items did
+     * ({@code rack_upgrade_kit_andesite}, {@code rack_upgrade_kit_brass}, {@code fluid_bay_upgrade_kit_brass}), and so
+     * did a data component: ADR-084's {@code hand_truck_pallet}, a pallet carried on a hand truck, synced with every
+     * stack that has one. As for {@code "23"}, NeoForge's registry sync only keeps an older client off a newer server,
+     * so the version is raised for mixed pairs to be refused both ways. An older build cannot decode the component and
+     * drops a truck that carries a pallet from the inventory, so pallets are set down before going back.
      */
-    public static final String VERSION = "25";
+    public static final String VERSION = "26";
 
     private WareworksNetwork() {
     }

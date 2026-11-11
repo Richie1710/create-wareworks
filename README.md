@@ -76,8 +76,10 @@ teleported: every item you put in or take out is carried by the crane, where you
   **one item**, Shift a whole **stack**, in both directions. A funnel, a chute, a belt or a hopper fills one directly
   as well. Only when a crane's aisle reaches it does the same block **also** become an addressable storage location,
   with its own filter and priority, and what it already held is counted on the spot. A bay may carry **nothing
-  stronger above it**, so a wall is upgraded from the bottom up — and breaking a full one **loses nothing**: you get
-  the empty bay back and its whole load as a single **pallet** on the floor.
+  stronger above it**, so a wall is upgraded from the bottom up — with an **upgrade kit** right-clicked on a bay it
+  becomes the next tier where it stands, goods, filter and priority included, so nothing has to be emptied — and
+  breaking a full one **loses nothing**: you get the empty bay back and its whole load as a single **pallet** on the
+  floor. Copper fluid bays have a kit to brass as well.
 * **Fluid Bay** (copper, brass): the same idea for **fluids** — a storage location that **is** a tank. One bay holds
   **one fluid**, **64 buckets** in copper and **256** in brass (both server config), with its own address, filter and
   priority, so a tank wall is one block per 64 buckets instead of a multiblock; for scale, a Create Fluid Tank holds 8
@@ -147,11 +149,17 @@ teleported: every item you put in or take out is carried by the crane, where you
   while an order is on its way. The crane delivers into the terminal as for a click; your funnel and belt take the
   items on to the cannon. A lamp lights while it orders and turns red when it needs you; goggles say why. See
   **Printing from the warehouse** below.
+* **Upgrade kits** (Andesite and Brass Rack Upgrade Kit, Brass Fluid Bay Upgrade Kit): right-click a bay with the kit
+  of its next tier and it **becomes that tier where it stands**, with its goods or fluid, its filter, its priority and
+  its place in the warehouse; nothing is emptied, broken or sorted back in. One kit per step (wood to brass takes two),
+  no downgrade, and a column is upgraded **from the bottom up**, as the column rule asks. A Deployer can use them too.
 * **Hand Truck**: moves a **chest, trapped chest or barrel with everything in it**. Right-click the container with the
   empty truck and it goes onto the truck, name, lock and an unopened loot table included; right-click the ground and it
   is set down again, facing you. While the truck is loaded you walk at **half speed** and cannot sprint or glide (a
   server can change all three), and a loaded truck goes into no other container and cannot be dropped. An empty truck
-  in your inventory costs nothing. Warehouse blocks, ender chests and shulker boxes stay where they are.
+  in your inventory costs nothing. Warehouse blocks, ender chests and shulker boxes stay where they are. It also lifts
+  the **pallet** a broken rack bay leaves behind, whole: set it down again on the floor, or right-click an **empty Rack
+  Bay** that holds all of it to put the whole load in at once.
 * **Warehouse Remote**: opens a **Warehouse Terminal's screen from afar**. Sneak and right-click a terminal to link the
   remote, then right-click anywhere within the server's range (256 blocks by default) to open it. What you order is
   still delivered by the crane into the terminal or to a package door, never into your inventory.
@@ -279,7 +287,8 @@ all three tiers, in the order a player meets the block rather than the order the
 in a Rack Bay** shows one bay standing alone with no warehouse anywhere — both hand gestures, the one item type it
 learns and forgets, the load growing on its pallet, and the break that resets the bay and leaves its whole load on
 the floor; **Building a Rack Wall** shows the wall, the three materials and the rule that a bay carries nothing
-stronger above it; and **Rack Bays in a Warehouse Aisle** brings the rails to a bay somebody had already filled by
+stronger above it, and ends with an upgrade kit making a filled column andesite from the bottom up (it is the scene of
+the two rack kits as well); and **Rack Bays in a Warehouse Aisle** brings the rails to a bay somebody had already filled by
 hand. The twenty-first, **Fluids Travel in Containers**, belongs to both **fluid bays** and to the terminal, and
 teaches the one thing about fluids you could not guess: a bucket in the hand and a pipe at the back, then a bucket of
 lava dropped into a warehouse input, the bay draining the whole container, and the **empty bucket coming back as
@@ -291,9 +300,9 @@ what always comes to the terminal instead, and the Stock Link that takes a door 
 twenty-third, **Crafting with a Vanilla Crafter**, belongs to the Crafter Feeder and the production station: the feeder
 on the station's back, the Crafter in front of it and the input in front of the Crafter, an order of torches laid and
 crafted run by run, and the red pattern that is never fetched. The twenty-fourth, **Carrying Containers with the Hand
-Truck**, belongs to the **Hand Truck**, the one item that is no block: a chest loaded with everything in it, the slow
-walk, and the chest set down again. The twenty-fifth, **Asking the Warehouse for Fluid**, belongs to both **fluid
-bays** and the terminal: the fluid row and its question, an empty bucket carried from a rack bay to the fluid bay,
+Truck**, belongs to the **Hand Truck**: a chest loaded with everything in it, the slow walk, and the chest set down
+again, then a pallet lifted whole and where it may be set down. The twenty-fifth, **Asking the Warehouse for Fluid**,
+belongs to both **fluid bays** and the terminal: the fluid row and its question, an empty bucket carried from a rack bay to the fluid bay,
 filled there and taken straight on to the terminal, the red row when no empty container is in stock, and the pipe
 at the bay's back for bulk. The twenty-sixth belongs to the **Schematicannon Requester**: the requester set against a
 cannon, a linked remote put in, the cannon's "Skip missing Blocks" switched off, the missing items running from the

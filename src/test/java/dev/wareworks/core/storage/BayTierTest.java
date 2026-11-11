@@ -2,6 +2,7 @@ package dev.wareworks.core.storage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -210,5 +211,27 @@ class BayTierTest {
                     assertTrue(capacity <= BayTier.MAX_CAPACITY_ITEMS,
                             tier + " with " + configured + " x " + maxStackSize + " left the int range");
                 }
+    }
+
+    // --- one step up (ADR-083) -------------------------------------------------------------------------------------
+
+    /** {@code next} walks the ladder one step at a time and stops at the top; {@code ofStrength} inverts it. */
+    @Test
+    void nextAndOfStrengthWalkTheLadder() {
+        for (BayTier tier : BayTier.values()) {
+            assertEquals(tier, BayTier.ofStrength(tier.strength()), "ofStrength inverts strength for " + tier);
+            BayTier next = tier.next();
+            if (next == null) {
+                assertEquals(BayTier.BRASS, tier, "only the top tier has no next one");
+                continue;
+            }
+            assertEquals(tier.strength() + 1, next.strength(), "one step up from " + tier);
+            assertTrue(next.isStrongerThan(tier), next + " is stronger than " + tier);
+        }
+        assertEquals(BayTier.BRASS, BayTier.WOOD.next().next(), "the ladder ends at brass");
+        assertNull(BayTier.BRASS.next());
+        assertNull(BayTier.ofStrength(-1));
+        assertNull(BayTier.ofStrength(BayTier.values().length));
+        assertNull(BayTier.ofStrength(Integer.MAX_VALUE));
     }
 }

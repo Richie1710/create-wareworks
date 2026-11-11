@@ -112,6 +112,10 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("tank-brass", WareworksBlocks.FLUID_BAY_BRASS, 2),
             // Issue #37: the hand truck is an item, not a block, and has its one scene of its own.
             new Subject("hand-truck", WareworksItems.HAND_TRUCK, 1),
+            // ADR-083: the two rack upgrade kits open the rack wall scene, whose closing beat upgrades a column bottom
+            // up. The fluid kit has no scene: no fluid scene shows the column rule, and its tooltip says it.
+            new Subject("kit-andesite", WareworksItems.RACK_UPGRADE_KIT_ANDESITE, 1),
+            new Subject("kit-brass", WareworksItems.RACK_UPGRADE_KIT_BRASS, 1),
             // Issue #45: the Schematicannon Requester has its one scene of its own, a cannon fed from the warehouse.
             new Subject("requester", WareworksBlocks.SCHEMATICANNON_REQUESTER, 1));
 

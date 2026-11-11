@@ -328,8 +328,18 @@ public class FluidBayBlock extends HorizontalDirectionalBlock implements IBE<Flu
         BayColumn.publishState(level, pos);
     }
 
+    /**
+     * Breaking or replacing a bay resets it ({@code FluidBayBlockEntity#destroy}), with <b>one</b> exception: an upgrade
+     * kit changing this bay into another tier of its family in place ({@link BayUpgrades#swapInPlace}, ADR-083). Then
+     * the block entity is kept as it is, and {@code LevelChunk#setBlockState} hands that same object the new state —
+     * goods, filter, priority and everything else stay where they are, and nothing is destroyed or dropped. The flag
+     * that allows it is set only inside that one write, so every other route behaves as before.
+     */
     @Override
     public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
+        if (!state.is(newState.getBlock()) && newState.getBlock() instanceof FluidBayBlock
+                && level.getBlockEntity(pos) instanceof TierChangeable bay && bay.isChangingTier())
+            return; // upgrade kit: LevelChunk keeps this block entity and hands it the new state
         IBE.onRemove(state, level, pos, newState);
     }
 

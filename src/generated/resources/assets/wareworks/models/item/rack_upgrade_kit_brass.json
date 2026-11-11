@@ -1,0 +1,9 @@
+{
+  "parent": "wareworks:item/upgrade_kit/item",
+  "textures": {
+    "beam": "create:block/brass_casing",
+    "frame": "create:block/brass_block",
+    "particle": "create:block/brass_block",
+    "strap": "create:block/belt"
+  }
+}

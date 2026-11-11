@@ -61,6 +61,7 @@ import net.minecraft.resources.ResourceLocation;
  *   <tr><td>rack_bay_wood, rack_bay_andesite, rack_bay_brass</td><td>warehouse/rack_bay, warehouse/rack_wall,
  *       warehouse/bays_in_an_aisle</td></tr>
  *   <tr><td>fluid_bay_copper, fluid_bay_brass</td><td>warehouse/fluid_bay, warehouse/fluid_request</td></tr>
+ *   <tr><td>rack_upgrade_kit_andesite, rack_upgrade_kit_brass</td><td>warehouse/rack_wall</td></tr>
  *   <tr><td>hand_truck</td><td>hand_truck/carrying</td></tr>
  *   <tr><td>schematicannon_requester</td><td>requester/ordering</td></tr>
  * </table>
@@ -183,8 +184,10 @@ public final class WareworksPonderScenes {
                 .addStoryBoard("warehouse/rack_bay", RackBayScenes::rackBay,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
 
+        // The two rack upgrade kits (ADR-083) open this scene too: its closing beat upgrades a column bottom up.
         scenes.forComponents(WareworksBlocks.RACK_BAY_WOOD, WareworksBlocks.RACK_BAY_ANDESITE,
-                        WareworksBlocks.RACK_BAY_BRASS)
+                        WareworksBlocks.RACK_BAY_BRASS, WareworksItems.RACK_UPGRADE_KIT_ANDESITE,
+                        WareworksItems.RACK_UPGRADE_KIT_BRASS)
                 .addStoryBoard("warehouse/rack_wall", RackBayScenes::rackWall,
                         WareworksPonderTags.WAREHOUSE);
 

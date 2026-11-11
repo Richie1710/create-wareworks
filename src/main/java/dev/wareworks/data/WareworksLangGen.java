@@ -1176,11 +1176,27 @@ public final class WareworksLangGen {
         // The three rack bays (M28, issue #20) and the two fluid bays (M30, issue #21). Each kind is written once
         // with its two tier differences passed in, so a player reading two tiers in JEI sees at a glance that only
         // the capacity and the column rule changed.
-        rackBayTooltip(lang, "rack_bay_wood", "64 stacks", "wood carries only wood");
-        rackBayTooltip(lang, "rack_bay_andesite", "256 stacks", "andesite never carries brass");
-        rackBayTooltip(lang, "rack_bay_brass", "1024 stacks", "brass carries any bay");
-        fluidBayTooltip(lang, "fluid_bay_copper", "64 buckets", "copper carries only copper");
-        fluidBayTooltip(lang, "fluid_bay_brass", "256 buckets", "brass carries copper and brass");
+        rackBayTooltip(lang, "rack_bay_wood", "64 stacks", "wood carries only wood", true);
+        rackBayTooltip(lang, "rack_bay_andesite", "256 stacks", "andesite never carries brass", true);
+        rackBayTooltip(lang, "rack_bay_brass", "1024 stacks", "brass carries any bay", false);
+        fluidBayTooltip(lang, "fluid_bay_copper", "64 buckets", "copper carries only copper", true);
+        fluidBayTooltip(lang, "fluid_bay_brass", "256 buckets", "brass carries copper and brass", false);
+
+        // ADR-083: the three upgrade kits. Each names the bay it fits and the bay it makes, because a kit fits exactly
+        // one tier of one family; the column rule is the one thing a player has to know before the first click.
+        kitTooltip(lang, "rack_upgrade_kit_andesite",
+                "Makes a _Wooden Rack Bay_ an _Andesite_ one where it stands, _with everything in it_.",
+                "Goods, filter and priority stay. Upgrade a column _from the bottom up_.");
+        kitTooltip(lang, "rack_upgrade_kit_brass",
+                "Makes an _Andesite Rack Bay_ a _Brass_ one where it stands, _with everything in it_.",
+                "Goods, filter and priority stay. Upgrade a column _from the bottom up_.");
+        kitTooltip(lang, "fluid_bay_upgrade_kit_brass",
+                "Makes a _Copper Fluid Bay_ a _Brass_ one where it stands, _with the fluid in it_.",
+                "Fluid, filter and priority stay. Upgrade a column _from the bottom up_.");
+        lang.accept(WareworksLang.key(WareworksLang.BAY_UPGRADE_FITS), "This kit only fits: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.BAY_UPGRADE_COLUMN),
+                "Upgrade the bay below first: no bay may carry a stronger one");
+        lang.accept(WareworksLang.key(WareworksLang.BAY_UPGRADE_NOT_ALLOWED), "You may not change this bay here");
 
         tooltip(lang, "block.wareworks.warehouse_input",
                 "Where _items_ enter the warehouse. Can be filled by _belts_, _funnels_ and _Mechanical Arms_.");
@@ -1234,13 +1250,14 @@ public final class WareworksLangGen {
                 "_Closes_ the rail, keeping two warehouses that touch apart.");
 
         // Issue #37: the hand truck. Its name comes from the item builder; these are its description and messages.
+        // ADR-084: it carries a pallet as well.
         tooltip(lang, "item.wareworks.hand_truck",
-                "Carries a _chest_ or _barrel_ with _everything in it_.",
-                "When used on a container",
+                "Carries a _chest_, _barrel_ or _pallet_ with _everything in it_.",
+                "When used on a container or pallet",
                 "Lifts it onto the truck.",
                 "When loaded",
-                "_Right-Click_ a surface to set it down. You walk _slowly_ and cannot _sprint_ or _glide_. It goes "
-                        + "into _no other container_.");
+                "_Right-Click_ a surface to set it down. A pallet also goes into an _empty Rack Bay_ that holds it "
+                        + "all. You walk _slowly_ and cannot _sprint_ or _glide_. It goes into _no other container_.");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_LOADED), "Hand Truck with %1$s");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_CARRYING), "%1$s stacks inside");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_CARRYING_LOOT), "Unopened loot");
@@ -1253,6 +1270,17 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_PLACE_NOT_ALLOWED), "You may not set it down here");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_DROP_REFUSED), "Set it down with Right-Click");
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_STAYS_WITH_YOU), "A loaded hand truck stays with you");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_LOADED_PALLET), "Hand Truck with a Pallet of %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_CARRYING_PALLET), "%1$s items on the pallet");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_BAY_NOT_EMPTY),
+                "A pallet only goes into an empty rack bay");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_BAY_INCOMING),
+                "A crane is bringing goods to this rack bay");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_BAY_FILTERED), "This rack bay's filter does not take %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_BAY_TOO_SMALL),
+                "This rack bay holds %1$s of these, the pallet carries %2$s");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_BAY_WRONG_KIND),
+                "A pallet goes into a rack bay, not a fluid bay");
 
         // Issue #44: the Warehouse Remote. Its name comes from the item builder; these are its description and messages.
         tooltip(lang, "item.wareworks.warehouse_remote",
@@ -1536,14 +1564,30 @@ public final class WareworksLangGen {
      * above it, and nothing else about the block changes with it. Like every description it says what the block is
      * and the one thing the Ponder scenes do not show (issue #22); the goggles and the scenes carry the rest.
      *
-     * @param stacks   how much one bay of this tier holds, as it is written in the summary
-     * @param carries  the column rule for this tier, as it is written after "Nothing stronger on top:"
+     * @param stacks     how much one bay of this tier holds, as it is written in the summary
+     * @param carries    the column rule for this tier, as it is written after "Nothing stronger on top:"
+     * @param upgradable whether a kit makes this tier the next one (ADR-083); false for the top tier
      */
-    private static void rackBayTooltip(BiConsumer<String, String> lang, String block, String stacks, String carries) {
-        tooltip(lang, "block.wareworks." + block,
-                "A storage location for _one item type_, " + stacks + ". Works _by hand_ too, with no crane at all.",
-                "When placed",
-                "Nothing _stronger_ on top: " + carries + ".");
+    private static void rackBayTooltip(BiConsumer<String, String> lang, String block, String stacks, String carries,
+                                       boolean upgradable) {
+        String summary = "A storage location for _one item type_, " + stacks
+                + ". Works _by hand_ too, with no crane at all.";
+        String placed = "Nothing _stronger_ on top: " + carries + ".";
+        if (upgradable)
+            tooltip(lang, "block.wareworks." + block, summary, "When placed", placed,
+                    "With an upgrade kit", "Becomes the _next tier_ where it stands, goods included.");
+        else
+            tooltip(lang, "block.wareworks." + block, summary, "When placed", placed);
+    }
+
+    /**
+     * Create item description of one upgrade kit (ADR-083): what it makes of which bay, and what stays.
+     *
+     * @param summary   which bay it fits and what it makes of it
+     * @param behaviour what stays, and the column rule
+     */
+    private static void kitTooltip(BiConsumer<String, String> lang, String item, String summary, String behaviour) {
+        tooltip(lang, "item.wareworks." + item, summary, "When used on a bay", behaviour);
     }
 
     /**
@@ -1554,16 +1598,21 @@ public final class WareworksLangGen {
      * the warning on the first punch are the other two — and it is the only one of the three a player reads <i>before
      * the block is ever placed</i>, so the "When broken" pair stays however short the rest gets.
      *
-     * @param buckets how much one bay of this tier holds, as it is written in the summary
-     * @param carries the column rule for this tier, as it is written after "Nothing stronger on top:"
+     * @param buckets    how much one bay of this tier holds, as it is written in the summary
+     * @param carries    the column rule for this tier, as it is written after "Nothing stronger on top:"
+     * @param upgradable whether a kit makes this tier the next one (ADR-083); false for the top tier
      */
-    private static void fluidBayTooltip(BiConsumer<String, String> lang, String block, String buckets, String carries) {
-        tooltip(lang, "block.wareworks." + block,
-                "A storage location for _one fluid_, " + buckets + ". _Pipes_ connect at the back.",
-                "When placed",
-                "Nothing _stronger_ on top: " + carries + ".",
-                "When broken",
-                "_The fluid is lost._");
+    private static void fluidBayTooltip(BiConsumer<String, String> lang, String block, String buckets, String carries,
+                                        boolean upgradable) {
+        String summary = "A storage location for _one fluid_, " + buckets + ". _Pipes_ connect at the back.";
+        String placed = "Nothing _stronger_ on top: " + carries + ".";
+        if (upgradable)
+            tooltip(lang, "block.wareworks." + block, summary, "When placed", placed,
+                    "When broken", "_The fluid is lost._",
+                    "With an upgrade kit", "Becomes the _next tier_ where it stands, fluid included.");
+        else
+            tooltip(lang, "block.wareworks." + block, summary, "When placed", placed,
+                    "When broken", "_The fluid is lost._");
     }
 
     /** Create item description: summary plus condition/behaviour pairs ({@code .tooltip.conditionN/behaviourN}). */

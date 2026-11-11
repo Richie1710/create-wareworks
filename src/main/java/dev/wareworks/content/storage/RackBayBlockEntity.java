@@ -135,7 +135,7 @@ import net.neoforged.neoforge.items.IItemHandler;
  * a pocket ({@link #destroy()}, ADR-046).
  */
 public class RackBayBlockEntity extends SmartBlockEntity
-        implements StorageMember, Clearable, IHaveGoggleInformation, GoggleObservers.Observable {
+        implements StorageMember, Clearable, IHaveGoggleInformation, GoggleObservers.Observable, TierChangeable {
     /** Client-packet key of the aisle assignment: the address, "misaligned" or "not part of an aisle". */
     public static final String ASSIGNMENT_TAG = "AisleAssignment";
     /** Client-packet key of this location's reservations; absent while nothing is reserved. */
@@ -175,6 +175,11 @@ public class RackBayBlockEntity extends SmartBlockEntity
      * or a priority that is silently dead is exactly what a goggle line exists for (§3.1.1).
      */
     private boolean filterShadowed;
+    /**
+     * Set only while an upgrade kit swaps this bay's block for the next tier ({@link TierChangeable}, ADR-083). Never
+     * saved: the tier is the block id.
+     */
+    private boolean changingTier;
 
     public RackBayBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -352,6 +357,14 @@ public class RackBayBlockEntity extends SmartBlockEntity
     /** Whether a player gave this bay a store filter at all. */
     public boolean hasStoreFilter() {
         return !storeFilterBehaviour.getFilter().isEmpty();
+    }
+
+    /**
+     * Whether the store filter lets {@code stack} in, as every insert asks it: for a pallet a hand truck offers this bay
+     * whole (ADR-084), which is refused with its own line rather than as "too small".
+     */
+    public boolean storeFilterAllows(ItemStack stack) {
+        return passesFilter(stack);
     }
 
     /** Server: sets the store filter as a player click would (an empty stack clears it). */
@@ -574,19 +587,44 @@ public class RackBayBlockEntity extends SmartBlockEntity
      * <li>a <b>fill level</b> (M28 step 9) matches neither and notifies nothing, which is correct and free — the
      * contents have their own notification.</li>
      * </ul>
+     * A fourth only an upgrade kit makes: the <b>tier</b> (ADR-083), which keeps this very block entity and changes
+     * the capacity. The location, its kind, its address and its alignment are the same, so it is no membership change;
+     * the controllers only have to re-read the slot limit, which is exactly what a content change makes them do —
+     * {@code contentChanged}. No {@code sendData} here: the client recreates its block entity on the block change and
+     * fills it from the block entity packet the chunk holder sends right after the block update.
      */
     @SuppressWarnings("deprecation")
     @Override
     public void setBlockState(BlockState state) {
+        BayTier oldTier = tier();
         Direction oldFacing = facing();
         boolean wasOverloaded = overloaded();
         super.setBlockState(state);
         if (!(level instanceof ServerLevel))
             return;
-        if (facing() != oldFacing)
+        if (facing() != oldFacing) {
             onMembershipRelevantChange(); // rotated (wrench, structure placement): aligned and misaligned swap
-        else if (overloaded() != wasOverloaded && !isRemoved())
+            return;
+        }
+        if (overloaded() != wasOverloaded && !isRemoved())
             WarehouseRegistry.filterChanged(level, worldPosition);
+        if (tier() != oldTier && !isRemoved())
+            WarehouseRegistry.contentChanged(level, worldPosition); // upgrade kit: the capacity changed
+    }
+
+    @Override
+    public boolean isChangingTier() {
+        return changingTier;
+    }
+
+    @Override
+    public void beginTierChange() {
+        changingTier = true;
+    }
+
+    @Override
+    public void endTierChange() {
+        changingTier = false;
     }
 
     @Override

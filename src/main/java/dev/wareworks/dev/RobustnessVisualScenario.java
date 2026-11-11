@@ -1045,7 +1045,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
      *       the controller lists two cranes.</li>
      *   <li>Both inputs filled: crane 1 stores from the input beside its dock, crane 2 from the one beside its own, and
      *       the world is saved while <b>both</b> carry, quit and rejoined. Both claims come back, no block is shared,
-     *       both finish.</li>
+     *       both finish. Crane 2's motor stops the tick it picks up and runs again the tick crane 1 carries too, so
+     *       the overlap is certain rather than a race of a tick or two.</li>
      *   <li>The same with a chunk round trip: both docks unload with both carrying, and come back as new block
      *       entities read from the save.</li>
      *   <li>The second dock is broken while its crane carries: the head drops at the dock and is counted; the warehouse
@@ -1068,7 +1069,10 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> census(server, "a second dock joined the warehouse"))
                 // Save, quit and rejoin with both in flight.
                 .server("robustness: fill both inputs", this::fillBothInputs)
-                .serverUntil("robustness: wait until both cranes carry", this::bothCarry, JOB_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until crane 2 carries and hold it there", this::holdWhenMemberCarries,
+                        JOB_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until both cranes carry", this::bothCarryReleasingMember,
+                        JOB_TIMEOUT_TICKS)
                 .server("robustness: save the world with both cranes in flight",
                         (server, context) -> server.saveEverything(true, true, true));
         VisualWorld.reload(script, worldProfile());
@@ -1083,7 +1087,10 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> census(server, "both jobs finished after the rejoin"))
                 // A chunk round trip with both in flight.
                 .server("robustness: fill both inputs again", this::fillBothInputs)
-                .serverUntil("robustness: wait until both cranes carry again", this::bothCarry, JOB_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until crane 2 carries again and hold it there",
+                        this::holdWhenMemberCarries, JOB_TIMEOUT_TICKS)
+                .serverUntil("robustness: wait until both cranes carry again", this::bothCarryReleasingMember,
+                        JOB_TIMEOUT_TICKS)
                 .server("robustness: remember both docks and move the camera far away", (server, context) -> {
                     dockBeforeUnload = crane(server, context);
                     memberBeforeUnload = member(server, context);
@@ -1224,6 +1231,33 @@ public final class RobustnessVisualScenario implements VisualScenario {
         StackerCraneBlockEntity two = member(server, context);
         assertApart(one, two);
         return !one.heldItems().isEmpty() && !two.heldItems().isEmpty();
+    }
+
+    /**
+     * Crane 2 carries, and its motor stops in the same tick, so it stands with its load until crane 1 carries too.
+     * <p>
+     * Without the hold, "both carry" was a race: crane 2's trip from its input to the rack beside it is a few ticks
+     * long, crane 1 first drives to its own input, and the poll (every other tick) missed an overlap of a tick or two
+     * in about one run of three, timing the step out with both cranes idle and every item stored.
+     */
+    private boolean holdWhenMemberCarries(MinecraftServer server, VisualContext context) {
+        if (!memberCarries(server, context))
+            return false;
+        motor(server.overworld(), memberDockPos(context)).generatedSpeed.setValue(0);
+        LOGGER.info(PREFIX + "robustness: crane 2 carries ({}); its motor stops until crane 1 carries too",
+                member(server, context).craneState().phase());
+        return true;
+    }
+
+    /**
+     * {@link #bothCarry}, and when it holds, crane 2's motor runs again in the same tick (see
+     * {@link #holdWhenMemberCarries}).
+     */
+    private boolean bothCarryReleasingMember(MinecraftServer server, VisualContext context) {
+        if (!bothCarry(server, context))
+            return false;
+        motor(server.overworld(), memberDockPos(context)).generatedSpeed.setValue(MOTOR_RPM);
+        return true;
     }
 
     private boolean memberCarries(MinecraftServer server, VisualContext context) {

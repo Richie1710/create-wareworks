@@ -113,11 +113,11 @@ public final class BlocksVisualScenario implements VisualScenario {
     private static final int SCREEN_SETTLE_TICKS = 10;
     private static final int CHEST_SLOTS = 27;
     /**
-     * First slot the items start at, so the twenty of them end in the chest's last slot: the last two slots of the top
-     * row, then the middle and bottom rows (issue #45 made them twenty, issue #46 nineteen; the middle row's first slot
-     * was first while eighteen fitted after it).
+     * First slot the items start at, so the twenty-three of them end in the chest's last slot: the last five slots of
+     * the top row, then the middle and bottom rows (ADR-083's three upgrade kits made them twenty-three, issue #45
+     * twenty, issue #46 nineteen; the middle row's first slot was first while eighteen fitted after it).
      */
-    private static final int FIRST_ITEM_SLOT = 7;
+    private static final int FIRST_ITEM_SLOT = 4;
 
     /** Close-up cameras relative to an exhibit's block centre: to the side, above and in front of or behind it. */
     private static final double CLOSE_SIDE = 1.4;
@@ -852,8 +852,10 @@ public final class BlocksVisualScenario implements VisualScenario {
                 WareworksBlocks.WAREHOUSE_HOME_POINT.asItem(),
                 // The Schematicannon Requester is the last block (issue #45).
                 WareworksBlocks.SCHEMATICANNON_REQUESTER.asItem(),
-                // Items that are not blocks follow every block: the hand truck (issue #37) and the Warehouse Remote
-                // (issue #44).
+                // Items that are not blocks follow every block: the three upgrade kits (ADR-083), the hand truck
+                // (issue #37) and the Warehouse Remote (issue #44).
+                WareworksItems.RACK_UPGRADE_KIT_ANDESITE.asItem(), WareworksItems.RACK_UPGRADE_KIT_BRASS.asItem(),
+                WareworksItems.FLUID_BAY_UPGRADE_KIT_BRASS.asItem(),
                 WareworksItems.HAND_TRUCK.asItem(), WareworksItems.WAREHOUSE_REMOTE.asItem());
         if (!shown.equals(expected) || icon != WareworksBlocks.STACKER_CRANE.asItem())
             throw new VisualTestException("unexpected creative tab: icon " + icon + ", items " + shown);

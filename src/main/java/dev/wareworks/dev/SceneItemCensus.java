@@ -17,12 +17,12 @@ import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.handtruck.HandTruckLoad;
+import dev.wareworks.content.handtruck.HandTruckPallet;
 import dev.wareworks.content.handtruck.HandTruckSpill;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseStationBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.core.inventory.InventorySnapshot;
-import dev.wareworks.registry.WareworksDataComponents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.SectionPos;
@@ -338,9 +338,8 @@ final class SceneItemCensus {
     private static void add(Map<ItemKey, Long> counts, ItemStack stack, long copies) {
         if (stack.isEmpty() || copies == 0)
             return;
-        HandTruckLoad load = HandTruckItem.load(stack);
-        if (load != null) {
-            addLoadedTruck(counts, stack, load, copies);
+        if (HandTruckItem.isLoaded(stack)) {
+            addLoadedTruck(counts, stack, copies);
             return;
         }
         if (!PackageItem.isPackage(stack)) {
@@ -352,13 +351,20 @@ final class SceneItemCensus {
                 .forEach(held -> add(counts, held, copies * held.getCount()));
     }
 
-    /** A loaded hand truck: the empty truck plus the carried container's contents (class comment). */
-    private static void addLoadedTruck(Map<ItemKey, Long> counts, ItemStack truck, HandTruckLoad load, long copies) {
-        ItemStack empty = truck.copy();
-        empty.remove(WareworksDataComponents.HAND_TRUCK_LOAD.get());
-        put(counts, ItemKey.of(empty), copies);
-        for (ItemStack held : HandTruckSpill.contents(load, ServerLifecycleHooks.getCurrentServer().registryAccess()))
-            add(counts, held, copies * held.getCount());
+    /**
+     * A loaded hand truck: the empty truck plus the carried container's contents (class comment), or plus the carried
+     * pallet's item times its count (ADR-084), as a {@link PalletEntity} counts.
+     */
+    private static void addLoadedTruck(Map<ItemKey, Long> counts, ItemStack truck, long copies) {
+        put(counts, ItemKey.of(HandTruckItem.emptied(truck)), copies);
+        HandTruckLoad load = HandTruckItem.load(truck);
+        if (load != null)
+            for (ItemStack held : HandTruckSpill.contents(load,
+                    ServerLifecycleHooks.getCurrentServer().registryAccess()))
+                add(counts, held, copies * held.getCount());
+        HandTruckPallet pallet = HandTruckItem.palletLoad(truck);
+        if (pallet != null)
+            add(counts, pallet.item(), copies * pallet.count());
     }
 
     /** Counts {@code amount} items of {@code key}, a package or a loaded hand truck again as its contents. */

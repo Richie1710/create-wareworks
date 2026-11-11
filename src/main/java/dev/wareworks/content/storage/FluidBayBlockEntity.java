@@ -122,7 +122,7 @@ import net.neoforged.neoforge.items.IItemHandler;
  * ({@link FluidBayBlock#attack}).
  */
 public class FluidBayBlockEntity extends SmartBlockEntity
-        implements StorageMember, Clearable, IHaveGoggleInformation, GoggleObservers.Observable {
+        implements StorageMember, Clearable, IHaveGoggleInformation, GoggleObservers.Observable, TierChangeable {
     /** Client-packet key of the aisle assignment: the address, "misaligned" or "not part of an aisle". */
     public static final String ASSIGNMENT_TAG = "AisleAssignment";
     /** Client-packet key of this bay's reservations; absent while nothing is reserved, as at a rack bay. */
@@ -156,6 +156,11 @@ public class FluidBayBlockEntity extends SmartBlockEntity
     private AisleAssignment assignment = AisleAssignment.NONE;
     /** What is reserved at this bay as of the last goggle observation (server) or sync (client). */
     private LocationReservationSummary reservations = LocationReservationSummary.NONE;
+    /**
+     * Set only while an upgrade kit swaps this bay's block for the next tier ({@link TierChangeable}, ADR-083). Never
+     * saved: the tier is the block id.
+     */
+    private boolean changingTier;
 
     public FluidBayBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -629,19 +634,42 @@ public class FluidBayBlockEntity extends SmartBlockEntity
      * misaligned, so the rack position has to be probed again, while a changed {@link TieredBay#OVERLOADED} leaves the
      * same location with a flipped answer to "may I store here", which is exactly what a store filter change is. A
      * changed fill level matches neither and notifies nothing.
+     * <p>
+     * A changed <b>tier</b> is an upgrade kit keeping this very block entity (ADR-083): the capacity moved, so the
+     * controllers re-read this location as after a content change; see {@code RackBayBlockEntity#setBlockState}.
      */
     @SuppressWarnings("deprecation")
     @Override
     public void setBlockState(BlockState state) {
+        FluidBayTier oldTier = tier();
         Direction oldFacing = facing();
         boolean wasOverloaded = overloaded();
         super.setBlockState(state);
         if (!(level instanceof ServerLevel))
             return;
-        if (facing() != oldFacing)
+        if (facing() != oldFacing) {
             onMembershipRelevantChange();
-        else if (overloaded() != wasOverloaded && !isRemoved())
+            return;
+        }
+        if (overloaded() != wasOverloaded && !isRemoved())
             WarehouseRegistry.filterChanged(level, worldPosition);
+        if (tier() != oldTier && !isRemoved())
+            WarehouseRegistry.contentChanged(level, worldPosition); // upgrade kit: the capacity changed
+    }
+
+    @Override
+    public boolean isChangingTier() {
+        return changingTier;
+    }
+
+    @Override
+    public void beginTierChange() {
+        changingTier = true;
+    }
+
+    @Override
+    public void endTierChange() {
+        changingTier = false;
     }
 
     @Override

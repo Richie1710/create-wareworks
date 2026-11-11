@@ -106,19 +106,37 @@ public final class BayColumn {
      * every bay below is compared, not just the first.
      */
     public static boolean accepts(BlockGetter level, BlockPos pos, TieredBay bay) {
+        return carriesEverythingAbove(level, pos, bay) && carriedByEverythingBelow(level, pos, bay);
+    }
+
+    /**
+     * The upward half of {@link #accepts}: whether a bay of {@code bay}'s kind at {@code pos} carries every bay of its
+     * family above it, up to the first block that is not one.
+     */
+    public static boolean carriesEverythingAbove(BlockGetter level, BlockPos pos, TieredBay bay) {
         BayFamily family = bay.bayFamily();
         BlockPos.MutableBlockPos cursor = pos.mutable();
         while (true) {
             cursor.move(Direction.UP);
             if (level.isOutsideBuildHeight(cursor))
-                break;
+                return true;
             TieredBay above = sameFamilyBay(level.getBlockState(cursor), family);
             if (above == null)
-                break; // the column ends here: a gap, another block, or a bay of the other family, is two racks
+                return true; // the column ends here: a gap, another block, or a bay of the other family, is two racks
             if (!bay.mayCarry(above))
                 return false;
         }
-        cursor.set(pos);
+    }
+
+    /**
+     * The downward half of {@link #accepts}: whether every bay of {@code bay}'s family below {@code pos}, down to the
+     * first block that is not one, carries a bay of {@code bay}'s kind. It is also the <b>whole</b> question an upgrade
+     * kit asks (ADR-083): an upgrade only raises a bay's strength and "may carry" is monotone, so the bays above can
+     * never refuse it, and only a weaker bay below can.
+     */
+    public static boolean carriedByEverythingBelow(BlockGetter level, BlockPos pos, TieredBay bay) {
+        BayFamily family = bay.bayFamily();
+        BlockPos.MutableBlockPos cursor = pos.mutable();
         while (true) {
             cursor.move(Direction.DOWN);
             if (level.isOutsideBuildHeight(cursor))

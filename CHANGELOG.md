@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Upgrade kits for rack and fluid bays.** The Andesite Rack Upgrade Kit turns a Wooden Rack Bay into an Andesite one
+  where it stands, the Brass Rack Upgrade Kit an Andesite Rack Bay into a Brass one, and the Brass Fluid Bay Upgrade Kit
+  a Copper Fluid Bay into a Brass one. Right-click the bay with the kit: the goods or the fluid, the filter, the priority
+  and its place in the warehouse all stay, and nothing has to be emptied or sorted back in. A kit fits only the tier it
+  starts from, so wood to brass takes two kits, and there is no downgrade. Upgrade a column from the bottom up: a bay
+  may still carry nothing stronger above it, so the kit is refused on a bay that would then be stronger than a bay
+  below it. A Deployer can use the kits too. Each kit is crafted from the material the next tier adds.
+- **The hand truck carries pallets.** Right-click the pallet a broken rack bay left behind with an empty hand truck and
+  the whole pallet goes onto it, up to the 65 536 items of a full brass bay. It is carried like a chest: you walk
+  slowly, cannot sprint or glide, and the truck stays in your inventory. Right-click the ground to set the pallet down
+  again, or right-click an empty Rack Bay that holds all of it (and whose filter takes the item) to put the whole load in
+  at once. A bay that already holds something, is too small, or is about to receive goods from a crane refuses with a
+  line over the hotbar. A player who dies with a pallet on the truck leaves the pallet where they died. Pallets still
+  never despawn.
+
+### Changed
+
+- **The hand truck's description** says that it carries pallets as well, and the Wooden and Andesite Rack Bay and the
+  Copper Fluid Bay descriptions name the kit that upgrades them.
+- **Ponder:** "Building a Rack Wall" ends with a filled column upgraded from the bottom up and is the scene of both rack
+  kits; "Carrying Containers with the Hand Truck" ends with a pallet lifted onto the truck.
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because of the three new items and the pallet on the hand truck. Worlds load unchanged. Set
+  carried pallets down before going back to an older version: it cannot read a hand truck with a pallet and drops it
+  from the inventory, pallet and all.
+
+### Fixed
+
+- A loaded hand truck right-clicked on a filter slot of a storage location or an output became that slot's filter;
+  the click now goes to the truck, which sets its container down.
+
 ## [0.22.0-beta] - 2026-11-09
 
 ### Added

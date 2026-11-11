@@ -122,7 +122,7 @@ final class HandTruckPlacement {
      * truck (the test {@code CommonHooks#onPlaceItemIntoWorld} makes), spawn protection and the world border, and the
      * player's own build check.
      */
-    private static boolean mayPlace(ServerPlayer player, ServerLevel level, BlockPos pos, BlockPos clicked,
+    static boolean mayPlace(ServerPlayer player, ServerLevel level, BlockPos pos, BlockPos clicked,
             Direction face, ItemStack truck) {
         if (!player.getAbilities().mayBuild) {
             AdventureModePredicate canPlaceOn = truck.get(DataComponents.CAN_PLACE_ON);

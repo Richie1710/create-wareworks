@@ -1,7 +1,8 @@
 # Hand Truck (Sackkarre)
 
 > Issue [#37](https://github.com/Richie1710/create-wareworks/issues/37). Decision and reasons: **ADR-070** in
-> [architecture.md](architecture.md). Not a part of the warehouse: a tool for moving a full container by hand.
+> [architecture.md](architecture.md); pallets on the truck: **ADR-084**. Not a part of the warehouse: a tool for moving
+> a full container, or a pallet, by hand.
 
 ## 1. Use
 
@@ -16,9 +17,18 @@
   chest. Set down next to a single chest of the same facing, a chest joins it as a placed chest would.
 * The loaded truck is called "Hand Truck with &lt;container&gt;" and its tooltip names how many stacks are inside (or
   "Unopened loot"). It shows the container on its nose plate in the hand, in third person and as an icon.
+* **Pallets (ADR-084):** right-click the pallet a broken rack bay left behind with an **empty** truck: the whole pallet
+  goes onto it, whatever it carries (up to the 65 536 items of a full brass bay, and more under a larger bay config).
+  The truck is then called "Hand Truck with a Pallet of &lt;item&gt;", its tooltip says how many items are on it, and it
+  shows the pallet with its item on the nose plate. Right-click a surface to set the pallet down again, turned towards
+  you, or right-click an **empty Rack Bay** to put the whole load in at once. The bay must hold nothing, no crane may be
+  bringing goods to it, its filter must take the item and it must hold the whole count; otherwise it refuses with a line
+  over the hotbar and nothing changes. A pallet never tops a bay up and never goes into a fluid bay. Everything below
+  holds for a pallet truck exactly as for a chest truck.
 
-Recipe (shaped): a shaft over andesite alloy over a cogwheel, an iron sheet and a cogwheel. Creative tab: last, after
-the Warehouse Home Point. Ponder: `hand_truck/carrying` (load, walk slowly, set down).
+Recipe (shaped): a shaft over andesite alloy over a cogwheel, an iron sheet and a cogwheel. Creative tab: after the
+three bay upgrade kits, before the Warehouse Remote. Ponder: `hand_truck/carrying` (load, walk slowly, set down; then
+a pallet lifted whole, and where it may go).
 
 ## 2. What can be carried
 
@@ -56,13 +66,21 @@ This is what keeps every item where it belongs and keeps a full chest out of oth
 | A shulker box, a bundle, a backpack that follows the convention | refused (`canFitInsideContainerItems`) |
 | The drop key | refused, "Set it down with Right-Click" |
 | Throwing it out of an open screen | it comes back into your inventory; with a full inventory it tips over |
-| Right-clicking an entity (item frame, armour stand, donkey, villager) | nothing happens |
-| A second empty truck on a container while one is loaded | refused, "You are already carrying a loaded hand truck" |
-| Dying (without `keepInventory`) | it tips over: the contents, the container as an item (with its name or unopened loot) and the empty truck |
+| Right-clicking an entity (item frame, armour stand, donkey, villager) | nothing happens; on a pallet, "You are already carrying a loaded hand truck" |
+| A second empty truck on a container or a pallet while one is loaded | refused, "You are already carrying a loaded hand truck" |
+| Dying (without `keepInventory`) | it tips over: the contents, the container as an item (with its name or unopened loot) and the empty truck; a carried pallet is set down as a pallet where you died, and only the empty truck drops |
 | Dying or leaving the game with it on the cursor of an open screen | it tips over where you stand, the same way |
 
-A loaded truck that becomes an item entity anyway tips over on its first tick, before any hopper or funnel can see it.
-A Deployer or any other fake player cannot load a truck.
+A loaded truck that becomes an item entity anyway tips over on its first tick, before any hopper or funnel can see it
+(a pallet truck leaves a pallet and the empty truck). A Deployer or any other fake player cannot load a truck, lift a
+pallet or set one down.
+
+Lifting a pallet needs the right to build where it lies: adventure mode, spawn protection and protection mods that
+cancel the entity click (at their usual priority; the truck listens at `LOW`) refuse it. Setting it down needs the same
+right as setting a container down: the block place event is posted for the position the pallet lands on, so a claim
+there refuses it even when the clicked block lies outside the claim, and a protection mod that refuses the pallet
+entity joining the level leaves the truck loaded too. A pallet carried through a portal or on a horse
+behaves like a carried chest.
 
 Setting a container down checks the load again: a creative client can send a truck with any data, so the carried block
 must still be carriable by tag, its block entity a vanilla `Container`, and data only an operator may set (a command
@@ -79,7 +97,7 @@ break.
 | `speedMultiplier` | 0.5 | 0.1–1.0 | walking speed while loaded, as a fraction of the normal walk; 1.0 switches it off |
 | `preventSprinting` | true | | no sprint while loaded |
 | `preventElytra` | true | | no gliding while loaded |
-| `maxLoadKiB` | 512 | 16–1024 | largest save data one carried container may have; a fuller one is refused with "Too much inside to carry" |
+| `maxLoadKiB` | 512 | 16–1024 | largest save data one carried container may have; a fuller one is refused with "Too much inside to carry". For a pallet only the item's own data counts (a renamed or written item), never the count |
 
 ## 6. Limits
 
@@ -87,4 +105,6 @@ break.
   it is then simply stored as an item.
 * If the mod of a carried block is removed, the load is lost, as that mod's chunks would be.
 * `Block#setPlacedBy` is not called when a container is set down.
+* **Going back to an older version:** 0.22.0 and earlier cannot read a hand truck that carries a pallet and drop it
+  from the inventory, pallet and all. Set carried pallets down before downgrading.
 * A modded chest without an item renderer shows nothing on the truck (cosmetic only).

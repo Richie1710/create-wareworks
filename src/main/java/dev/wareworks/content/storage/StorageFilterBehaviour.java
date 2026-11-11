@@ -12,6 +12,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsBoard;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsFormatter;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
+import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
@@ -272,7 +273,20 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
     @Override
     public boolean mayInteract(Player player) {
         return !(player instanceof FakePlayer) && !AllBlocks.MECHANICAL_ARM.isIn(player.getMainHandItem())
-                && super.mayInteract(player);
+                && !passesThrough(player.getMainHandItem()) && super.mayInteract(player);
+    }
+
+    /**
+     * Held items that are never a filter here, however the click lands, and whose own click on the block must win
+     * (ADR-083): an <b>upgrade kit</b> on a bay — the slot sits in the centre of the aisle face, exactly where a player
+     * clicks to upgrade the bay — and a <b>loaded hand truck</b> anywhere, which used to become the slot's ghost
+     * filter with its whole load in its components. A kit on a warehouse interface is still a valid filter item, so
+     * that exclusion asks for a bay. Asked by both {@link #mayInteract} and {@link #bypassesInput}, so Create's input
+     * handler, its renderer and {@link StorageFilterClicks} all let the click through to the item.
+     */
+    private boolean passesThrough(ItemStack held) {
+        return HandTruckItem.isLoaded(held)
+                || held.getItem() instanceof BayUpgradeKitItem && blockEntity instanceof TierChangeable;
     }
 
     /**
@@ -283,7 +297,8 @@ public class StorageFilterBehaviour extends FilteringBehaviour {
      */
     @Override
     public boolean bypassesInput(ItemStack mainhandItem) {
-        return AllBlocks.MECHANICAL_ARM.isIn(mainhandItem) || super.bypassesInput(mainhandItem);
+        return AllBlocks.MECHANICAL_ARM.isIn(mainhandItem) || passesThrough(mainhandItem)
+                || super.bypassesInput(mainhandItem);
     }
 
     /**

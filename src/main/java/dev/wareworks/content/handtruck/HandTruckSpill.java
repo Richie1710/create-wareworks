@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.crane.head.TransferContexts;
+import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.registry.WareworksDataComponents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -30,14 +32,20 @@ import net.minecraft.world.phys.Vec3;
  * {@code container_loot} component instead, which rolls the loot the first time it is opened after being placed — a
  * table and a seed, never stored items. The block item gets the custom name back as well, and never vanilla's
  * {@code container} or {@code block_entity_data}, which would make it a placeable full chest.
+ * <p>
+ * <b>A carried pallet</b> (ADR-084) does not tip over into stacks: it is set down as one {@link PalletEntity} where the
+ * truck tipped over ({@link #setPalletDown}), exactly as a broken bay leaves its load, and only the empty truck lies
+ * beside it. Should the level refuse the pallet, the load is spilled as item entities, loudly, as
+ * {@code RackBayBlockEntity#destroy} does.
  */
 public final class HandTruckSpill {
     private HandTruckSpill() {
     }
 
     /**
-     * Every stack a loaded truck turns into: contents, block item, empty truck. For anything that is not a loaded truck,
-     * just a copy of it.
+     * Every stack a truck carrying a container turns into: contents, block item, empty truck. For anything that is
+     * not such a truck, just a copy of it. Never asked for a truck that still carries a pallet: {@link #setPalletDown}
+     * takes the pallet off first.
      */
     public static List<ItemStack> stacks(ItemStack truck, HolderLookup.Provider registries) {
         HandTruckLoad load = HandTruckItem.load(truck);
@@ -66,9 +74,7 @@ public final class HandTruckSpill {
                         randomizable.getLootTableSeed()));
             stacks.add(block);
         }
-        ItemStack empty = truck.copy();
-        empty.remove(WareworksDataComponents.HAND_TRUCK_LOAD.get());
-        stacks.add(empty);
+        stacks.add(HandTruckItem.emptied(truck));
         return stacks;
     }
 
@@ -82,13 +88,37 @@ public final class HandTruckSpill {
         return contents;
     }
 
-    /** Tips {@code truck} over at {@code position}: every stack of {@link #stacks} as an item entity there. */
+    /**
+     * Tips {@code truck} over at {@code position}: a carried pallet as a pallet ({@link #setPalletDown}), and every
+     * stack of {@link #stacks} as an item entity there.
+     */
     public static void spillInto(Level level, Vec3 position, ItemStack truck) {
-        for (ItemStack stack : stacks(truck, level.registryAccess())) {
+        ItemStack rest = setPalletDown(level, position, truck);
+        for (ItemStack stack : stacks(rest, level.registryAccess())) {
             ItemEntity entity = new ItemEntity(level, position.x, position.y, position.z, stack);
             entity.setDefaultPickUpDelay();
             level.addFreshEntity(entity);
         }
+    }
+
+    /**
+     * Sets a truck's carried pallet down at {@code position} as a {@link PalletEntity} with the whole count, and answers
+     * the truck without it (the same stack for a truck that carries no pallet). A pallet the level refuses is spilled
+     * as item entities with a warning, so nothing is lost either way: an item is always in exactly one place.
+     */
+    public static ItemStack setPalletDown(Level level, Vec3 position, ItemStack truck) {
+        HandTruckPallet pallet = HandTruckItem.palletLoad(truck);
+        if (pallet == null)
+            return truck;
+        ItemStack rest = truck.copy();
+        rest.remove(WareworksDataComponents.HAND_TRUCK_PALLET.get());
+        BlockPos pos = BlockPos.containing(position);
+        if (!PalletEntity.spawn(level, pos, pallet.item(), pallet.count())) {
+            Wareworks.LOGGER.warn("A pallet for {} x {} off a hand truck at {} was refused by the level; the load is "
+                    + "spilled as item entities instead", pallet.count(), pallet.item(), pos);
+            TransferContexts.spillAt(level, pos, pallet.item().toStack(pallet.count()));
+        }
+        return rest;
     }
 
     /**

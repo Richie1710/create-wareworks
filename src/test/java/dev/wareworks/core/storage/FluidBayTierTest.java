@@ -2,6 +2,7 @@ package dev.wareworks.core.storage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -224,5 +225,27 @@ class FluidBayTierTest {
         assertEquals(0, FluidBayTier.wholeContainers(BUCKET, -1));
         assertEquals(Integer.MAX_VALUE, FluidBayTier.wholeContainers(1, Long.MAX_VALUE),
                 "an absurd room is clamped into the int range rather than wrapping");
+    }
+
+    // --- one step up (ADR-083) -------------------------------------------------------------------------------------
+
+    /** {@code next} walks the ladder one step at a time and stops at the top; {@code ofStrength} inverts it. */
+    @Test
+    void nextAndOfStrengthWalkTheLadder() {
+        for (FluidBayTier tier : FluidBayTier.values()) {
+            assertEquals(tier, FluidBayTier.ofStrength(tier.strength()), "ofStrength inverts strength for " + tier);
+            FluidBayTier next = tier.next();
+            if (next == null) {
+                assertEquals(FluidBayTier.BRASS, tier, "only the top tier has no next one");
+                continue;
+            }
+            assertEquals(tier.strength() + 1, next.strength(), "one step up from " + tier);
+            assertTrue(next.isStrongerThan(tier), next + " is stronger than " + tier);
+        }
+        assertEquals(FluidBayTier.BRASS, FluidBayTier.COPPER.next(), "the ladder ends at brass");
+        assertNull(FluidBayTier.BRASS.next());
+        assertNull(FluidBayTier.ofStrength(-1));
+        assertNull(FluidBayTier.ofStrength(FluidBayTier.values().length));
+        assertNull(FluidBayTier.ofStrength(Integer.MAX_VALUE));
     }
 }

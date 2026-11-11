@@ -289,6 +289,23 @@ public final class WareworksLang {
      */
     public static final String FLUID_BAY_COLUMN_REFUSED = "message.fluid_bay_column_refused";
     /**
+     * Action bar text for an upgrade kit used on a bay it does not fit (ADR-083): another family, or another tier than
+     * the one it starts from. The argument is the name of the bay it does fit, so the line says what to click instead;
+     * the line has no article before it ("a Andesite Rack Bay"), in either language.
+     */
+    public static final String BAY_UPGRADE_FITS = "message.bay_upgrade_fits";
+    /**
+     * Action bar text for an upgrade kit the column rule refuses (ADR-083): a bay below would then carry a stronger
+     * one, so a column is upgraded from the bottom up. One sentence for both families, because it names no material;
+     * so the German line says "Lagerplatz", never "Fach", which is a rack bay only.
+     */
+    public static final String BAY_UPGRADE_COLUMN = "message.bay_upgrade_column";
+    /**
+     * Action bar text for an upgrade kit used where the player may not change blocks (ADR-083); for both families, so
+     * the German line says "Lagerplatz", as {@link #BAY_UPGRADE_COLUMN} does.
+     */
+    public static final String BAY_UPGRADE_NOT_ALLOWED = "message.bay_upgrade_not_allowed";
+    /**
      * Action bar text for a naming click on a rack bay (M28, issue #20): a bay does <b>not</b> name an aisle, and a
      * player who learned the gesture on a warehouse interface will try it here.
      * <p>
@@ -1829,6 +1846,20 @@ public final class WareworksLang {
     public static final String HAND_TRUCK_DROP_REFUSED = "hand_truck.drop_refused";
     /** Action bar: a loaded truck put into a foreign slot or thrown out went back into the inventory. */
     public static final String HAND_TRUCK_STAYS_WITH_YOU = "hand_truck.stays_with_you";
+    /** {@code "Hand Truck with a Pallet of %1$s"}: the name of a truck carrying a pallet, with the item's name (ADR-084). */
+    public static final String HAND_TRUCK_LOADED_PALLET = "hand_truck.loaded_pallet";
+    /** {@code "%1$s items on the pallet"}: tooltip line of a truck carrying a pallet. */
+    public static final String HAND_TRUCK_CARRYING_PALLET = "hand_truck.carrying_pallet";
+    /** Action bar: a pallet was offered to a rack bay that already holds something. */
+    public static final String HAND_TRUCK_BAY_NOT_EMPTY = "hand_truck.bay_not_empty";
+    /** Action bar: a pallet was offered to a rack bay a crane is bringing goods to. */
+    public static final String HAND_TRUCK_BAY_INCOMING = "hand_truck.bay_incoming";
+    /** Action bar: {@code "This rack bay's filter does not take %1$s"}. */
+    public static final String HAND_TRUCK_BAY_FILTERED = "hand_truck.bay_filtered";
+    /** Action bar: {@code "This rack bay holds %1$s of these, the pallet carries %2$s"}. */
+    public static final String HAND_TRUCK_BAY_TOO_SMALL = "hand_truck.bay_too_small";
+    /** Action bar: a pallet was offered to a fluid bay. */
+    public static final String HAND_TRUCK_BAY_WRONG_KIND = "hand_truck.bay_wrong_kind";
 
     // --- warehouse remote (issue #44, ADR-077) -----------------------------------------------------------------------
 

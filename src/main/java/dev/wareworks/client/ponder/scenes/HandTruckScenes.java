@@ -3,7 +3,11 @@ package dev.wareworks.client.ponder.scenes;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.content.handtruck.HandTruckLoad;
+import dev.wareworks.content.handtruck.HandTruckPallet;
+import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.registry.WareworksDataComponents;
+import dev.wareworks.registry.WareworksEntityTypes;
 import dev.wareworks.registry.WareworksItems;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
@@ -16,10 +20,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Rotations;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -27,12 +34,14 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Ponder scene of the hand truck (issue #37, ADR-070): load a chest with everything in it, walk slowly, set it down.
+ * Ponder scene of the hand truck (issue #37, ADR-070): load a chest with everything in it, walk slowly, set it down;
+ * then lift a pallet whole (ADR-084).
  * <p>
  * A {@code PonderLevel} has no player, so the one who pushes the truck is an <b>armour stand</b> holding it, moved a
  * little every tick; the chest on the truck is drawn by the truck's own item renderer, exactly as a player sees it in
  * hand. The loaded truck the scene shows carries an empty chest: the renderer only reads the carried block, and a
- * storyboard has no level to save a block entity in.
+ * storyboard has no level to save a block entity in. The pallet is built as {@code RackBayScenes} builds one
+ * ({@link PalletEntity#showClientLoad}), and the pallet truck's component inside the entity callback, at run time.
  * <p>
  * Storyboards stay level-free (they also run during lang datagen), so every stack is built inside the storyboard and
  * the armour stand inside its factory. The order of the {@code .text(...)} calls defines the {@code text_n} keys.
@@ -53,6 +62,8 @@ public final class HandTruckScenes {
     private static final float FACING_EAST = -90.0F;
     /** The right arm held forward and a little down, as if pushing the truck's handle. */
     private static final Rotations PUSHING_ARM = new Rotations(-50.0F, 0.0F, 0.0F);
+    /** The pallet the truck lifts at the end: a full wooden bay of cobblestone. */
+    private static final int PALLET_LOAD = 4_096;
 
     private HandTruckScenes() {
     }
@@ -161,6 +172,55 @@ public final class HandTruckScenes {
                 .placeNearTarget()
                 .pointAt(util.vector().topOf(to));
         scene.idle(TEXT_IDLE);
+
+        // --- a pallet (ADR-084) --------------------------------------------------------------------------------------
+        BlockPos palletPos = util.grid().at(2, FLOOR_Y, 2);
+        Vec3 onThePallet = util.vector().of(palletPos.getX() + 0.5, palletPos.getY() + 0.2, palletPos.getZ() + 0.5);
+        ElementLink<EntityElement> pallet = scene.world().createEntity(level -> pallet(level, palletPos));
+        scene.idle(FADE_IDLE);
+        scene.overlay().showControls(onThePallet, Pointing.DOWN, CONTROL_TICKS)
+                .rightClick()
+                .withItem(empty);
+        scene.idle(CONTROL_LEAD);
+        scene.world().modifyEntity(pallet, Entity::discard);
+        scene.world().modifyEntity(pusher, entity -> {
+            if (entity instanceof ArmorStand stand)
+                stand.setItemSlot(EquipmentSlot.MAINHAND, palletTruck(empty));
+        });
+        scene.overlay().showText(TEXT_TICKS)
+                .text("An empty truck lifts a whole Pallet too, with everything on it")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(onThePallet);
+        scene.idle(TEXT_IDLE);
+
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Right-Click the ground to set it down, or an empty Rack Bay that holds it all to put the whole "
+                        + "load in")
+                .placeNearTarget()
+                .pointAt(util.vector().of(to.getX() + 0.5, to.getY() + 1.2, PUSHER_Z));
+        scene.idle(TEXT_IDLE);
+    }
+
+    /**
+     * A pallet of {@value #PALLET_LOAD} cobblestone standing on the bottom of {@code pos}, built as
+     * {@code RackBayScenes} builds one: {@link PalletEntity#showClientLoad} stands in for a server's sync.
+     */
+    private static Entity pallet(Level level, BlockPos pos) {
+        PalletEntity pallet = WareworksEntityTypes.PALLET.create(level);
+        if (pallet == null)
+            throw new IllegalStateException("the pallet entity type refused to create an entity");
+        pallet.moveTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, 0.0F, 0.0F);
+        pallet.showClientLoad(ItemKey.of(Items.COBBLESTONE), PALLET_LOAD);
+        return pallet;
+    }
+
+    /** {@code empty} carrying that pallet; built at run time, in the entity callback, never in the storyboard. */
+    private static ItemStack palletTruck(ItemStack empty) {
+        ItemStack truck = empty.copy();
+        truck.set(WareworksDataComponents.HAND_TRUCK_PALLET.get(),
+                new HandTruckPallet(ItemKey.of(Items.COBBLESTONE), PALLET_LOAD));
+        return truck;
     }
 
     /** Puts a copy of {@code truck} into the armour stand's main hand. */

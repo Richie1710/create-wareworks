@@ -10,6 +10,7 @@ import com.simibubi.create.foundation.item.render.PartialItemModelRenderer;
 
 import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.handtruck.HandTruckLoad;
+import dev.wareworks.content.handtruck.HandTruckPallet;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.core.Direction;
@@ -23,7 +24,8 @@ import net.neoforged.neoforge.client.model.data.ModelData;
 
 /**
  * Draws the hand truck (issue #37, ADR-070): the hand-made model {@code models/item/hand_truck/item.json} and, when the
- * truck is loaded, the carried container standing on its nose plate.
+ * truck is loaded, the carried container standing on its nose plate, or the carried pallet with its item on it, drawn
+ * by {@link PalletLook} exactly as a pallet lying in the world (ADR-084; no count label, the name and tooltip say it).
  * <p>
  * The container is drawn with {@code BlockRenderDispatcher#renderSingleBlock}, the same call a falling block or an
  * enderman's carried block uses: a block with a baked model (a barrel) is drawn from that model, and a chest — whose
@@ -58,6 +60,16 @@ public class HandTruckItemRenderer extends CustomRenderedItemModelRenderer {
     protected void render(ItemStack stack, CustomRenderedItemModel model, PartialItemModelRenderer renderer,
             ItemDisplayContext transformType, PoseStack ms, MultiBufferSource buffer, int light, int overlay) {
         renderer.render(model.getOriginalModel(), light);
+        HandTruckPallet pallet = HandTruckItem.palletLoad(stack);
+        if (pallet != null) {
+            ms.pushPose();
+            ms.translate(LOAD_X, LOAD_Y, LOAD_Z);
+            ms.scale(LOAD_SCALE, LOAD_SCALE, LOAD_SCALE);
+            PalletLook.drawDeck(ms, buffer, light);
+            PalletLook.drawLoad(pallet.item().toStack(), Minecraft.getInstance().level, ms, buffer, light);
+            ms.popPose();
+            return;
+        }
         HandTruckLoad load = HandTruckItem.load(stack);
         if (load == null)
             return;

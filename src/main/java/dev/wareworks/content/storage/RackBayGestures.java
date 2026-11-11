@@ -158,7 +158,9 @@ public final class RackBayGestures {
      * {@link #forcesBlockUse} hands it to the block. With it, what a player sees is the column rule's own refusal
      * ({@link WareworksLang#BAY_COLUMN_REFUSED}) or a placed bay. <b>Any</b> family since M30, because joining is
      * across them (ADR-050): a <b>fluid</b> bay clicked against a rack bay's side takes that bay's facing and shares
-     * its upright, so a rack bay that swallowed it would make a mixed wall unbuildable by hand.</li>
+     * its upright, so a rack bay that swallowed it would make a mixed wall unbuildable by hand;</li>
+     * <li>an <b>upgrade kit</b> (ADR-083) turns the bay into the next tier. Its own {@code onItemUseFirst} answers
+     * before this list is ever asked, so the entry only keeps the list honest.</li>
      * </ul>
      * A <b>renamed</b> item is not in this list, because a plain click with one is <i>answered</i> rather than passed
      * on: the aisle-naming gesture a player learned on an interface collides head-on with "a right-click puts the item
@@ -168,7 +170,8 @@ public final class RackBayGestures {
      */
     private static boolean actsOnTheBlock(ItemStack stack) {
         return stack.is(Tags.Items.TOOLS_WRENCH) || AllBlocks.CLIPBOARD.isIn(stack)
-                || AllBlocks.MECHANICAL_ARM.isIn(stack) || FluidBayGestures.isBay(stack);
+                || AllBlocks.MECHANICAL_ARM.isIn(stack) || FluidBayGestures.isBay(stack)
+                || stack.getItem() instanceof BayUpgradeKitItem;
     }
 
     /**

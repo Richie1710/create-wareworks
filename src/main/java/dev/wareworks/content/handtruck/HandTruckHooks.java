@@ -3,6 +3,7 @@ package dev.wareworks.content.handtruck;
 import java.util.ArrayList;
 import java.util.List;
 
+import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
@@ -26,13 +27,15 @@ import net.neoforged.neoforge.event.tick.PlayerTickEvent;
  * <ul>
  * <li>every menu a server player opens, and the player's own inventory menu, gets a {@link HandTruckSlotGuard};</li>
  * <li>a right-click on an entity with a loaded truck is cancelled — item frames, armour stands, allays, a donkey's
- * chest, villagers never receive it;</li>
+ * chest, villagers never receive it; on a pallet the player is told they already carry a load;</li>
+ * <li>a right-click on a pallet with an <b>empty</b> truck lifts the pallet onto it ({@link HandTruckPalletPickup},
+ * ADR-084), at {@code LOW} priority so that a protection mod's cancel has already happened;</li>
  * <li>a loaded truck thrown out of a screen is put back into the inventory; only with no room there does it tip over
  * ({@link HandTruckSpill});</li>
  * <li>a loaded truck that becomes an item entity anyway cannot be picked up, and tips over on its first tick
  * ({@link HandTruckItem#onEntityItemUpdate});</li>
- * <li>a player who dies drops the plain stacks instead of the loaded truck, before any gravestone mod sees the drops;
- * with {@code keepInventory} it simply stays loaded;</li>
+ * <li>a player who dies drops the plain stacks instead of the loaded truck, before any gravestone mod sees the drops
+ * (a carried pallet is set down as a pallet where they died); with {@code keepInventory} it simply stays loaded;</li>
  * <li>{@link HandTruckCarry#onPlayerTick} stops gliding and sprinting while carrying.</li>
  * </ul>
  */
@@ -45,6 +48,7 @@ public final class HandTruckHooks {
         gameBus.addListener(HandTruckHooks::onLoggedIn);
         gameBus.addListener(HandTruckHooks::onRespawn);
         gameBus.addListener(HandTruckHooks::onEntityInteract);
+        gameBus.addListener(EventPriority.LOW, HandTruckHooks::onPalletInteract);
         gameBus.addListener(HandTruckHooks::onEntityInteractSpecific);
         gameBus.addListener(HandTruckHooks::onToss);
         gameBus.addListener(HandTruckHooks::onEntityJoin);
@@ -72,7 +76,25 @@ public final class HandTruckHooks {
         if (HandTruckItem.isLoaded(event.getItemStack())) {
             event.setCanceled(true);
             event.setCancellationResult(InteractionResult.FAIL);
+            if (event.getTarget() instanceof PalletEntity && !event.getLevel().isClientSide)
+                HandTruckRules.tell(event.getEntity(), WareworksLang.HAND_TRUCK_ALREADY_LOADED);
         }
+    }
+
+    /**
+     * An empty truck clicked on a pallet lifts it ({@link HandTruckPalletPickup}). Anything but {@code PASS} cancels the
+     * event with that result, so the pallet's own click, which passes for a non-empty hand anyway, never follows.
+     */
+    private static void onPalletInteract(PlayerInteractEvent.EntityInteract event) {
+        ItemStack truck = event.getItemStack();
+        if (!(truck.getItem() instanceof HandTruckItem) || HandTruckItem.isLoaded(truck)
+                || !(event.getTarget() instanceof PalletEntity pallet))
+            return;
+        InteractionResult result = HandTruckPalletPickup.lift(event.getEntity(), truck, pallet);
+        if (result == InteractionResult.PASS)
+            return;
+        event.setCanceled(true);
+        event.setCancellationResult(result);
     }
 
     private static void onEntityInteractSpecific(PlayerInteractEvent.EntityInteractSpecific event) {
@@ -116,7 +138,11 @@ public final class HandTruckHooks {
             item.setNeverPickUp();
     }
 
-    /** A dead player's loaded trucks are dropped as the plain stacks they hold. */
+    /**
+     * A dead player's loaded trucks are dropped as the plain stacks they hold. A carried pallet is set down as a pallet
+     * into the level right here, before any gravestone mod sees the drops, which then hold only the empty truck
+     * ({@link HandTruckSpill#setPalletDown}).
+     */
     private static void onDrops(LivingDropsEvent event) {
         if (!(event.getEntity() instanceof Player player))
             return;
@@ -129,7 +155,8 @@ public final class HandTruckHooks {
             if (!HandTruckItem.isLoaded(drop.getItem()))
                 continue;
             replaced.add(drop);
-            for (ItemStack stack : HandTruckSpill.stacks(drop.getItem(), level.registryAccess())) {
+            ItemStack rest = HandTruckSpill.setPalletDown(level, drop.position(), drop.getItem());
+            for (ItemStack stack : HandTruckSpill.stacks(rest, level.registryAccess())) {
                 ItemEntity entity = new ItemEntity(level, drop.getX(), drop.getY(), drop.getZ(), stack);
                 entity.setDefaultPickUpDelay();
                 spilled.add(entity);

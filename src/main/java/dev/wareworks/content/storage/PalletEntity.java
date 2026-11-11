@@ -53,6 +53,12 @@ import net.neoforged.neoforge.items.wrapper.PlayerMainInvWrapper;
  * empty-hand right-click — and the difference is the whole point: a removal crate worth thirty-eight shulker boxes,
  * obtainable without ever visiting the End, is what the owner refused. Breaking a bay therefore <b>resets</b> it: an
  * empty bay block and a pallet on the floor, refilled by hand a stack at a time with the bay's own gesture.
+ * <p>
+ * <b>The one sanctioned way to move a whole pallet</b> (ADR-084, amending this): a player lifts it onto a hand truck
+ * ({@link #takeWholeLoad}), and the truck carries it under the rules of a carried chest — it never leaves that
+ * player's inventory, the player walks slowly — and sets it down again as a pallet, or puts it whole into an
+ * <b>empty</b> rack bay that holds all of it. There is still no item form: the truck's load is a component of the
+ * truck, which no container, machine or other entity ever receives.
  *
  * <h2>Why a plain {@link Entity} satisfies every "must survive" requirement</h2>
  * None of it costs an override, because this is not a {@code LivingEntity}:
@@ -197,6 +203,14 @@ public class PalletEntity extends Entity {
      * @return {@code false} when nothing was spawned and the caller still owns the load
      */
     public static boolean spawn(Level level, BlockPos pos, ItemKey key, int load) {
+        return spawn(level, pos, key, load, 0.0F);
+    }
+
+    /**
+     * {@link #spawn(Level, BlockPos, ItemKey, int)} turned to {@code yaw} degrees: a pallet a hand truck sets down
+     * faces the way the player pushed it (ADR-084). The same answer has to be checked.
+     */
+    public static boolean spawn(Level level, BlockPos pos, ItemKey key, int load, float yaw) {
         if (level == null || level.isClientSide || key == null || load <= 0)
             return false;
         PalletEntity pallet = WareworksEntityTypes.PALLET.create(level);
@@ -204,7 +218,7 @@ public class PalletEntity extends Entity {
             LOGGER.warn("Could not create a pallet for {} x {} at {}", load, key, pos);
             return false;
         }
-        pallet.moveTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, 0.0F, 0.0F);
+        pallet.moveTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, yaw, 0.0F);
         pallet.setLoad(key, load);
         return level.addFreshEntity(pallet);
     }
@@ -229,6 +243,26 @@ public class PalletEntity extends Entity {
     /** Server: takes up to {@code amount} items, at most one stack per call, and answers what was really taken. */
     public ItemStack extract(int amount, boolean simulate) {
         return takeLoad(amount, simulate);
+    }
+
+    /**
+     * Server: takes the <b>whole</b> load off in one go, for a hand truck lifting this pallet (ADR-084), and answers it
+     * as one stack whose count may be far above the item's maximum — the caller turns it into a key and a count at
+     * once and never hands it on as a stack. The contents are cleared before anything else can see them and the
+     * pallet discards itself, exactly as when a hand takes the last item off it.
+     *
+     * @return the whole load, or {@link ItemStack#EMPTY} on a client, for a pallet already on its way out, or for one
+     *         with nothing on it
+     */
+    public ItemStack takeWholeLoad() {
+        ItemKey key = contents.stored();
+        int count = contents.count();
+        if (level().isClientSide || isRemoved() || key == null || count <= 0)
+            return ItemStack.EMPTY;
+        contents.clear();
+        publishLoad();
+        discard();
+        return key.toStack(count);
     }
 
     /**

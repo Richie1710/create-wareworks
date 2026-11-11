@@ -6294,7 +6294,9 @@ very Create either way; today every face accepts items, for the reason above.
 **The column rule: a bay may carry nothing stronger above it.** Not merely in the block directly above — **anywhere**
 above it in its column, which is the physical reading, because the load ends up at the bottom. A column is an unbroken
 stack of bays: the first block that is not a bay ends it, so a gap is two racks. The rule is what makes upgrading a
-wall a rebuild from the bottom up, and therefore what makes the tiers a progression (ADR-044).
+wall a rebuild from the bottom up, and therefore what makes the tiers a progression (ADR-044). *Amended by ADR-083:*
+an upgrade kit makes a standing bay the next tier with its goods in it, so the wall is no longer rebuilt; it is still
+upgraded from the bottom up, because the kit asks the same rule (§3.8.2).
 
 * **Placing** a bay that would break it is **refused** in both directions — nothing stronger anywhere above, nothing
   weaker anywhere below — with one action-bar line, *"A rack bay may carry nothing stronger above it"*. Nothing is
@@ -6579,9 +6581,19 @@ ever visiting the End, and players would use bays as removal crates instead of b
 
 **It cannot be pocketed, and it cannot be put back as a filled bay.** There is **no item form and no spawn egg at
 all**, so both pick hooks are left at their defaults and the rule needs nothing maintained to stay true. It rides
-nothing and changes no dimension. You empty it by hand, a stack at a time, or you shove it across the floor — a pallet
-you push around a warehouse is the picture this feature is built on; a pallet in your pocket was the thing worth
-refusing.
+nothing and changes no dimension on its own. You empty it by hand, a stack at a time, or you shove it across the floor —
+a pallet you push around a warehouse is the picture this feature is built on; a pallet in your pocket was the thing
+worth refusing. *(Amended by ADR-084, 2026-11-09: a third way is the hand truck, next paragraph. It is still no item
+form and no filled bay item; on a truck the pallet goes where its player goes, through a portal too, as a carried chest
+does.)*
+
+**It can be carried whole on a hand truck** (ADR-084, amending this). An empty hand truck lifts the whole pallet
+(`PalletEntity#takeWholeLoad`) into a component of the truck, `hand_truck_pallet` (item key and an `int` count), and the
+truck carries it under a carried chest's rules: it never leaves its player's inventory, the player walks slowly, one
+load per player, no fake players. It comes off again as a pallet on the floor, or **whole into an empty rack bay**
+that holds the whole count and whose filter takes the item (no crane may be bringing goods to it); a bay that holds
+anything is refused, so a truck never tops a bay up. That is still no item form: no container, machine or other entity
+ever receives the truck's load, and machines still only take items off a pallet, never put any on.
 
 **What it survives, and why it costs no code.** Being a plain `Entity` rather than a `LivingEntity` *is* the answer:
 `Entity#hurt` has no health to reduce, so **no damage source can destroy it**; `Entity#lavaHurt` has its whole body
@@ -6742,6 +6754,33 @@ machine somewhere, and the one thing that is not is said out loud:
 | `docs/manual-test-checklist.md` **section AO** (234–236), and 232 | Whether a wall reads as racking **as it is built**, whether the fill level still carries the wall beyond ten blocks once the items are gone, whether the drawn item reads as a load rather than as something floating — and whether the store filter's 4 px value box still wins the click it shares its place with. No gate can answer any of the four. |
 
 
+#### 3.8.2 Upgrade kits: the next tier where the bay stands (ADR-083)
+
+A bay is upgraded **in place**, with everything in it: right-click it with the kit of its next tier and the block
+becomes that tier while the goods, the filter, the priority, its address and any job a crane has towards it stay
+exactly where they are. Nothing has to be emptied, broken or sorted back in.
+
+| Kit | Upgrades | Recipe |
+|---|---|---|
+| Andesite Rack Upgrade Kit | Wooden Rack Bay to Andesite | `ACA` / `ACA`: 4 andesite alloy, 2 andesite casings |
+| Brass Rack Upgrade Kit | Andesite Rack Bay to Brass | `BCB` / `BCB`: 4 brass sheets, 2 brass casings |
+| Brass Fluid Bay Upgrade Kit | Copper Fluid Bay to Brass | `BBB` / ` B ` / `BBB`: 7 brass sheets |
+
+* **One step per kit.** A kit fits only the tier it starts from of its own family; wood to brass takes two kits, and
+  there is no downgrade. Any other bay answers with the line "This kit only fits: ..." naming the bay it does fit.
+* **Bottom up.** The column rule still holds (ADR-044). An upgrade only makes a bay stronger, so the bays above it never
+  refuse; a bay **below** that would then carry something stronger does, with "Upgrade the bay below first". An
+  overloaded bay may be upgraded once the bays below carry the new tier, which is how a column a command broke is
+  repaired.
+* **Nothing moves.** The block changes and the block entity stays the same object (`BayUpgrades#swapInPlace`), so no
+  item leaves the bay: no pallet, no dropped filter, no lost fluid. The controller is told the capacity changed and
+  re-reads the location; the fill level follows the new capacity.
+* **Who may.** A player who may build there (spawn protection, claims through the block place event, adventure mode);
+  the kit is used up unless the player is creative. A **Deployer** may use kits too: an upgrade moves no item, and its
+  refusals are silent.
+* A click inside the bay's filter slot upgrades the bay; the kit never becomes the filter of a bay. On a warehouse
+  interface the kit is an ordinary item and may be its filter.
+
 ### 3.9 Fluid Bay (`content.storage`, M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
 
 > The three config keys are §9. The joint item-and-fluid conservation invariant is §8. Its ADRs are written with the
@@ -6848,6 +6887,12 @@ fluid has no drop form at all, and every alternative is worse than the loss (fil
 nothing, source blocks would mean 256 lava sources, and a filled bay item is the pocketable removal crate ADR-046
 refused). `Clearable` — `/setblock`, `/fill`, `/clone`, structure placement — empties a bay without placing or
 dropping anything, which is vanilla parity and Create's own Fluid Tank's behaviour.
+
+**Upgrading one therefore never breaks it** (ADR-083, §3.8.2). The Brass Fluid Bay Upgrade Kit, right-clicked on a
+Copper Fluid Bay, makes it brass where it stands with the fluid, the filter and the priority in it: the block changes,
+the block entity and its contents stay, and the column rule is asked downwards as for the rack bays. The fluid bay
+needs the kit more than any rack bay does, because the break that a rack bay survives with a pallet costs a fluid bay
+its whole contents. A pallet on a hand truck never goes into a fluid bay (ADR-084).
 
 #### 3.9.1 Hands, goggles and the break (M30 step 6)
 
@@ -8377,6 +8422,10 @@ both item censuses now count a package as its contents and the box as nothing �
 package door provable rather than merely plausible. That the overflow path is unchanged is a tested claim
 (`packagearrivaltakestheoverflow`).
 
+**A pallet on a hand truck (ADR-084) is the same carrier in a player's inventory**, and both censuses count the truck as
+the empty truck plus the pallet's item times its count — so lifting, carrying, putting it into a bay, setting it down
+and tipping over are all exactly conserving. An upgrade kit (ADR-083, §3.8.2) moves no item at all.
+
 **M28's pallet (§3.8.1) is a new *carrier*, not a fifth place either.** A pallet is the load of a broken rack bay
 lying in the world, so the items on it are "dropped in the world" — and **both item censuses count a pallet as its
 contents and the pallet itself as nothing**, exactly the move M26 made for a package. That sentence is the whole
@@ -8491,7 +8540,7 @@ the item census's "no block entity, skip" shortcut loses both cauldrons. GameTes
 | **A pallet in the void, or `/kill` (M28)** | The one allowed loss, conceded by the issue. `onBelowWorld` logs the item, the count and the position **before** it discards, so the loss leaves a record. |
 | **An unreadable item key or an impossible count on a pallet (M28)** | A key that cannot be decoded (its mod was removed) or a count at or below 0 **discards** the pallet — vanilla's own answer for an item entity whose stack it cannot read, and better than an unremovable husk. A count above `MAX_LOAD` (= `BayTier.MAX_CAPACITY_ITEMS`, the bay's own ceiling) is clamped and logged as the loss it is. GameTest `palletsurvivesanysavedata`. |
 | **A pallet drained by a machine or a hand (M28)** | Real `extractItem` results only, one stack per call, and **extract-only**: nothing can be put into a pallet, because the way into storage is a bay. A hand take is simulated against the player's own inventory first and takes only what fits. A vanilla hopper and a Create Deployer reach it; Create's belts, chutes, funnels, depots and ejectors do not (`ItemHelper.fromItemEntity`), which also means no Create block can delete or teleport one. GameTests `ahopperdrainsapalletandafunneldoesnot`, `pallethandgestures`. |
-| **Refilling a bay from a pallet (M28)** | Two independent real-result transfers through the player's hand. There is deliberately **no** one-move path: the pallet has no item form at all, so goods never move without being touched. GameTest `bayrefilledfromapalletbyhand`. |
+| **Refilling a bay from a pallet (M28)** | Two independent real-result transfers through the player's hand. There is deliberately **no** one-move path through the hand: the pallet has no item form at all, so goods never move without being touched. *(Amended by ADR-084, 2026-11-09: a hand truck carrying the pallet is the one sanctioned one-move path, and only into an **empty** rack bay that holds the whole count; it is one real insert of the whole load, never a top-up.)* GameTest `bayrefilledfromapalletbyhand`. |
 | **A schematic of a stocked warehouse (issue #25)** | Create prints a Wareworks block with its settings only (`BlockHelper#prepareBlockEntityData`, `PartialSafeNBT`): a printed bay, station, terminal or dock is **empty**, whatever the saved file holds, and Create's material list asks for the block alone. A print landing on a **standing** block (a block state differs; at the cannon only with *Replace Block Entities* on) leaves its goods, buffer, clipboard, order, patterns, handling head, a port's pulse token, counters and last refusal and a keeper's rules where they are: a station's runtime state is read only from a full save (`WarehouseStationBlockEntity#isFullSave`), everything else only from a tag that carries it. A keeper printed from an ordinary, client-side Schematic and Quill save has no rules, because the client never holds them; a print from it over a standing keeper keeps that keeper's rules. GameTests `warehouseblocksprinttheirsettingsandnevertheirgoods`, `storagelocationsprinttheirsettingsandnevertheirgoods`, `aprintoverastandingportkeepsitspulseanditscounters` (ADR-061). |
 | **A pallet inside a saved schematic (issue #25)** | Schematic and Quill saves it with its load, as it saves every entity; `PalletEntity#onlyOpCanSetNbt()` is true, so Create drops it from every schematic it loads with block data processed and no print can add a second one. An operator's creative print, which keeps every saved entity (blocks still get only their settings through `prepareBlockEntityData`), is the one exception, as `/place template` is for entities. GameTest `apalletnevertravelsinaschematic` (ADR-061). |
 | **Fluid bay broken with fluid in it (M30)** | The fluid is **lost**, and that is the one deliberate loss in this mod: a fluid has no drop form, so there is nothing a pallet could carry, and every alternative is worse (§3.9, D7). `destroy()` clears the contents **before** anything else can see them, exactly as a rack bay's does, and logs one `WARN` with the fluid, the millibuckets and the position — the only record a server owner gets. **Three places say so beforehand**: the item description, a gold goggle row while there is anything to lose, and an action-bar warning on the first punch; a sneaking **wrench** click gets that same line as the bay goes, which is as early as one click allows (§3.9.1). Nothing is placed in its stead, so the loss is exactly what was in the bay and no more. GameTests `breakingafullfluidbaylosesitsfluidandlogsit`, `breakingafluidbayincreative`. |
@@ -8587,7 +8636,9 @@ The table above is covered by automated tests. What only a running game can reac
     **storage priority**, which is what a schematic of a rack wall is for.
   * **A pallet cannot be picked up, carried or placed back as a filled bay.** You empty it by hand, a stack at a time,
     or you shove it across the floor. That is deliberate, and it is what keeps a brass bay from becoming a removal
-    crate worth thirty-eight shulker boxes.
+    crate worth thirty-eight shulker boxes. *(Amended by ADR-084, 2026-11-09: a pallet is carried whole only on a hand
+    truck, under a carried chest's penalties, and goes whole only into an empty rack bay that holds it all. There is
+    still no item form and no filled bay item.)*
   * **A full brass bay needs many terminal requests to empty.** `maxTerminalRequestAmount` defaults to 1 024 and the
     terminal's "everything" click is clamped by it too, so 65 536 items is 64 clicks — pre-existing (twenty chests of
     cobblestone already exceed it) and documented rather than changed inside M28, because that ceiling also bounds one
@@ -8685,7 +8736,7 @@ the **two cranes in flight** phase of the `robustness` scenario (§8.1).
 | `speedMultiplier` (section `handTruck`, issue #37) | 0.5 | how fast a player walks while a **loaded** hand truck is in their inventory, as a fraction of the normal walk, applied to the movement input like sneaking. An empty truck costs nothing; creative and spectator players are never slowed. 1.0 switches it off (`docs/hand-truck.md`, ADR-070) |
 | `preventSprinting` (`handTruck`) | true | a player carrying a loaded truck can neither start nor keep a sprint |
 | `preventElytra` (`handTruck`) | true | a player carrying a loaded truck cannot glide |
-| `maxLoadKiB` (`handTruck`) | 512 | the largest save data one carried container may have; a fuller one is refused with a message. Kept below the 2 MiB a network packet may carry |
+| `maxLoadKiB` (`handTruck`) | 512 | the largest save data one carried container may have; a fuller one is refused with a message. Kept below the 2 MiB a network packet may carry. For a carried pallet (ADR-084) only the item's own data counts (a renamed or written item), never the count, so a plain pallet of any size always fits |
 | `computerAccess` (section `computers`, issue #9) | true | whether CC: Tweaked computers may use a warehouse terminal as a peripheral (`wareworks_terminal`, §7.7, `docs/computercraft.md`). Off, every peripheral method answers with an error. Never read without CC: Tweaked |
 | `range` (section `remote`, issue #44) | 256 | how far a Warehouse Remote reaches its linked terminal, in blocks, from the player's eyes to the terminal block's centre (§3.4.7, ADR-077). Only within one dimension; set it very high for no limit. Checked when the screen opens and every tick while it is open. The terminal's chunk must be loaded and ticking all the same: a remote never loads one |
 | `crossDimension` (`remote`) | false | whether a remote may open a terminal in another dimension. The range is not measured then, because the coordinates of two dimensions are not comparable |

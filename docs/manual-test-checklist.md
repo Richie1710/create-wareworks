@@ -3998,3 +3998,53 @@ you get tired of waiting, and put it back before judging check 160.
 468. **An old world.** A world saved before this version with patterns: every pattern reads and makes exactly as
      before, and a filter that was an ingredient item there stays an item.
 469. **36 patterns.** A filter cell in pattern 36 of a station with 36 patterns: drawn and listed like in pattern 1.
+
+## BT. Rack and fluid bay upgrade kits (ADR-083)
+
+> `BayUpgradeGameTests` checks the server side (the same block entity, goods, filter and priority kept, the column
+> rule, wrong kits, a cancelled place event, adventure, the fluid kit, a real Deployer and a crane storing into and
+> delivering through an upgraded bay). What a person has to judge:
+
+470. **The look.** The three kits in the hand (first and third person), in the inventory and in an item frame: does each
+     read as a bundle of rack parts in the material of the tier it makes, and are the three told apart at a glance?
+471. **Recipes and JEI** (with `-Pwareworks.jei`). The three recipes show in JEI and in the recipe book once the bay a
+     kit upgrades has been held; no other mod's recipe in a usual pack shares a kit's grid.
+472. **The lines over the hotbar**, in English and German: a brass kit on a wooden bay ("This kit only fits:
+     Andesite Rack Bay"), the top of a wooden column ("Upgrade the bay below first"), a spawn-protected bay ("You may
+     not change this bay here"), and the top of a copper fluid column, whose German line says "Lagerplatz", not "Fach".
+     Is each clear without the docs?
+473. **A wall on a dedicated server.** Upgrade a filled wall bottom up while a second player watches it, both with
+     Engineer's Goggles: the goods and the fill level never flicker to empty, and the goggles name the new material and
+     the new capacity at once.
+474. **A Deployer sweep.** A Deployer holding andesite kits on a contraption driven along a wall of wooden bays: every
+     bay it reaches from the bottom row up is upgraded, a column top it reaches first is left as it is, and no kit is
+     lost.
+475. **A claim mod.** In a claimed area of another player the kit is refused with "You may not change this bay here",
+     the bay unchanged and the kit kept.
+476. **During a delivery.** Upgrade a bay the crane is carrying goods to: the crane delivers into the upgraded bay and the
+     terminal's stock is right afterwards.
+
+## BU. Pallets on the hand truck (ADR-084)
+
+> `HandTruckPalletGameTests` checks the server side (lift and set down, into an empty brass bay, every refusal, a crane
+> on its way, the value box, fake players, one load per player, protection, death, tipping over, the slot guard, save
+> and wire with a forged count, the size budget, the penalty). What a person has to judge:
+
+477. **The look.** A truck carrying a pallet of cobblestone, of a flat item (iron sheets) and of a block with a model of
+     its own (a chest): in the hand (first and third person), in the inventory and in an item frame, with Flywheel on and
+     off. Does the pallet sit on the nose plate where a chest stands, and is the item readable?
+478. **Lift and set down by hand.** Break a filled bay, right-click its pallet with an empty truck, walk a few blocks
+     (slow, no sprint), right-click the floor: the pallet stands there turned towards you, with the same count over it.
+479. **Into a bay.** Put a pallet into an empty bay of each tier; then try a bay that holds something, a filtered bay
+     and one too small. Are the lines over the hotbar clear in English and German?
+480. **Two players on one pallet.** Both right-click the same pallet with empty trucks in the same moment on a dedicated
+     server: exactly one gets it, the other's truck stays empty, nothing is doubled.
+481. **A nether portal and a death.** Carry a pallet through a nether portal (allowed, as with a chest); die carrying
+     one (the pallet stands where you died, only the empty truck drops; a gravestone mod captures the truck).
+482. **A claim mod.** In a claimed area of another player the pallet is not lifted, and a carried pallet is not set down
+     or is refused at the join, the truck staying loaded.
+483. **Creative middle-click.** Middle-clicking a truck with a pallet in creative copies it with its load (a known
+     creative duplication, as for a chest truck); note it, nothing to fix.
+484. **A loaded truck on a filter slot.** Right-click the filter slot of a warehouse interface, of a rack bay and of a
+     warehouse output with a truck carrying a chest, and with one carrying a pallet: the filter never changes, and the
+     truck sets its load down (into the bay, for a pallet and an empty bay) or refuses with its line, never silently.

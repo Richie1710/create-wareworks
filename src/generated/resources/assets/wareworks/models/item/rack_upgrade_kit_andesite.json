@@ -1,0 +1,9 @@
+{
+  "parent": "wareworks:item/upgrade_kit/item",
+  "textures": {
+    "beam": "create:block/andesite_casing",
+    "frame": "create:block/andesite_block",
+    "particle": "create:block/andesite_block",
+    "strap": "create:block/belt"
+  }
+}

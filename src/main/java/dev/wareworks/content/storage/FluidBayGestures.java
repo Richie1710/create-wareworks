@@ -152,7 +152,7 @@ public final class FluidBayGestures {
      */
     private static boolean actsOnTheBlock(ItemStack stack) {
         return stack.is(Tags.Items.TOOLS_WRENCH) || AllBlocks.CLIPBOARD.isIn(stack)
-                || AllBlocks.MECHANICAL_ARM.isIn(stack) || isBay(stack);
+                || AllBlocks.MECHANICAL_ARM.isIn(stack) || isBay(stack) || stack.getItem() instanceof BayUpgradeKitItem;
     }
 
     /** Whether {@code stack} places a bay of any family and any tier — the item that builds a wall. */

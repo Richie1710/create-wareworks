@@ -13,6 +13,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsBoard;
 import com.simibubi.create.foundation.blockEntity.behaviour.ValueSettingsFormatter;
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
+import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.storage.StorageFilterBehaviour;
 import dev.wareworks.core.port.PortDirection;
 import dev.wareworks.core.port.PortRedstone;
@@ -264,7 +265,8 @@ public class RequestFilterBehaviour extends FilteringBehaviour {
      */
     @Override
     public boolean bypassesInput(ItemStack mainhandItem) {
-        return AllBlocks.MECHANICAL_ARM.isIn(mainhandItem) || super.bypassesInput(mainhandItem);
+        return AllBlocks.MECHANICAL_ARM.isIn(mainhandItem) || HandTruckItem.isLoaded(mainhandItem)
+                || super.bypassesInput(mainhandItem);
     }
 
     /**
@@ -289,7 +291,9 @@ public class RequestFilterBehaviour extends FilteringBehaviour {
     @Override
     public boolean mayInteract(Player player) {
         ItemStack held = player.getMainHandItem();
-        return !AllBlocks.MECHANICAL_ARM.isIn(held) && !AllItems.WRENCH.isIn(held) && super.mayInteract(player);
+        // A loaded hand truck is never a filter (ADR-083): it used to become the slot's ghost filter, load and all.
+        return !AllBlocks.MECHANICAL_ARM.isIn(held) && !AllItems.WRENCH.isIn(held) && !HandTruckItem.isLoaded(held)
+                && super.mayInteract(player);
     }
 
     // --- persistence, sync and clipboard -------------------------------------------------------------------------

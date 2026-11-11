@@ -18,6 +18,7 @@ import dev.wareworks.content.crane.head.HeldItems;
 import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.handtruck.HandTruckItem;
 import dev.wareworks.content.handtruck.HandTruckLoad;
+import dev.wareworks.content.handtruck.HandTruckPallet;
 import dev.wareworks.content.handtruck.HandTruckSpill;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.remote.WarehouseRemoteItem;
@@ -287,9 +288,8 @@ final class ItemCensus {
             put(counts, ItemKey.of(unlinked), copies);
             return;
         }
-        HandTruckLoad load = HandTruckItem.load(stack);
-        if (load != null) {
-            addLoadedTruck(counts, stack, load, copies);
+        if (HandTruckItem.isLoaded(stack)) {
+            addLoadedTruck(counts, stack, copies);
             return;
         }
         if (!PackageItem.isPackage(stack)) {
@@ -305,13 +305,19 @@ final class ItemCensus {
      * A loaded hand truck (issue #37) counts as the empty truck plus what the carried container holds, and the carried
      * container itself as nothing — it is a block, not an item, before and after the truck. Under that rule loading and
      * unloading conserve items exactly; a truck that tips over adds the container's block item, which a test declares.
+     * A carried pallet (ADR-084) counts as its item times its count, as a {@link PalletEntity} does, so lifting it,
+     * carrying it, putting it into a bay and setting it down again all conserve exactly.
      */
-    private static void addLoadedTruck(Map<ItemKey, Long> counts, ItemStack truck, HandTruckLoad load, long copies) {
-        ItemStack empty = truck.copy();
-        empty.remove(WareworksDataComponents.HAND_TRUCK_LOAD.get());
-        put(counts, ItemKey.of(empty), copies);
-        for (ItemStack held : HandTruckSpill.contents(load, ServerLifecycleHooks.getCurrentServer().registryAccess()))
-            add(counts, held, copies * held.getCount());
+    private static void addLoadedTruck(Map<ItemKey, Long> counts, ItemStack truck, long copies) {
+        put(counts, ItemKey.of(HandTruckItem.emptied(truck)), copies);
+        HandTruckLoad load = HandTruckItem.load(truck);
+        if (load != null)
+            for (ItemStack held : HandTruckSpill.contents(load,
+                    ServerLifecycleHooks.getCurrentServer().registryAccess()))
+                add(counts, held, copies * held.getCount());
+        HandTruckPallet pallet = HandTruckItem.palletLoad(truck);
+        if (pallet != null)
+            add(counts, pallet.item(), copies * pallet.count());
     }
 
     /** Counts {@code amount} items of {@code key}, a package again as its contents. */
