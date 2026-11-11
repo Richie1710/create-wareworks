@@ -3,7 +3,6 @@ package dev.wareworks.dev;
 import static dev.wareworks.dev.VisualTestHarness.LOGGER;
 import static dev.wareworks.dev.VisualTestHarness.PREFIX;
 
-import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -16,7 +15,6 @@ import java.util.Set;
 import java.util.UUID;
 
 import org.jetbrains.annotations.Nullable;
-import org.lwjgl.glfw.GLFW;
 
 import com.simibubi.create.AllBlockEntityTypes;
 import com.simibubi.create.AllBlocks;
@@ -32,15 +30,10 @@ import com.simibubi.create.content.kinetics.fan.EncasedFanBlockEntity;
 import com.simibubi.create.content.kinetics.fan.processing.AllFanProcessingTypes;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
-import com.simibubi.create.content.logistics.packagePort.PackagePortBlockEntity;
-import com.simibubi.create.content.logistics.packagePort.PackagePortScreen;
 import com.simibubi.create.content.logistics.packager.PackagerBlock;
 import com.simibubi.create.content.logistics.packager.PackagerBlockEntity;
-import com.simibubi.create.content.logistics.packagerLink.LogisticallyLinkedBehaviour;
 import com.simibubi.create.content.logistics.packagerLink.LogisticallyLinkedBlockItem;
 import com.simibubi.create.content.processing.burner.BlazeBurnerBlock;
-import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
-import com.simibubi.create.foundation.gui.widget.IconButton;
 
 import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
@@ -75,34 +68,25 @@ import dev.wareworks.core.production.SupplyLine;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
-import net.createmod.catnip.lang.LangNumberFormat;
-import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.FrontAndTop;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetCarriedItemPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LeverBlock;
-import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.AttachFace;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
@@ -284,8 +268,6 @@ public final class RoboBeeVisualScenario implements VisualScenario {
     private static final int SLOT_SAND = 2;
     private static final int SLOT_GLASS = 3;
     private static final int SLOT_PANE = 4;
-    /** Menu slot of the bee slot in CMP's bee port menu: 18 package slots, 36 player slots, then the bees. */
-    private static final int BEE_MENU_SLOT = 54;
 
     // --- patterns -------------------------------------------------------------------------------------------------------
     private static final int TOP_LEFT = 0;
@@ -304,9 +286,7 @@ public final class RoboBeeVisualScenario implements VisualScenario {
     // --- timing (client ticks) --------------------------------------------------------------------------------------
     private static final int SCENE_READY_TIMEOUT_TICKS = 900;
     private static final int SCREEN_TIMEOUT_TICKS = 300;
-    private static final int AIM_TIMEOUT_TICKS = 60;
     private static final int SYNC_TIMEOUT_TICKS = 200;
-    private static final int PLACE_TIMEOUT_TICKS = 100;
     private static final int INTAKE_TIMEOUT_TICKS = 4800;
     private static final int STEP_TIMEOUT_TICKS = 10_000;
     private static final int ROOT_TIMEOUT_TICKS = 6000;
@@ -314,9 +294,7 @@ public final class RoboBeeVisualScenario implements VisualScenario {
     private static final int MOMENT_TIMEOUT_TICKS = 2400;
     private static final int LANGUAGE_RELOAD_TIMEOUT_TICKS = 600;
     private static final int SETTLE_TICKS = 4;
-    private static final int CLICK_GAP_TICKS = 2;
     private static final int LANGUAGE_SETTLE_TICKS = 20;
-    private static final int MAX_SCROLL_NOTCHES = 1100;
     private static final double BEE_SHOT_RANGE = 6.0;
     private static final double BEE_VIEW_DEGREES = 20.0;
     /** A bee this far above the port's centre is out of the port and against the sky in the picture. */
@@ -346,11 +324,6 @@ public final class RoboBeeVisualScenario implements VisualScenario {
     private static final CameraView CONTROLLER_GOGGLES = CameraView.of("controller", -3.6, 1.9, 0.4, -1.0, 0.25, 0.25);
     private static final CameraView FEEDER_VIEW = CameraView.of("feeder", 7.5, 3.0, 5.5, 5.5, 0.5, 2.0);
 
-    /** The position a server waits for the client to confirm after a teleport, {@code null} once it has. */
-    private static final Field AWAITING_TELEPORT = field(ServerGamePacketListenerImpl.class,
-            "awaitingPositionFromClient");
-    private static final Field PORT_ADDRESS_BOX = field(PackagePortScreen.class, "addressBox");
-    private static final Field PORT_CONFIRM = field(PackagePortScreen.class, "confirmButton");
 
     // --- state -------------------------------------------------------------------------------------------------------
     @Nullable
@@ -358,7 +331,8 @@ public final class RoboBeeVisualScenario implements VisualScenario {
     private volatile AABB warehouseBox = new AABB(BlockPos.ZERO);
     private volatile AABB crushingBox = new AABB(BlockPos.ZERO);
     private volatile AABB meltingBox = new AABB(BlockPos.ZERO);
-    private volatile List<ChunkPos> forcedChunks = List.of();
+    private final ForcedChunks forced = new ForcedChunks(NAME);
+    private final BeePorts beePorts = new BeePorts(NAME, this::ledger);
     private volatile Map<ItemKey, Long> baseline = Map.of();
     private final Map<ItemKey, Long> byProductsSeen = new HashMap<>();
     private volatile int ingredientCapBefore = -1;
@@ -414,7 +388,8 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                 .server("robobee: clear the three sites and build the warehouse", this::buildWarehouse)
                 .server("robobee: build the crushing factory", this::buildCrushingFactory)
                 .server("robobee: build the melting factory", this::buildMeltingFactory)
-                .server("robobee: force-load the warehouse and both factories", (server, context) -> force(server, true))
+                .server("robobee: force-load the warehouse and both factories", (server, context) -> forced.force(
+                        server.overworld(), List.of(warehouseBox, crushingBox, meltingBox)))
                 .server("robobee: the player flies, wears goggles and carries ports, bees, signs and a blaze cake",
                         this::equipPlayer)
                 .serverUntil("robobee: wait until the warehouse is indexed and every machine runs", this::sceneReady,
@@ -458,7 +433,7 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                 (server, context) -> {
                     if (ingredientCapBefore >= 0)
                         VisualConfig.setConfig(WareworksConfig.SERVER.maxPlanIngredientItems, ingredientCapBefore);
-                    force(server, false);
+                    forced.release(server.overworld());
                     RoboBeeLedger running = ledger;
                     if (running != null)
                         running.stop();
@@ -667,21 +642,6 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                 level.setBlockAndUpdate(pos.immutable(), Blocks.AIR.defaultBlockState());
     }
 
-    private void force(MinecraftServer server, boolean force) {
-        ServerLevel level = server.overworld();
-        if (force) {
-            Set<ChunkPos> chunks = new LinkedHashSet<>();
-            for (AABB box : List.of(warehouseBox, crushingBox, meltingBox))
-                for (int x = (int) Math.floor(box.minX) >> 4; x <= ((int) Math.ceil(box.maxX) - 1) >> 4; x++)
-                    for (int z = (int) Math.floor(box.minZ) >> 4; z <= ((int) Math.ceil(box.maxZ) - 1) >> 4; z++)
-                        chunks.add(new ChunkPos(x, z));
-            forcedChunks = List.copyOf(chunks);
-        }
-        for (ChunkPos chunk : forcedChunks)
-            level.setChunkForced(chunk.x, chunk.z, force);
-        LOGGER.info(PREFIX + "robobee: chunks {} forced={}", forcedChunks, force);
-    }
-
     /** Flying, wearing Engineer's Goggles, and the hotbar of the set-up; the selected slot is the empty one. */
     private void equipPlayer(MinecraftServer server, VisualContext context) {
         ServerPlayer player = context.serverPlayer(server);
@@ -790,20 +750,7 @@ public final class RoboBeeVisualScenario implements VisualScenario {
         });
         placePort(script, "warehouse send port", SEND_PORT, FROM_SOUTH);
         // Tune: a right-click on the placed port with the rest of the stack, not sneaking.
-        rightClick(script, click("the warehouse send port (tuning)", SEND_PORT, Direction.UP, FROM_SOUTH));
-        ArmVisualScenario.untilOrFail(script, "robobee: the client's port stack is tuned",
-                context -> LogisticallyLinkedBlockItem.isTuned(context.minecraft().player.getMainHandItem()),
-                SYNC_TIMEOUT_TICKS, context -> "the stack in hand is " + context.minecraft().player.getMainHandItem());
-        script.server("robobee: CHECK the stack carries the first port's network", (server, context) -> {
-            ServerPlayer player = context.serverPlayer(server);
-            UUID tuned = LogisticallyLinkedBlockItem.networkFromStack(player.getMainHandItem());
-            UUID placed = freq(server.overworld(), context.origin().offset(SEND_PORT));
-            if (tuned == null || !tuned.equals(placed))
-                throw new VisualTestException("the stack is tuned to " + tuned + ", the first port is on " + placed);
-            network = placed;
-            LOGGER.info(PREFIX + "robobee: CHECK PASS a right-click on the first port tuned the stack to network {}",
-                    placed);
-        });
+        beePorts.tuneOn(script, "warehouse send port", SEND_PORT, FROM_SOUTH, placed -> network = placed);
         placePort(script, "warehouse receive port", RECEIVE_PORT, FROM_SOUTH);
         script.camera(CRUSHING_VIEW);
         placePort(script, "crushing receive port", CRUSHING_FACTORY.offset(C_RECEIVE), FROM_EAST);
@@ -816,7 +763,7 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                     ServerLevel level = server.overworld();
                     BlockPos dock = context.origin();
                     UUID expected = Objects.requireNonNull(network, "network");
-                    RoboBeeLedger started = RoboBeeLedger.start(level);
+                    RoboBeeLedger started = RoboBeeLedger.start(level, NAME);
                     started.addPort(new RoboBeeLedger.Port("warehouse send", dock.offset(SEND_PORT),
                             RoboBeeLedger.Role.SEND, Set.of(CRUSHING_ADDRESS, MELTING_ADDRESS)));
                     started.addPort(new RoboBeeLedger.Port("warehouse receive", dock.offset(RECEIVE_PORT),
@@ -830,25 +777,12 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                     started.addPort(new RoboBeeLedger.Port("melting send", dock.offset(MELTING_FACTORY).offset(M_SEND),
                             RoboBeeLedger.Role.SEND, Set.of(WAREHOUSE_ADDRESS)));
                     ledger = started;
-                    for (RoboBeeLedger.Port port : started.ports()) {
-                        if (!(level.getBlockEntity(port.pos()) instanceof PackagePortBlockEntity be))
-                            throw new VisualTestException("the " + port.name() + " at " + port.pos()
-                                    + " is no Create package port: " + level.getBlockEntity(port.pos()));
-                        UUID freq = freq(level, port.pos());
-                        if (!expected.equals(freq))
-                            throw new VisualTestException("the " + port.name() + " is on network " + freq
-                                    + ", not " + expected);
-                        LOGGER.info(PREFIX + "robobee: port {} at {} is a {}", port.name(), port.pos(),
-                                be.getClass().getName());
-                    }
-                    LOGGER.info(PREFIX + "robobee: CHECK PASS all {} bee ports share network {}", PORTS, expected);
+                    beePorts.checkNetwork(level, expected);
                 });
     }
 
     private void placePort(VisualScript script, String what, BlockPos port, Vec3 eyeOffset) {
-        rightClick(script, click("the ground under the " + what, port.below(), Direction.UP, eyeOffset));
-        script.serverUntil("robobee: the " + what + " stands", (server, context) -> server.overworld()
-                .getBlockEntity(context.origin().offset(port)) instanceof PackagePortBlockEntity, PLACE_TIMEOUT_TICKS);
+        beePorts.placePort(script, what, port, eyeOffset);
     }
 
     // =================================================================================================================
@@ -869,126 +803,20 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                 false);
         sendPort(script, "melting send port", MELTING_FACTORY.offset(M_SEND), FROM_EAST, SLOT_MELTING_BEES,
                 FACTORY_BEES, false);
-        script.server("robobee: CHECK the addresses, the bees and return mode of every port", (server, context) -> {
-            RoboBeeLedger running = ledger();
-            for (RoboBeeLedger.Port port : running.ports()) {
-                PackagePortBlockEntity be = Objects.requireNonNull(running.portEntity(port.pos()), port.name());
-                boolean returning = be.saveWithoutMetadata(server.registryAccess()).getBoolean("BeeReturnModeEnabled");
-                LOGGER.info(PREFIX + "robobee: port {}: address '{}', {} bees, return mode {}", port.name(),
-                        be.addressFilter, running.beesIn(port.pos()), returning);
-                if (port.role() == RoboBeeLedger.Role.SEND && (!be.addressFilter.isBlank() || !returning))
-                    throw new VisualTestException("the send port " + port.name() + " has the address '"
-                            + be.addressFilter + "' and return mode " + returning);
-            }
-            running.expectBees(BEES);
-            LOGGER.info(PREFIX + "robobee: CHECK PASS addresses typed, {} bees in the send ports, return mode on, "
-                    + "send ports with a blank filter", BEES);
-        });
+        script.server("robobee: CHECK the addresses, the bees and return mode of every port",
+                (server, context) -> beePorts.checkPorts(server, BEES));
     }
 
     /** A send port: its screen, the bees picked up from the hotbar and put into the bee slot, return mode on. */
     private void sendPort(VisualScript script, String what, BlockPos port, Vec3 eyeOffset, int beeSlot, int bees,
             boolean shoot) {
-        openPortScreen(script, what, port, eyeOffset);
-        RequesterVisualScenario.moveInMenu(script, "the bees", "the bee slot of the " + what,
-                RequesterVisualScenario.hotbar(beeSlot), RequesterVisualScenario.menuSlot(BEE_MENU_SLOT));
-        script.serverUntil("robobee: the " + what + " holds " + bees + " bees",
-                (server, context) -> ledger().beesIn(context.origin().offset(port)) == bees,
-                SYNC_TIMEOUT_TICKS);
-        script.client("robobee: click the return mode button of the " + what,
-                context -> ScreenInput.click(context.minecraft(), ScreenInput.centre(returnModeButton(context))));
-        script.serverUntil("robobee: the " + what + " has return mode on", (server, context) -> server.overworld()
-                .getBlockEntity(context.origin().offset(port)) instanceof PackagePortBlockEntity be
-                && be.saveWithoutMetadata(server.registryAccess()).getBoolean("BeeReturnModeEnabled"), SYNC_TIMEOUT_TICKS);
-        script.waitTicks(SETTLE_TICKS);
-        if (shoot) {
-            script.client("robobee: rest the cursor on the bee slot",
-                    context -> ScreenInput.hover(context.minecraft(), ScreenInput.menuSlot(
-                            RequesterVisualScenario.containerScreen(context), BEE_MENU_SLOT)));
-            script.shotWithGui("robobee-bee-slot");
-        }
-        RequesterVisualScenario.closeScreen(script, "the " + what + "'s screen");
-        script.server("robobee: CHECK the " + what, (server, context) -> LOGGER.info(PREFIX
-                + "robobee: CHECK PASS {} bees put into the {} with clicks, return mode switched on with its button",
-                bees, what));
+        beePorts.sendPort(script, what, port, eyeOffset, beeSlot, bees, shoot ? "robobee-bee-slot" : null);
     }
 
     /** A receive port: its screen, the address typed into the address field, confirmed with the tick button. */
     private void receivePort(VisualScript script, String what, BlockPos port, Vec3 eyeOffset, String address,
             boolean shoot) {
-        openPortScreen(script, what, port, eyeOffset);
-        script.client("robobee: click the address field of the " + what, context -> {
-            EditBox box = addressBox(context);
-            ScreenInput.click(context.minecraft(), ScreenInput.centre(box));
-        }).until("robobee: the address field of the " + what + " has the focus",
-                context -> addressBox(context).isFocused(), SCREEN_TIMEOUT_TICKS);
-        script.client("robobee: type '" + address + "'", context -> {
-            Screen screen = Objects.requireNonNull(context.minecraft().screen, "screen");
-            for (char c : address.toCharArray())
-                screen.charTyped(c, 0);
-            String typed = addressBox(context).getValue();
-            if (!address.equals(typed))
-                throw new VisualTestException("the address field reads '" + typed + "' after typing '" + address + "'");
-        }).waitTicks(SETTLE_TICKS);
-        if (shoot) {
-            script.client("robobee: unfocus the field with Enter", context -> ScreenInput.key(context.minecraft(),
-                    GLFW.GLFW_KEY_ENTER));
-            script.waitTicks(SETTLE_TICKS).shotWithGui("robobee-port-address");
-        }
-        script.client("robobee: confirm the " + what + "'s address with its tick button",
-                        context -> ScreenInput.click(context.minecraft(), ScreenInput.centre(confirmButton(context))))
-                .until("robobee: the " + what + "'s screen is closed", context -> context.minecraft().screen == null,
-                        SCREEN_TIMEOUT_TICKS)
-                .serverUntil("robobee: the server has the address of the " + what, (server, context) -> server
-                        .overworld().getBlockEntity(context.origin().offset(port)) instanceof PackagePortBlockEntity be
-                        && address.equals(be.addressFilter), SYNC_TIMEOUT_TICKS)
-                .server("robobee: CHECK the " + what, (server, context) -> LOGGER.info(PREFIX
-                        + "robobee: CHECK PASS the {} took the typed address '{}'", what, address));
-    }
-
-    private void openPortScreen(VisualScript script, String what, BlockPos port, Vec3 eyeOffset) {
-        rightClick(script, click("the " + what, port, Direction.UP, eyeOffset));
-        ArmVisualScenario.untilOrFail(script, "robobee: the " + what + "'s screen is open with its contents",
-                context -> context.minecraft().screen instanceof PackagePortScreen screen
-                        && screen.getMenu().getStateId() > 0, SCREEN_TIMEOUT_TICKS,
-                context -> "the screen is " + context.minecraft().screen);
-        script.waitTicks(SETTLE_TICKS);
-    }
-
-    private static EditBox addressBox(VisualContext context) {
-        return (EditBox) get(PORT_ADDRESS_BOX, portScreen(context));
-    }
-
-    private static IconButton confirmButton(VisualContext context) {
-        return (IconButton) get(PORT_CONFIRM, portScreen(context));
-    }
-
-    /**
-     * CMP's return mode button: the third button of the column left of the screen ({@code BeePortScreen}, read by name,
-     * never compiled against), checked to stand where CMP 0.7.8 puts it.
-     */
-    private static IconButton returnModeButton(VisualContext context) {
-        PackagePortScreen screen = portScreen(context);
-        Object button;
-        try {
-            Field field = screen.getClass().getDeclaredField("returnModeButton");
-            field.setAccessible(true);
-            button = field.get(screen);
-        } catch (ReflectiveOperationException error) {
-            throw new VisualTestException("the port screen " + screen.getClass().getName()
-                    + " has no return mode button: " + error);
-        }
-        if (!(button instanceof IconButton icon))
-            throw new VisualTestException("the return mode button is " + button);
-        if (icon.getX() != screen.getGuiLeft() - 22 || icon.getY() != screen.getGuiTop() - 10 + 36)
-            throw new VisualTestException("the return mode button stands at " + icon.getX() + "," + icon.getY());
-        return icon;
-    }
-
-    private static PackagePortScreen portScreen(VisualContext context) {
-        if (context.minecraft().screen instanceof PackagePortScreen screen)
-            return screen;
-        throw new VisualTestException("no port screen is open: " + context.minecraft().screen);
+        beePorts.receivePort(script, what, port, eyeOffset, address, shoot ? "robobee-port-address" : null);
     }
 
     // =================================================================================================================
@@ -1024,28 +852,7 @@ public final class RoboBeeVisualScenario implements VisualScenario {
     }
 
     private void writeSign(VisualScript script, String what, BlockPos sign, String text) {
-        rightClick(script, click("the ground under " + what, sign.below(), Direction.UP, FROM_SOUTH));
-        ArmVisualScenario.untilOrFail(script, "robobee: the sign editor of " + what + " is open",
-                context -> context.minecraft().screen instanceof AbstractSignEditScreen, SCREEN_TIMEOUT_TICKS,
-                context -> "the screen is " + context.minecraft().screen);
-        script.waitTicks(SETTLE_TICKS).client("robobee: type '" + text + "' on " + what, context -> {
-            Screen screen = Objects.requireNonNull(context.minecraft().screen, "screen");
-            for (char c : text.toCharArray())
-                screen.charTyped(c, 0);
-        }).waitTicks(SETTLE_TICKS).client("robobee: click Done", context -> {
-            Screen screen = Objects.requireNonNull(context.minecraft().screen, "screen");
-            Button done = null;
-            for (GuiEventListener child : screen.children())
-                if (child instanceof Button button && button.getMessage().equals(CommonComponents.GUI_DONE))
-                    done = button;
-            if (done == null)
-                throw new VisualTestException("the sign editor has no Done button: " + screen.children());
-            ScreenInput.click(context.minecraft(), ScreenInput.centre(done));
-        }).until("robobee: the sign editor is closed", context -> context.minecraft().screen == null,
-                SCREEN_TIMEOUT_TICKS).serverUntil("robobee: the server has the text of " + what,
-                (server, context) -> server.overworld().getBlockEntity(context.origin().offset(sign))
-                        instanceof SignBlockEntity entity
-                        && text.equals(entity.getFrontText().getMessage(0, false).getString()), SYNC_TIMEOUT_TICKS);
+        RealClicks.writeSign(script, NAME, what, sign, text, FROM_SOUTH);
     }
 
     private void flipLevers(VisualScript script) {
@@ -1085,38 +892,11 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                 dock.offset(CRUSHING_FACTORY).offset(C_SEND), Set.of(dock.offset(CRUSHING_FACTORY).offset(C_PACKER)),
                 dock.offset(MELTING_FACTORY).offset(M_RECEIVE), Set.of(dock.offset(MELTING_FACTORY).offset(M_UNPACKER)),
                 dock.offset(MELTING_FACTORY).offset(M_SEND), Set.of(dock.offset(MELTING_FACTORY).offset(M_PACKER)));
-        for (RoboBeeLedger.Port port : ledger().ports()) {
-            Set<BlockPos> touched = new LinkedHashSet<>();
-            for (Direction side : Direction.values()) {
-                BlockPos next = port.pos().relative(side);
-                if (ownPackagers.containsKey(next))
-                    throw new VisualTestException("the " + port.name() + " touches another bee port at " + next);
-                if (level.getBlockEntity(next) != null
-                        && level.getCapability(Capabilities.ItemHandler.BLOCK, next, side.getOpposite()) != null)
-                    touched.add(next);
-            }
-            if (!touched.equals(ownPackagers.get(port.pos())))
-                throw new VisualTestException("the " + port.name() + " touches the inventories " + touched
-                        + ", expected only its Packager(s) " + ownPackagers.get(port.pos()));
-            boolean powered = level.hasNeighborSignal(port.pos());
-            if (powered != (port.role() == RoboBeeLedger.Role.RECEIVE))
-                throw new VisualTestException("the " + port.role() + " port " + port.name() + " is "
-                        + (powered ? "" : "not ") + "powered");
-        }
         List<BlockPos> packing = List.of(dock.offset(CRUSHING_PACKAGER), dock.offset(MELTING_PACKAGER),
                 dock.offset(CRUSHING_FACTORY).offset(C_PACKER), dock.offset(MELTING_FACTORY).offset(M_PACKER));
         List<BlockPos> unpacking = List.of(dock.offset(RETURN_PACKAGER),
                 dock.offset(CRUSHING_FACTORY).offset(C_UNPACKER), dock.offset(MELTING_FACTORY).offset(M_UNPACKER));
-        for (BlockPos pos : packing)
-            if (!level.hasNeighborSignal(pos) || level.getBlockState(pos).getValue(PackagerBlock.LINKED))
-                throw new VisualTestException("the packing Packager at " + pos + " is unpowered or linked");
-        for (BlockPos pos : unpacking)
-            if (level.hasNeighborSignal(pos) || level.getBlockState(pos).getValue(PackagerBlock.LINKED))
-                throw new VisualTestException("the unpacking Packager at " + pos + " is powered or linked: it would "
-                        + "pack its chest back up");
-        LOGGER.info(PREFIX + "robobee: CHECK PASS ports isolated (each touches only its own Packager(s), no port "
-                + "another), send ports unpowered, receive ports powered by the player's levers, packing Packagers "
-                + "powered, unpacking ones not, no Stock Link");
+        beePorts.checkWiring(level, ownPackagers, packing, unpacking);
     }
 
     private void lightBurner(VisualScript script) {
@@ -1290,7 +1070,8 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                         && terminal.entry(PANE).isPresent() && terminal.entry(COBBLE).isPresent(),
                 SCREEN_TIMEOUT_TICKS, context -> "the screen is " + context.minecraft().screen);
         script.waitTicks(SETTLE_TICKS)
-                .client("robobee: scroll the requested amount up to " + ORDER, RoboBeeVisualScenario::scrollAmount)
+                .client("robobee: scroll the requested amount up to " + ORDER,
+                        context -> TerminalOrder.scrollAmount(context, NAME, ORDER))
                 .waitTicks(SETTLE_TICKS)
                 .server("robobee: start recording every bee trip and watching every tick",
                         (server, context) -> {
@@ -1324,48 +1105,16 @@ public final class RoboBeeVisualScenario implements VisualScenario {
                 (server, context) -> assertCensus(server, context, "the click", Map.of(COBBLE, (long) INTAKE)));
     }
 
-    private static void scrollAmount(VisualContext context) {
-        WarehouseTerminalScreen terminal = terminalScreen(context);
-        var amount = ScreenInput.terminalAmount(terminal);
-        ScreenInput.Point point = ScreenInput.centre(amount);
-        int notches = 0;
-        for (; notches < MAX_SCROLL_NOTCHES && amount.getState() != ORDER; notches++)
-            ScreenInput.scroll(context.minecraft(), point, amount.getState() < ORDER ? 1.0 : -1.0);
-        if (amount.getState() != ORDER)
-            throw new VisualTestException("the requested amount stayed at " + amount.getState() + " after " + notches
-                    + " notches, expected " + ORDER);
-        LOGGER.info(PREFIX + "robobee: the terminal asks for {} per click after {} notches of the wheel",
-                amount.getState(), notches);
-    }
-
-    /**
-     * "Requested Glass Pane x512, producing 512", where the screen may shorten the item's name with an ellipsis to fit
-     * its row: everything around the name must match exactly.
-     */
     private static boolean isProducingSentence(String shown) {
-        String marker = "@@NAME@@";
-        String sentence = WareworksLang.translateDirect(WareworksLang.TERMINAL_PRODUCING, Component.literal(marker),
-                LangNumberFormat.format(ORDER), LangNumberFormat.format(ORDER)).getString();
-        int at = sentence.indexOf(marker);
-        if (at < 0)
-            return false;
-        String before = sentence.substring(0, at);
-        String after = sentence.substring(at + marker.length());
-        return shown.length() > before.length() + after.length() && shown.startsWith(before) && shown.endsWith(after);
+        return TerminalOrder.isProducingSentence(shown, ORDER);
     }
 
     private static int cellOf(WarehouseTerminalScreen terminal, ItemKey key) {
-        var visible = terminal.visibleEntries();
-        for (int cell = 0; cell < visible.size(); cell++)
-            if (visible.get(cell).key().equals(key))
-                return cell;
-        throw new VisualTestException(key + " is not in the terminal's visible grid");
+        return TerminalOrder.cellOf(terminal, key);
     }
 
     private static WarehouseTerminalScreen terminalScreen(VisualContext context) {
-        if (context.minecraft().screen instanceof WarehouseTerminalScreen terminal)
-            return terminal;
-        throw new VisualTestException("the terminal screen is not open: " + context.minecraft().screen);
+        return TerminalOrder.terminalScreen(context);
     }
 
     /** One request for 512 panes and exactly the four orders of the chain, each step feeding its parent's line. */
@@ -1729,14 +1478,14 @@ public final class RoboBeeVisualScenario implements VisualScenario {
             throw new VisualTestException("the bees are " + home + " with " + running.inFlight() + " in the air");
         LOGGER.info(PREFIX + "robobee: CHECK PASS all {} bees home: {} (most in the air at once: {}, empty flights: "
                 + "{})", BEES, home, running.maxInFlight(), running.emptyFlights());
-        if (!forcedChunks.stream().allMatch(chunk -> level.getForcedChunks().contains(chunk.toLong())))
+        if (!forced.allStillForced(level))
             throw new VisualTestException("a chunk of the warehouse or a factory lost its forced ticket: "
-                    + forcedChunks);
+                    + forced.chunks());
         deviations.add("the design's check that the client lacks the factory chunks is replaced by the forced-ticket "
                 + "check: at " + CRUSHING_DISTANCE + " and " + MELTING_DISTANCE + " blocks the client has them");
         LOGGER.info(PREFIX + "robobee: CHECK PASS the warehouse and both factories stayed force-loaded for the whole "
                 + "run: {} (at {} and {} blocks the player's own simulation distance reaches them too, so this run "
-                + "does not prove that forced chunks alone keep a factory working)", forcedChunks, CRUSHING_DISTANCE,
+                + "does not prove that forced chunks alone keep a factory working)", forced.chunks(), CRUSHING_DISTANCE,
                 MELTING_DISTANCE);
         assertCensus(server, context, "the end", Map.of(COBBLE, (long) INTAKE - STEP_AMOUNT, PANE, (long) ORDER));
         LOGGER.info(PREFIX + "robobee: CHECK PASS {} glass panes delivered", ORDER);
@@ -1822,24 +1571,8 @@ public final class RoboBeeVisualScenario implements VisualScenario {
 
     /** Both sites and the player, plus every box in flight and every bee in the air. */
     private Map<ItemKey, Long> census(MinecraftServer server, VisualContext context) {
-        ServerLevel level = server.overworld();
-        for (AABB box : List.of(warehouseBox, crushingBox, meltingBox))
-            if (!SceneItemCensus.isFullyLoaded(level, box))
-                throw new VisualTestException("a census box is not fully loaded: " + box);
-        Map<ItemKey, Long> counts = SceneItemCensus.take(level, warehouseBox, context.serverPlayer(server));
-        counts = merge(counts, SceneItemCensus.take(level, crushingBox));
-        counts = merge(counts, SceneItemCensus.take(level, meltingBox));
-        RoboBeeLedger running = ledger;
-        if (running != null)
-            counts = merge(counts, running.census());
-        return counts;
-    }
-
-    private static Map<ItemKey, Long> merge(Map<ItemKey, Long> counts, Map<ItemKey, Long> more) {
-        Map<ItemKey, Long> result = counts;
-        for (Map.Entry<ItemKey, Long> entry : more.entrySet())
-            result = SceneItemCensus.plus(result, entry.getKey(), entry.getValue());
-        return result;
+        return MultiSiteCensus.take(server.overworld(), context.serverPlayer(server), ledger,
+                List.of(warehouseBox, crushingBox, meltingBox));
     }
 
     /** Cobblestone, gravel, sand and glass one unit each; a glass pane 3/8 of one (6 glass make 16). */
@@ -1898,35 +1631,16 @@ public final class RoboBeeVisualScenario implements VisualScenario {
     // =================================================================================================================
 
     private static ArmVisualScenario.Click click(String label, BlockPos block, Direction face, Vec3 eyeOffset) {
-        return new ArmVisualScenario.Click(label, block, face, new Vec3(0.5, 0.5, 0.5), eyeOffset);
+        return RealClicks.click(label, block, face, eyeOffset);
     }
 
     /** A right-click on {@code click}: camera, crosshair checked on the intended face, one press of the use key. */
     private void rightClick(VisualScript script, ArmVisualScenario.Click click) {
-        fly(script);
-        script.camera(click.label(), context -> ArmVisualScenario.clickView(context, click));
-        ArmVisualScenario.untilOrFail(script, "robobee: the crosshair is on the " + click.face() + " face of "
-                        + click.label(), context -> ArmVisualScenario.aimedAt(context, click), AIM_TIMEOUT_TICKS,
-                context -> "the crosshair hits " + ArmVisualScenario.describeHit(context) + " instead of the "
-                        + click.face() + " face of " + click.block());
-        script.serverUntil("robobee: the server has the player's answer to every teleport",
-                (server, context) -> teleportConfirmed(context.serverPlayer(server)), SYNC_TIMEOUT_TICKS);
-        RequesterVisualScenario.useKey(script, click.label());
-        script.waitTicks(SETTLE_TICKS);
+        RealClicks.rightClick(script, NAME, click);
     }
 
-    private static boolean teleportConfirmed(ServerPlayer player) {
-        return get(AWAITING_TELEPORT, player.connection) == null;
-    }
-
-    /** The player flying where it is: every camera move is a teleport, and a flying player stays where it is put. */
     private void fly(VisualScript script) {
-        script.server("robobee: the player flies", (server, context) -> {
-            ServerPlayer player = context.serverPlayer(server);
-            player.getAbilities().flying = true;
-            player.onUpdateAbilities();
-        }).until("robobee: the client flies too", context -> context.minecraft().player != null
-                && context.minecraft().player.getAbilities().flying, SYNC_TIMEOUT_TICKS);
+        RealClicks.fly(script, NAME);
     }
 
     private void worldShots(VisualScript script, String moment, CameraView... views) {
@@ -1970,13 +1684,6 @@ public final class RoboBeeVisualScenario implements VisualScenario {
         if (running == null)
             throw new VisualTestException("the bee ledger has not started");
         return running;
-    }
-
-    private static UUID freq(ServerLevel level, BlockPos pos) {
-        LogisticallyLinkedBehaviour behaviour = BlockEntityBehaviour.get(level, pos, LogisticallyLinkedBehaviour.TYPE);
-        if (behaviour == null)
-            throw new VisualTestException("the block at " + pos + " has no logistics network");
-        return behaviour.freqId;
     }
 
     private ProductionOrder<ItemKey, RackPosition> order(MinecraftServer server, VisualContext context, ItemKey result) {
@@ -2073,23 +1780,5 @@ public final class RoboBeeVisualScenario implements VisualScenario {
         ItemStack rest = ItemHandlerHelper.insertItem(handler(level, pos), stack.copy(), false);
         if (!rest.isEmpty())
             throw new VisualTestException("the inventory at " + pos + " refused " + rest);
-    }
-
-    private static Field field(Class<?> owner, String name) {
-        try {
-            Field field = owner.getDeclaredField(name);
-            field.setAccessible(true);
-            return field;
-        } catch (ReflectiveOperationException | RuntimeException error) {
-            throw new IllegalStateException("cannot reach " + owner.getName() + "#" + name, error);
-        }
-    }
-
-    private static Object get(Field field, Object owner) {
-        try {
-            return field.get(owner);
-        } catch (IllegalAccessException error) {
-            throw new VisualTestException("cannot read " + field + ": " + error);
-        }
     }
 }

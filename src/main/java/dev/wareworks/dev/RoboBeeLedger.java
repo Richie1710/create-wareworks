@@ -99,7 +99,9 @@ final class RoboBeeLedger {
         }
     }
 
-    private final ServerLevel level;
+    private volatile ServerLevel level;
+    /** The scenario's name, which starts every log line and failure of this ledger. */
+    private final String prefix;
     private final Map<BlockPos, Port> ports = new LinkedHashMap<>();
     private final Map<UUID, Trip> open = new HashMap<>();
     private final Map<UUID, Long> hovering = new HashMap<>();
@@ -113,13 +115,17 @@ final class RoboBeeLedger {
     private int expectedBees = -1;
     private int maxInFlight;
     private boolean recording;
+    private volatile boolean following;
+    private volatile boolean returnsHomeAllowed;
+    private final List<Trip> returnedHome = new ArrayList<>();
     @Nullable
     private String failure;
     @Nullable
     private Consumer<ServerLevel> watcher;
 
-    private RoboBeeLedger(ServerLevel level) {
+    private RoboBeeLedger(ServerLevel level, String prefix) {
         this.level = level;
+        this.prefix = prefix;
     }
 
     // --- reflection (resolved once by verify) -----------------------------------------------------------------------
@@ -138,7 +144,7 @@ final class RoboBeeLedger {
      */
     static String verify(int minDistance) {
         if (!ModList.get().isLoaded(MOD_ID))
-            throw new VisualTestException("the robobee scenario needs Create Mobile Packages in the game, and it is not "
+            throw new VisualTestException("this scenario needs Create Mobile Packages in the game, and it is not "
                     + "loaded: run it with -Pwareworks.cmp (tested with 1.21.1-" + REVIEWED_VERSION + ")");
         String version = ModList.get().getModContainerById(MOD_ID)
                 .map(container -> container.getModInfo().getVersion().toString()).orElse("?");
@@ -182,6 +188,49 @@ final class RoboBeeLedger {
         return value.getClass().getMethod("get").invoke(value);
     }
 
+    private static int beeSpeedBefore = -1;
+
+    /**
+     * Sets CMP's server config {@code beeSpeed} for this world's run (each {@code VirtualRobo} copies the speed when it
+     * is created, so this must run before the first bee starts); {@link #restoreBeeSpeed} puts the old value back.
+     * Only {@code verify} may run first.
+     */
+    static int overrideBeeSpeed(int speed) {
+        try {
+            Class<?> configs = Class.forName("de.theidler.create_mobile_packages.index.config.CMPConfigs");
+            Object server = configs.getMethod("server").invoke(null);
+            Object value = server.getClass().getField("beeSpeed").get(server);
+            int before = (Integer) value.getClass().getMethod("get").invoke(value);
+            // CMP saves its server config into the game's config folder, so a run that crashed before finish left its
+            // speed there: then the spec's default is what to put back.
+            if (beeSpeedBefore < 0)
+                beeSpeedBefore = before == speed ? defaultOf(value, before) : before;
+            value.getClass().getMethod("set", Object.class).invoke(value, speed);
+            int now = (Integer) value.getClass().getMethod("get").invoke(value);
+            if (now != speed)
+                throw new VisualTestException("CMP's beeSpeed reads " + now + " after setting " + speed);
+            return before;
+        } catch (ReflectiveOperationException | ClassCastException error) {
+            throw new VisualTestException("cannot set CMP's beeSpeed: " + error);
+        }
+    }
+
+    private static int defaultOf(Object value, int otherwise) {
+        try {
+            return (Integer) value.getClass().getMethod("getDefault").invoke(value);
+        } catch (ReflectiveOperationException | ClassCastException error) {
+            return otherwise;
+        }
+    }
+
+    /** Puts back the {@code beeSpeed} {@link #overrideBeeSpeed} found; nothing when it never ran. */
+    static void restoreBeeSpeed() {
+        if (beeSpeedBefore < 0)
+            return;
+        overrideBeeSpeed(beeSpeedBefore);
+        beeSpeedBefore = -1;
+    }
+
     /** Whether the jar-in-jar library CMP needs is in the game (FML extracts it from the CMP jar). */
     static boolean nestedLibraryLoaded() {
         return ModList.get().isLoaded("create_factory_abstractions");
@@ -197,9 +246,12 @@ final class RoboBeeLedger {
 
     // --- lifecycle --------------------------------------------------------------------------------------------------
 
-    /** Starts a ledger on {@code level} and its tick listener; {@link #stop} removes the listener again. */
-    static RoboBeeLedger start(ServerLevel level) {
-        RoboBeeLedger ledger = new RoboBeeLedger(level);
+    /**
+     * Starts a ledger on {@code level} and its tick listener; {@link #stop} removes the listener again. Its log lines
+     * start with {@code prefix}, the scenario's name.
+     */
+    static RoboBeeLedger start(ServerLevel level, String prefix) {
+        RoboBeeLedger ledger = new RoboBeeLedger(level, prefix);
         NeoForge.EVENT_BUS.addListener(ledger.listener);
         return ledger;
     }
@@ -208,6 +260,36 @@ final class RoboBeeLedger {
         NeoForge.EVENT_BUS.unregister(listener);
         recording = false;
         watcher = null;
+    }
+
+    /**
+     * Follows the run into the world loaded again after a save, quit and rejoin: CMP saves every bee with its id and
+     * box ({@code RoboManager}, {@code VirtualRobo#serializeNBT}), so a bee that flew before keeps its trip.
+     */
+    void rebind(ServerLevel newLevel) {
+        level = newLevel;
+    }
+
+    /**
+     * Follows the next world on its first server tick (a save, quit and rejoin is under way), so no landing between
+     * the world's load and the scenario's next step is missed.
+     */
+    void followNextWorld() {
+        following = true;
+    }
+
+    /**
+     * From now on a box may come back to the send port it left from (CMP sends a bee home with its box when it cannot
+     * reach its target, e.g. after a save, quit and rejoin): the trip ends there, its contents count as not sent, and
+     * the port's next send is a new trip. Any other landing in a send port is still a misdelivery.
+     */
+    void allowReturnsHome() {
+        returnsHomeAllowed = true;
+    }
+
+    /** The trips whose box came back to the port it left from ({@link #allowReturnsHome}). */
+    List<Trip> returnedHome() {
+        return List.copyOf(returnedHome);
     }
 
     void addPort(Port port) {
@@ -242,8 +324,15 @@ final class RoboBeeLedger {
     // --- the tick ---------------------------------------------------------------------------------------------------
 
     private void onServerTick(ServerTickEvent.Post event) {
-        if (failure != null || event.getServer().overworld() != level)
+        if (failure != null)
             return;
+        if (event.getServer().overworld() != level) {
+            if (!following)
+                return;
+            level = event.getServer().overworld();
+            following = false;
+            LOGGER.info(PREFIX + "{}: the bee ledger follows the world loaded again", prefix);
+        }
         try {
             tick();
             Consumer<ServerLevel> extra = watcher;
@@ -251,7 +340,7 @@ final class RoboBeeLedger {
                 extra.accept(level);
         } catch (RuntimeException error) {
             failure = error instanceof VisualTestException ? error.getMessage() : String.valueOf(error);
-            LOGGER.error(PREFIX + "robobee: the per-tick check failed: {}", failure, error);
+            LOGGER.error(PREFIX + "{}: the per-tick check failed: {}", prefix, failure, error);
         }
     }
 
@@ -315,7 +404,7 @@ final class RoboBeeLedger {
         trips.add(trip);
         open.put(id, trip);
         add(sentTo, address, contents);
-        LOGGER.info(PREFIX + "robobee: CHECK PASS bee trip {} out '{}' from {}: {}", trip.number, address, home.name(),
+        LOGGER.info(PREFIX + "{}: CHECK PASS bee trip {} out '{}' from {}: {}", prefix, trip.number, address, home.name(),
                 describe(contents));
     }
 
@@ -330,6 +419,19 @@ final class RoboBeeLedger {
                     + pos + ", which is no port of the run");
         PackagePortBlockEntity be = portEntity(port.pos());
         String filter = be == null ? "?" : be.addressFilter;
+        if (returnsHomeAllowed && port.role() == Role.SEND && port.name().equals(trip.home)) {
+            trip.arrivedAt = port.name() + " (home)";
+            trip.arrived = now;
+            returnedHome.add(trip);
+            for (ItemStack stack : trip.contents)
+                sentTo.computeIfAbsent(trip.address, key -> new HashMap<>()).merge(ItemKey.of(stack),
+                        -(long) stack.getCount(), Long::sum);
+            sentTo.getOrDefault(trip.address, new HashMap<>()).values().removeIf(count -> count == 0L);
+            LOGGER.info(PREFIX + "{}: CHECK PASS bee trip {} ('{}' {}) came back to its home port {} after {} ticks; "
+                    + "the port sends the box again", prefix, trip.number, trip.address, describe(trip.contents),
+                    port.name(), now - trip.departed);
+            return;
+        }
         if (port.role() != Role.RECEIVE || be == null || !PackageItem.matchAddress(trip.address, filter))
             throw new VisualTestException("misdelivery: bee trip " + trip.number + " with '" + trip.address + "' "
                     + describe(trip.contents) + " landed in the " + port.role() + " port " + port.name()
@@ -337,7 +439,7 @@ final class RoboBeeLedger {
         trip.arrivedAt = port.name();
         trip.arrived = now;
         add(arrivedAt, trip.address, trip.contents);
-        LOGGER.info(PREFIX + "robobee: CHECK PASS bee trip {} arrived at {} after {} ticks ('{}' {})", trip.number,
+        LOGGER.info(PREFIX + "{}: CHECK PASS bee trip {} arrived at {} after {} ticks ('{}' {})", prefix, trip.number,
                 port.name(), now - trip.departed, trip.address, describe(trip.contents));
     }
 
@@ -404,6 +506,27 @@ final class RoboBeeLedger {
 
     List<Trip> trips() {
         return List.copyOf(trips);
+    }
+
+    /** A mark for {@link #tripsSince}: the number of trips recorded so far. */
+    int markTrips() {
+        return trips.size();
+    }
+
+    /** The trips that departed after {@code mark} was taken. */
+    List<Trip> tripsSince(int mark) {
+        return List.copyOf(trips.subList(Math.min(mark, trips.size()), trips.size()));
+    }
+
+    /** Copies of the boxes the bees carry right now (a bee's box lives only in CMP's {@code VirtualRobo}). */
+    List<ItemStack> boxesInFlight() {
+        List<ItemStack> boxes = new ArrayList<>();
+        for (Object robo : robos().values()) {
+            ItemStack stack = stackOf(robo);
+            if (!stack.isEmpty())
+                boxes.add(stack.copy());
+        }
+        return boxes;
     }
 
     int openTrips() {
