@@ -615,8 +615,14 @@ public final class RecipeSlipGameTests {
                             helper.absolutePos(packagerPos), null) instanceof SelectorPackagerItemHandler,
                             "and the Packager is vetoed now");
 
-                    click(helper, player, packagerPos, Direction.NORTH, true);
-                    helper.assertTrue(helper.getBlockState(packagerPos.north()).isAir(), "one per Packager");
+                    // A side whose neighbour lies in the Packager's own chunk, so "taken" is the refusal that applies
+                    // wherever the template falls (a neighbour across a chunk border is refused as other chunk first).
+                    ChunkPos packagerChunk = new ChunkPos(helper.absolutePos(packagerPos));
+                    Direction side = Direction.Plane.HORIZONTAL.stream()
+                            .filter(d -> new ChunkPos(helper.absolutePos(packagerPos.relative(d))).equals(packagerChunk))
+                            .findFirst().orElseThrow();
+                    click(helper, player, packagerPos, side, true);
+                    helper.assertTrue(helper.getBlockState(packagerPos.relative(side)).isAir(), "one per Packager");
                     helper.assertValueEqual(player.toldKeys().get(player.toldKeys().size() - 1),
                             WareworksLang.key(WareworksLang.SELECTOR_REFUSED_PACKAGER_TAKEN), "taken");
                     helper.assertValueEqual(player.getMainHandItem().getCount(), 3, "only one item was used");

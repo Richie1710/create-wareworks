@@ -44,9 +44,9 @@ public record SelectorLink(Optional<GlobalPos> station, Optional<GlobalPos> mach
             SelectorMachine.Kind::ordinal);
 
     public static final Codec<SelectorLink> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-            GlobalPos.CODEC.optionalFieldOf("station").forGetter(SelectorLink::station),
-            GlobalPos.CODEC.optionalFieldOf("machine").forGetter(SelectorLink::machine),
-            KIND_CODEC.optionalFieldOf("kind").forGetter(SelectorLink::kind)).apply(instance, SelectorLink::new));
+            GlobalPos.CODEC.lenientOptionalFieldOf("station").forGetter(SelectorLink::station),
+            GlobalPos.CODEC.lenientOptionalFieldOf("machine").forGetter(SelectorLink::machine),
+            KIND_CODEC.lenientOptionalFieldOf("kind").forGetter(SelectorLink::kind)).apply(instance, SelectorLink::new));
 
     public static final StreamCodec<ByteBuf, SelectorLink> STREAM_CODEC = StreamCodec.composite(
             ByteBufCodecs.optional(GlobalPos.STREAM_CODEC), SelectorLink::station,

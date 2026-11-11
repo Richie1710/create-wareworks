@@ -195,8 +195,8 @@ carries an item and three numbers: a **minimum** the warehouse tries to keep (a 
 item, and the warehouse even orders it from your own machines), a **maximum** it stores at most, and a **reserve** it
 never hands to your automation. Details are in the **Stock rules** section below.
 
-Also included: goggle information on every block, Create-style item descriptions, Ponder scenes for all of them but the
-home point (it has none yet), English and German translations, and recipes at mid-game Create tier.
+Also included: goggle information on every block, Create-style item descriptions, Ponder scenes for nearly all of them (not
+yet for the home point and the optimizer), English and German translations, and recipes at mid-game Create tier.
 
 Items only ever move in the crane's grabber, and nothing is lost or duplicated when blocks break, chunks unload or the
 server restarts.
@@ -275,8 +275,8 @@ The build *is* the configuration; there is no setup screen.
 9. **Put on Engineer's Goggles** and look at any block: addresses, stock, reservations, the crane's job and the
    controller's planning result are all shown.
 
-Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Fifteen of the sixteen blocks have
-one — the home point is the exception, it has no scene yet: the crane and the rail share the overview, the controller shows storing
+Hold **W** over any Wareworks item for a Ponder scene that shows the same steps. Nearly every block has
+one (the home point and the optimizer have none yet): the crane and the rail share the overview, the controller shows storing
 and retrieving, the interface adds addressing and storage filters, the terminal and the production station have their own
 scenes (placing and requesting, and feeding a machine from the warehouse), the output has three more for its port
 directions — requesting, accepting and collecting, the last of which the production station shows as well, because it is

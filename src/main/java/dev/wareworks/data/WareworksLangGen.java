@@ -378,12 +378,8 @@ public final class WareworksLangGen {
         tooltip(lang, "block.wareworks.recipe_selector",
                 "Sets the recipe of a _Mechanical Saw_ or a _Basin_ for each order of a _Production Station_, so one "
                         + "machine makes several products in turn.",
-                "When sneak-clicking a station",
-                "Links to that _Production Station_.",
-                "When placed against a saw or basin",
-                "Sets its _recipe_ for each order: _one product_ at a time. A _filter item_ in it is never touched.",
-                "When sneak-clicking a Warehouse Input",
-                "Makes it the station's _return input_: only the station's products come back through it.");
+                "When the machine holds a filter item",
+                "The selector never overwrites it and waits: take the _filter item_ out first.");
         // The Ender Recipe Selector and the recipe slip (ADR-085, design §3.2, §3.4, §7, §8, §12).
         lang.accept(WareworksLang.key(WareworksLang.SELECTOR_LINKED_MACHINE), "Linked to %1$s at %2$s");
         lang.accept(WareworksLang.key(WareworksLang.SELECTOR_SLIPS_ON),
@@ -557,14 +553,8 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key("gui.goggles.selector_reason.failed"), "error");
         tooltip(lang, "block.wareworks.ender_recipe_selector",
                 "For a factory far away: sets the machine's recipe from the _recipe slip_ of each package its _Packager_ unpacks.",
-                "When sneak-clicking a saw or basin",
-                "Links to that _machine_ at the factory.",
-                "When sneak-clicking a station",
-                "Switches on _recipe slips_ in the packages the station sends.",
-                "When sneak-placed on a Packager",
-                "Sets the _recipe_ before a package opens; one for another product _waits_ for an empty line.",
-                "When sneak-clicking a Warehouse Input",
-                "Makes it the station's _return input_.");
+                "When a package is for another product",
+                "It _waits_ in its port until the machine has run empty.");
         // The safety stop where the machine is (M20, issue #4, ADR-032): the goggle line, the screen's own row and the
         // sentence that says how to lift it. "Stopped" rather than "paused", because a player stopped nothing here.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_STOPPED), "Stopped products: %1$s");
