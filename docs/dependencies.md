@@ -6,7 +6,7 @@ Create package rows on 2026-10-03 against the same Create build, and the JEI row
 19.21.0.247, the JEI 19.57.0.451 binaries and runs on JEI 19.8.4.110 to 19.64.0.454, and the component meanings row
 on 2026-10-17 against Create 6.0.10-280, and the CC: Tweaked rows on 2026-10-27 against the CC: Tweaked 1.116.1 API
 jars and sources and the 1.120.2 jars, and the Create: Electro Energetics rows on 2026-10-27 against the CEE
-1.21.1-1.1.4 jar.
+1.21.1-1.1.4 jar, and the Create Mobile Packages rows on 2026-11-11 against the CMP 1.21.1-0.7.8 jar.
 
 Update this file whenever a dependency version changes.
 
@@ -196,6 +196,51 @@ dock like any other motor. The mod is only put into the dev runtime to prove tha
   230 V) and `./gradlew runServer -Pwareworks.cc -Pwareworks.cee`. The test class names no CEE type: blocks and items are
   looked up by id, the battery's voltage is set through Create's `ScrollValueBehaviour` (millivolts), and the terminal
   positions come from the blocks' public `getNodePositions(Level, BlockPos, BlockState)` called by reflection.
+
+## Dev runtime only: Create Mobile Packages
+
+| Artifact | Version | Scope | Repository |
+|---|---|---|---|
+| `maven.modrinth:create-mobile-packages` | **1.21.1-0.7.8** (`cmp_version`), or any other with `-Pwareworks.cmp=<version>` | localRuntime, **only** with `-Pwareworks.cmp` | `https://api.modrinth.com/maven` (`includeGroup 'maven.modrinth'`) |
+
+Create Mobile Packages (CMP, mod id `create_mobile_packages`, MIT) adds Robo Bee ports: Create package ports whose boxes
+are flown by virtual bees to another port of the same Create logistics network. Wareworks needs **no code and no
+dependency entry** for it (ADR-074): a station's out door (a Packager on its back with a sign) and an in door (a Packager
+whose back touches a Warehouse Input) are plain Create blocks, and a bee port next to them is just another package port.
+The mod is only put into the dev runtime for the `robobee` visual scenario, which proves that production in remote
+factories over bees works end to end:
+
+* **Why Modrinth Maven.** CMP publishes no Maven artifact of its own. Modrinth's Maven serves the upload as
+  `maven.modrinth:create-mobile-packages:1.21.1-0.7.8` (Modrinth version id `xSPt2JXH`, published 2026-10-05; the
+  reviewed jar `create_mobile_packages-1.21.1-0.7.8.jar` has the SHA-1 `1e5238c8764bcfc3c0af29c3ff5b4533a18364c7`).
+  `transitive = false` like every other mod artifact here.
+* **Nested jar.** CMP 0.7.8 jar-in-jars `create_factory_abstractions-1.21.1-1.6.0` (`ru.zznty`, used by its Portable
+  Stock Ticker packets, registered at startup), which FML picks up from the mod jar in dev runs as in production; the
+  scenario checks that the mod list has it. It is not listed separately.
+* **A mixin on Create.** CMP mixes into Create's `LogisticsNetwork` (a player list and an owner flag per network). It
+  loads against Create 6.0.10-280 without a conflict; the dev log's warning that
+  `create_mobile_packages.refmap.json` could not be read is harmless (the dev runtime uses Mojang names).
+* **No `neoforge.mods.toml` entry and no CurseForge/Modrinth relation.** Nothing in Wareworks calls CMP; CMP itself
+  requires Create `[6.0.7,6.1.0)`. CMP is never compiled against and never bundled: the scenario reaches it through
+  registry ids, Create's own `PackagePortBlockEntity`/`LogisticallyLinkedBehaviour` API and reflection
+  (`dev.RoboBeeLedger`), naming CMP members only by string: the ledger its classes and fields, and
+  `dev.RoboBeeVisualScenario` three more (the port screen's field `returnModeButton`, the save key
+  `BeeReturnModeEnabled` and the bee slot's menu index 54).
+* **Dev runs have no CMP by default.** `-Pwareworks.cmp` (empty or `true`) adds `cmp_version` to every run;
+  `-Pwareworks.cmp=<version>` another Modrinth version; `-Pwareworks.cmp=false` or no property none. It combines with
+  `-Pwareworks.cc`, `-Pwareworks.cee` and `-Pwareworks.jei`.
+* **Facts for players (CMP's default server config, `create_mobile_packages-server.toml`).** All ports of one setup
+  must share one Create logistics network: place the first port, right-click it (not sneaking) with the rest of the
+  port stack, then place the others from that tuned stack. A port **pulls** boxes from its neighbours while unpowered
+  and **pushes** its boxes into them while powered, so every place needs one unpowered send port beside its packing
+  Packager(s) and one powered receive port beside its unpacking Packager, and a port must touch no other inventory and
+  no other port. A send port keeps a blank address; a receive port's address is what the boxes for it carry (never a
+  player's name or anything starting with `@`). Return mode on the send ports sends every bee home after delivery. A
+  bee flies `beeSpeed` 6 blocks per second in a straight line; **both ends must stay loaded**: a bee whose target is
+  unloaded re-targets to its home or any loaded port of the network, and a powered port pushes without looking at the
+  address. Wareworks' own aisle tickets do not cover ports outside the aisle.
+* **Checked at runtime** by `./gradlew runVisualTest -Pwareworks.visualTest=robobee -Pwareworks.cmp`. Without the
+  property the scenario fails at once with a line naming it.
 
 ## Create / NeoForge APIs in use or planned
 

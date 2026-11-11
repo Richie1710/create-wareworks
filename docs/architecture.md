@@ -7654,6 +7654,21 @@ instead of redstone, and any dependency on CC: Computer Energetics. Create 6.0.1
   `CeeMotorGameTests` (only with `-Pwareworks.cee`). The in-game Lua checks (real Lua through Cobalt), the CEE wiring
   by hand and a dedicated server with a player are checklist section BL.
 
+*Amendment (2026-11-11): a third dev-only mod, Create Mobile Packages.* The owner runs production in remote factories
+reached by CMP's Robo Bees. CMP gets the same treatment as CEE: no code, no `neoforge.mods.toml` entry, only
+`-Pwareworks.cmp[=<version>]` (`cmp_version` 1.21.1-0.7.8, Modrinth Maven, `localRuntime`, `transitive = false`) for the
+dev-only `robobee` visual scenario. The scenario reaches CMP through registry ids, Create's own
+`PackagePortBlockEntity`/`LogisticallyLinkedBehaviour` API and reflection in `dev.RoboBeeLedger`; CMP members are named
+only by string, in the ledger and in three places of `dev.RoboBeeVisualScenario` (the port screen's `returnModeButton`,
+the save key `BeeReturnModeEnabled`, the bee slot's menu index 54), and the run fails at once when the mod or a reviewed
+member is missing. A bee port is just another Create package port, so a station's out door (a Packager on its back with
+a sign) and an in door (a Packager whose back touches a Warehouse Input) need nothing new; the run proves the loop end
+to end (one click, a four-step chain over two factories, every box and bee accounted for, every progress gap far below
+the default 6000-tick deadline). No product decision changed. The one owner-facing number is the plan cap: 512 glass
+panes over that chain cost 768 ingredient items, so with the default `maxPlanIngredientItems` 256 one click is granted
+160 panes (`ProductionPlannerTest#aGlassPaneChainOf512IsClampedTo160AtTheDefaultIngredientCap`); the scenario raises the
+cap for its own world only, and a server that wants such orders in one click sets it to at least 768.
+
 ### ADR-075 — Several cranes share one warehouse: a free dock facing into the rails joins it; cranes reserve whole routes of single blocks atomically; no crane may cut another off from its dock; the oldest request wins and cranes in its way move aside, to their dock the second time; the nearest free crane takes the job (M33, [issue #14](https://github.com/Richie1710/create-wareworks/issues/14))
 
 *Context:* Up to 0.17.1 a warehouse had exactly one crane. A second dock on the same rails was a wall

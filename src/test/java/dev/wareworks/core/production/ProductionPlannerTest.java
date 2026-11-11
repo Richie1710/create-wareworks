@@ -474,6 +474,44 @@ class ProductionPlannerTest {
                 PlanRefusal.TOO_MANY_INGREDIENT_ITEMS, PLANK);
     }
 
+    /**
+     * The owner's glass pane chain (the {@code robobee} visual scenario): cobblestone to gravel to sand at one crushing
+     * station, sand to glass at a melting station, six glass to sixteen panes at a Crafter. Every root run costs 6 + 6 +
+     * 6 + 6 = 24 ingredient items, so one click for 512 panes (768 items) is granted only 160 under the default cap of
+     * 256 and the whole 512 once the cap is at least 768.
+     */
+    @Test
+    void aGlassPaneChainOf512IsClampedTo160AtTheDefaultIngredientCap() {
+        stocked("cobblestone", 1728);
+        List<StationPattern<String, String>> patterns = aisle(
+                "crushing", ProductionPattern.of("cobblestone", 1, "gravel", 1),
+                "crushing", ProductionPattern.of("gravel", 1, "sand", 1),
+                "melting", ProductionPattern.of("sand", 1, "glass", 1),
+                "panes", ProductionPattern.of("glass", 6, "pane", 16));
+
+        ProductionPlanResult<String, String> clamped = ProductionPlanner.plan(
+                input(patterns, PlanLimits.DEFAULT, 12), "pane", 512);
+        ProductionPlan<String, String> small = planned(clamped);
+        assertEquals(160L, small.rootPromise(), "ten root runs of 24 items fit into 256, eleven do not");
+        assertEquals(240L, small.ingredientItems());
+        assertTrue(small.isClamped());
+        assertEquals(Optional.of(PlanRefusal.TOO_MANY_INGREDIENT_ITEMS), clamped.limit());
+
+        ProductionPlanResult<String, String> exact = ProductionPlanner.plan(
+                input(patterns, new PlanLimits(PlanLimits.DEFAULT.maxSteps(), 768L), 12), "pane", 512);
+        ProductionPlan<String, String> whole = planned(exact);
+        assertEquals(512L, whole.rootPromise());
+        assertEquals(768L, whole.ingredientItems());
+        assertFalse(whole.isClamped());
+        assertTrue(exact.limit().isEmpty(), "nothing was cut, so nothing stopped it");
+        assertEquals(List.of("gravel", "sand", "glass", "pane"), results(whole));
+        assertEquals(32, whole.root().runs());
+        assertEquals(Map.of("cobblestone", 192L), whole.leafDemand());
+
+        assertEquals(512L, planned(ProductionPlanner.plan(
+                input(patterns, new PlanLimits(PlanLimits.DEFAULT.maxSteps(), 1024L), 12), "pane", 512)).rootPromise());
+    }
+
     /** An intermediate that would not fit under its own maximum is refused at the click, naming it. */
     @Test
     void anIntermediateMustFitUnderItsMaximum() {

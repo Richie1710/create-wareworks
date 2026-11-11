@@ -202,6 +202,15 @@ var ceeRuntimeProperty = providers.gradleProperty('wareworks.cee').orNull
 var ceeRuntimeVersion = ceeRuntimeProperty == null || ceeRuntimeProperty == 'false' ? null
         : (ceeRuntimeProperty.isEmpty() || ceeRuntimeProperty == 'true' ? project.cee_version : ceeRuntimeProperty)
 
+// Create Mobile Packages needs no code here either (ADR-074): only the dev-only robobee visual scenario uses it, and only
+// by registry id, Create's own PackagePortBlockEntity API and reflection (dev.RoboBeeLedger). It enters the dev runs on
+// request:
+//   -Pwareworks.cmp             the CMP of cmp_version (gradle.properties)
+//   -Pwareworks.cmp=<version>   any other CMP version published on Modrinth for this Minecraft version
+var cmpRuntimeProperty = providers.gradleProperty('wareworks.cmp').orNull
+var cmpRuntimeVersion = cmpRuntimeProperty == null || cmpRuntimeProperty == 'false' ? null
+        : (cmpRuntimeProperty.isEmpty() || cmpRuntimeProperty == 'true' ? project.cmp_version : cmpRuntimeProperty)
+
 dependencies {
     // Create's published POM declares many optional integrations (Architectury, FTB, JourneyMap, JEI, ...)
     // as runtime dependencies. We never want those, so every Create-related artifact is non-transitive
@@ -227,6 +236,9 @@ dependencies {
 
     if (ceeRuntimeVersion != null)
         localRuntime("maven.modrinth:create-electro-energetics:${ceeRuntimeVersion}") { transitive = false }
+
+    if (cmpRuntimeVersion != null)
+        localRuntime("maven.modrinth:create-mobile-packages:${cmpRuntimeVersion}") { transitive = false }
 
     testImplementation(platform('org.junit:junit-bom:5.11.4'))
     testImplementation('org.junit.jupiter:junit-jupiter')

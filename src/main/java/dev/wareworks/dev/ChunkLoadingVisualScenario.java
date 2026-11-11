@@ -76,7 +76,6 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.client.event.ClientChatReceivedEvent;
-import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
@@ -518,7 +517,7 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
         script.server("chunks: chapter 3 - a per-aisle cap below this aisle's footprint", (server, context) -> {
                     chapter("refused: the aisle needs more chunks than allowed");
                     setChunkLoading(HOLD_AISLES, COLLECT_HOLD_AISLES);
-                    setConfig(WareworksConfig.SERVER.maxChunksPerAisle, TOO_SMALL_CHUNK_CAP);
+                    VisualConfig.setConfig(WareworksConfig.SERVER.maxChunksPerAisle, TOO_SMALL_CHUNK_CAP);
                 })
                 .server("chunks: unpower the crane", ChunkLoadingVisualScenario::powerOff)
                 .serverUntil("chunks: wait until the crane is idle and unpowered", this::craneIdleAndEmpty,
@@ -540,7 +539,7 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
                 }, COLLECT_TIMEOUT_TICKS)
                 .server("chunks: census after the refused aisle did its work", (server, context) -> census(server,
                         "an aisle that may not hold chunks works exactly as it did before M19"))
-                .server("chunks: give the aisle its footprint back", (server, context) -> setConfig(
+                .server("chunks: give the aisle its footprint back", (server, context) -> VisualConfig.setConfig(
                         WareworksConfig.SERVER.maxChunksPerAisle,
                         WareworksConfig.SERVER.maxChunksPerAisle.getDefault()));
     }
@@ -1145,7 +1144,8 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
     /** The end state of the run: the shipped config again, and not one ticket anywhere on the server. */
     private void assertNothingHeldAtAll(MinecraftServer server, VisualContext context) {
         setChunkLoading(0, 0);
-        setConfig(WareworksConfig.SERVER.maxChunksPerAisle, WareworksConfig.SERVER.maxChunksPerAisle.getDefault());
+        VisualConfig.setConfig(WareworksConfig.SERVER.maxChunksPerAisle,
+                WareworksConfig.SERVER.maxChunksPerAisle.getDefault());
         for (ServerLevel level : server.getAllLevels()) {
             if (AisleChunkTickets.holdingAisleCount(level) != 0)
                 throw new VisualTestException("aisles in " + level.dimension().location() + " still hold chunks: "
@@ -1389,15 +1389,8 @@ public final class ChunkLoadingVisualScenario implements VisualScenario {
      * for that re-check on purpose: it is the safety net that has to work.
      */
     private static void setChunkLoading(int aisles, int collectAisles) {
-        setConfig(WareworksConfig.SERVER.maxTicketedAislesPerLevel, aisles);
-        setConfig(WareworksConfig.SERVER.maxCollectHoldAislesPerLevel, collectAisles);
-    }
-
-    private static void setConfig(ModConfigSpec.IntValue value, int newValue) {
-        if (!WareworksConfig.isServerConfigLoaded())
-            throw new VisualTestException("the server config is not loaded, so overriding it would be a silent no-op");
-        value.set(newValue);
-        value.clearCache();
+        VisualConfig.setConfig(WareworksConfig.SERVER.maxTicketedAislesPerLevel, aisles);
+        VisualConfig.setConfig(WareworksConfig.SERVER.maxCollectHoldAislesPerLevel, collectAisles);
     }
 
     // --- the player --------------------------------------------------------------------------------------------------

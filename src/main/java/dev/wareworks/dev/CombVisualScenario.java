@@ -1864,7 +1864,7 @@ public final class CombVisualScenario implements VisualScenario {
             throw new VisualTestException("the server config is not loaded, so it cannot be lowered");
         ModConfigSpec.IntValue value = WareworksConfig.SERVER.maxAisleLength;
         aisleLengthBefore = value.get();
-        setConfig(value, CUT_LENGTH);
+        VisualConfig.setConfig(value, CUT_LENGTH);
         dock(server.overworld(), context.origin()).refreshGeometry();
         LOGGER.info(PREFIX + "comb: aisle.maxAisleLength lowered from {} to {}", aisleLengthBefore, CUT_LENGTH);
     }
@@ -1872,18 +1872,9 @@ public final class CombVisualScenario implements VisualScenario {
     private void restoreAisleLength(MinecraftServer server, VisualContext context) {
         if (aisleLengthBefore < 0)
             throw new VisualTestException("aisle.maxAisleLength was never lowered, so it cannot be put back");
-        setConfig(WareworksConfig.SERVER.maxAisleLength, aisleLengthBefore);
+        VisualConfig.setConfig(WareworksConfig.SERVER.maxAisleLength, aisleLengthBefore);
         aisleLengthBefore = -1;
         dock(server.overworld(), context.origin()).refreshGeometry();
-    }
-
-    /**
-     * {@code set} writes into the loaded config in memory only; {@code clearCache} makes the next {@code get} re-read
-     * it, which the cached values need.
-     */
-    private static void setConfig(ModConfigSpec.IntValue value, int newValue) {
-        value.set(newValue);
-        value.clearCache();
     }
 
     private boolean aisleCutLoose(MinecraftServer server, VisualContext context) {

@@ -55,6 +55,7 @@ final class VisualScenarios {
             Map.entry(RequesterVisualScenario.NAME, RequesterVisualScenario::new),
             Map.entry(RequesterMakeVisualScenario.NAME, RequesterMakeVisualScenario::new),
             Map.entry(BayUpgradeVisualScenario.NAME, BayUpgradeVisualScenario::new),
+            Map.entry(RoboBeeVisualScenario.NAME, RoboBeeVisualScenario::new),
             Map.entry(ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new));
 
     private VisualScenarios() {
