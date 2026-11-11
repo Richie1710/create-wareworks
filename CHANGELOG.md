@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0-beta] - 2026-11-11
+
 ### Added
 
 - **Upgrade kits for rack and fluid bays.** The Andesite Rack Upgrade Kit turns a Wooden Rack Bay into an Andesite one
@@ -26,7 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Recipe Selector.** Sneak-click a Production Station with it, place it against a Mechanical Saw facing up or
   against a Basin, and sneak-click the Warehouse Input the products come back through: the station sets the machine's
   recipe filter before each order, so one saw line makes Deepslate Tile Stairs, Slabs and Walls in turn instead of
-  cycling through every stonecutting recipe. A filter item in the machine is never overwritten.
+  cycling through every stonecutting recipe. A filter item in the machine is never overwritten. Every pattern at such
+  a station is checked against the machine's real recipes and drawn red with the reason (no recipe, several amounts, a
+  chance-only result, fluids, stonecutting switched off) and is never ordered there; Crafter Feeder stations are
+  refused. The station screen's selector row switches the selector or the slips off again. New server config section
+  `selector` (`localRange`, `machineRange`, `remoteProbe`).
 - **Ender Recipe Selector.** For a factory far away: sneak-click the factory's saw or basin with it, then the
   Production Station (this switches on recipe slips) and the return input, then sneak-place it on the factory's
   unpacking Packager. Every package the station's Packager sends carries a recipe slip, and the selector sets the
@@ -47,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The hand truck's description** says that it carries pallets as well, and the Wooden and Andesite Rack Bay and the
-  Copper Fluid Bay descriptions name the kit that upgrades them.
+  Copper Fluid Bay descriptions say that an upgrade kit makes them the next tier where they stand.
 - **Ponder:** "Building a Rack Wall" ends with a filled column upgraded from the bottom up and is the scene of both rack
   kits; "Carrying Containers with the Hand Truck" ends with a pallet lifted onto the truck.
 - **Server and players have to update together.** A client with this version cannot join a server with an older one,
@@ -1642,7 +1648,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.22.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.23.0-beta...HEAD
+[0.23.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.22.0-beta...v0.23.0-beta
 [0.22.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.21.0-beta...v0.22.0-beta
 [0.21.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.20.0-beta...v0.21.0-beta
 [0.20.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.19.0-beta...v0.20.0-beta
