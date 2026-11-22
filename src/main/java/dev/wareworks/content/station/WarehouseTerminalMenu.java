@@ -18,6 +18,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.FixedSlotsItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.remote.RemoteBinding;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crafting.IngredientPicker;
@@ -39,6 +40,7 @@ import dev.wareworks.network.TerminalDoorsPayload;
 import dev.wareworks.network.TerminalListActionPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
+import dev.wareworks.network.TerminalPackageOrderPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
 import dev.wareworks.network.TerminalUsagePayload;
@@ -210,6 +212,12 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
     @Nullable
     private TerminalCraftOrderState lastCraftOrder;
     /**
+     * The address order's state as last pushed (issue #40), so a terminal without one costs no packet after the first
+     * push.
+     */
+    @Nullable
+    private TerminalPackageOrderState lastPackageOrder;
+    /**
      * The package doors as last pushed (M27, issue #18, ADR-065 D9), so a warehouse whose doors and their counts did
      * not change costs no packet. Transient per-menu state like every field here.
      */
@@ -321,6 +329,7 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         listQuestionPending = false;
         lastListQuestion = null;
         lastCraftOrder = null;
+        lastPackageOrder = null;
         lastDoors = null;
         craftQuestionPending = false;
         lastCraftQuestion = null;
@@ -699,8 +708,10 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             return false;
         // The cancel mark of an order line names a production order, or — since M31 — one of this terminal's fill
         // requests ("Filling from Lava"); each of the two re-validates the id against its own state.
+        // Since issue #40 also the address order of package mode, whose line carries the same cancel mark.
         boolean cancelled = contentHolder.cancelProductionOrder(requester, orderId)
-                || contentHolder.cancelFillRequest(requester, orderId);
+                || contentHolder.cancelFillRequest(requester, orderId)
+                || contentHolder.cancelPackageOrder(requester, orderId);
         if (cancelled)
             markDirty(); // the promised ingredients are free again: push the new availability with the next tick
         return cancelled;
@@ -954,6 +965,9 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
         if (contentHolder.hasOpenCraftOrder())
             return TerminalCraftOutcome.of(TerminalCraftResult.ALREADY_RUNNING);
+        // Package mode (issue #40, owner decision E6): the crafting panel is off, so a recipe viewer lays nothing.
+        if (PackageModeGate.enabled())
+            return TerminalCraftOutcome.of(TerminalCraftResult.PACKAGE_MODE);
         // A shape the payload decoder refuses never gets this far from the network; a caller in-process is held to it
         // all the same, as a lay that matches nothing.
         if (!TerminalCraftLayPayload.wellFormed(cells))
@@ -1116,6 +1130,10 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
             sendStock(target, reset, changes, fluidNews);
 
         TerminalScreenStatus status = TerminalScreenStatus.of(contentHolder.status());
+        // Package mode (issue #40): the screen's rows are one per address, so "+N not shown" is measured against the
+        // folded rows of the snapshot taken just above, not against the boxes (each its own key).
+        if (PackageModeGate.enabled())
+            status = status.withItemTypes(contentHolder.screenRowTypes());
         if (reset || !status.equals(lastStatus)) {
             lastStatus = status;
             PacketDistributor.sendToPlayer(target, new TerminalStatusPayload(containerId, status));
@@ -1174,6 +1192,18 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         craftQuestionPending = false;
         lastCraftQuestion = craftQuestion;
 
+        // The address order of package mode (issue #40): its line in the production section, compared by value like the
+        // orders above, so a terminal without one costs no packet after the first push.
+        // Nothing is sent while no address order can exist (package mode off, none saved open, none shown): with the
+        // switch off a screen gets exactly the packets it got before package mode (review fix, 2026-11-22).
+        TerminalPackageOrderState packageOrder = contentHolder.packageOrderState();
+        boolean packageOrderMatters = PackageModeGate.enabled() || packageOrder.active()
+                || lastPackageOrder != null && lastPackageOrder.active();
+        if (packageOrderMatters && (reset || !packageOrder.equals(lastPackageOrder))) {
+            lastPackageOrder = packageOrder;
+            PacketDistributor.sendToPlayer(target, new TerminalPackageOrderPayload(containerId, packageOrder));
+        }
+
         // The package doors a click may deliver to (M27, issue #18, ADR-065 D9): the warehouse's shared build, which
         // this push is the only thing that ever asks for, with each door's counts read live. Compared by value like
         // everything above, and sent on every full sync, so a screen always knows whether it has a choice to offer.
@@ -1229,10 +1259,21 @@ public class WarehouseTerminalMenu extends MenuBase<WarehouseTerminalBlockEntity
         if (contentHolder == null)
             return List.of();
         List<StockCount<ItemKey>> counts = new ArrayList<>();
-        for (TerminalStockEntry entry : contentHolder.stockSnapshot())
+        // The screen's list, which in package mode is one row per address (issue #40); with the switch off it is the
+        // terminal's stockSnapshot itself.
+        for (TerminalStockEntry entry : contentHolder.screenStockSnapshot())
             counts.add(new StockCount<>(entry.key(), entry.total(), entry.available(), entry.producible(),
-                    entry.producibleAmount(), entry.rule(), entry.ruleReserved(), entry.ruleMaximum()));
+                    entry.producibleAmount(), entry.rule(), entry.ruleReserved(), entry.ruleMaximum(), entry.group()));
         return counts;
+    }
+
+    /**
+     * Server: the address order's state this menu last pushed to its screen (issue #40), or {@code null} before the
+     * first push. For the GameTests, which read what the screen was told.
+     */
+    @Nullable
+    public TerminalPackageOrderState lastPackageOrder() {
+        return lastPackageOrder;
     }
 
     /**

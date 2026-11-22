@@ -516,7 +516,8 @@ class LangConsistencyTest {
         /** Every goggle row a rack bay can draw (M28, issue #20). */
         private static final List<String> RACK_BAY_GOGGLE_KEYS = List.of(RACK_BAY_HEADER_KEY, BAY_CAPACITY_KEY,
                 "gui.goggles.bay_contents", "gui.goggles.bay_learned", "gui.goggles.bay_accepts_first",
-                "gui.goggles.bay_overloaded", "gui.goggles.bay_misaligned_hint", "gui.goggles.bay_no_warehouse");
+                "gui.goggles.bay_overloaded", "gui.goggles.bay_misaligned_hint", "gui.goggles.bay_no_warehouse",
+                "gui.goggles.bay_package_mode_needs_filter", "gui.goggles.bay_package_mode_loose");
         /** The three bay blocks, whose names the header row draws. */
         private static final List<String> RACK_BAY_BLOCK_KEYS = List.of("wareworks.rack_bay_wood",
                 "wareworks.rack_bay_andesite", "wareworks.rack_bay_brass");

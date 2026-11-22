@@ -1172,7 +1172,18 @@ public final class JobPlanner<K, L> {
                 note(survey, false);
                 continue;
             }
-            FilterMatch filter = Objects.requireNonNull(input.storeFilter().apply(location, key), "storeFilter result");
+            // Package mode (issue #40, E3): a place that is no target for this key. The store plan and the relocation
+            // plan drop it; a reroute that puts back items which already left the warehouse (allowRejected) ranks it
+            // last, like a rejecting filter, so a box can always go back into the empty plain bay it came from and the
+            // crane never holds it for ever (review fix, 2026-11-22). Asked before the filter, so a dropped place costs
+            // no evaluation either.
+            boolean packageExcluded = input.storeExcluded().test(location, key);
+            if (packageExcluded && !allowRejected) {
+                noteExcluded(survey);
+                continue;
+            }
+            FilterMatch filter = packageExcluded ? FilterMatch.REJECTED
+                    : Objects.requireNonNull(input.storeFilter().apply(location, key), "storeFilter result");
             if (!filter.allowsStoring() && !allowRejected) {
                 note(survey, true);
                 continue;
@@ -1274,6 +1285,12 @@ public final class JobPlanner<K, L> {
      */
     private static int portStrength(int portRank) {
         return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, Math.abs((long) portRank) - 1L));
+    }
+
+    /** Package mode (issue #40, E3): a location skipped only because it is an empty bay without a Package Filter. */
+    private static void noteExcluded(@Nullable StoreSurvey survey) {
+        if (survey != null)
+            survey.packageExcluded = true;
     }
 
     private static void note(@Nullable StoreSurvey survey, boolean filterRejected) {
@@ -1441,6 +1458,11 @@ public final class JobPlanner<K, L> {
         /** At least one location was skipped for another reason (unavailable, known refusal, no estimated room). */
         private boolean otherSkip;
         /**
+         * Package mode (issue #40, E3): at least one location was skipped only because it is an empty rack bay without a
+         * Package Filter and the key is a box. Never set with package mode off.
+         */
+        private boolean packageExcluded;
+        /**
          * Collect only (M18, issue #13): at least one item type in the machine behind a collecting port was skipped
          * before any storage candidate was looked at — the port's own filter rejects it, or the live extract handed
          * nothing out. Set at the skip sites in {@link #planCollect}, like {@link #atMaximum} and for the same reason:
@@ -1456,7 +1478,13 @@ public final class JobPlanner<K, L> {
          * filter mismatch.
          */
         NoJobReason reason() {
-            if (storageRanked || otherSkip)
+            if (storageRanked)
+                return NoJobReason.WAREHOUSE_FULL;
+            // Package mode: an empty bay would have taken the box but for a Package Filter, so that is the cure to name
+            // rather than "full" (review fix). Never true with package mode off.
+            if (packageExcluded && !portRanked)
+                return NoJobReason.PACKAGE_BAY_NEEDS_FILTER;
+            if (otherSkip)
                 return NoJobReason.WAREHOUSE_FULL;
             if (portRanked)
                 return NoJobReason.PORT_FULL;

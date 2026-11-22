@@ -87,6 +87,8 @@ public final class WareworksClient {
 
     private static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
         WarehouseTerminalScreen.forgetRememberedGrids();
+        // Package mode (issue #40): the next server tells its own switch at login.
+        dev.wareworks.content.packagemode.PackageModeGate.setClientView(false);
     }
 
     private static void onClientSetup(FMLClientSetupEvent event) {

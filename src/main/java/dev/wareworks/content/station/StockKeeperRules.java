@@ -10,6 +10,8 @@ import org.jetbrains.annotations.Nullable;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
+import dev.wareworks.content.packagemode.PackageRuleKeys;
 import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleAdjustment;
@@ -227,6 +229,10 @@ public final class StockKeeperRules {
      * counts items, and a row that already held a filled container keeps the unit a player chose for it. Where the new
      * item changes the unit, the numbers are carried over in the new unit ({@link RuleUnit#convert}), so a row's
      * maximum of 10 lava buckets becomes 10 000 mB rather than 10 mB.
+     * <p>
+     * <b>Package rows</b> (issue #40): while the world's package-mode switch is on, a Create Package Filter with an
+     * address makes the row a {@link RuleUnit#PACKAGES} rule, and a Package Filter with a blank address is refused
+     * ({@link Edit#NONE}); the screen says to set an address first. With the switch off nothing here changes.
      */
     public Edit setItem(int row, @Nullable ItemKey key) {
         if (!inRange(row))
@@ -239,17 +245,25 @@ public final class StockKeeperRules {
             units.set(row, RuleUnit.ITEMS);
             return new Edit(true, StockRuleAdjustment.NONE);
         }
+        // Package mode (issue #40): a Package Filter with an address counts the packages of that address, and one with a
+        // blank address is refused, because "packages without an address" is not what a player means by it. Only while
+        // the world's switch is on; with it off a Package Filter is an item like any other, exactly as before.
+        boolean packageMode = PackageModeGate.enabled();
+        if (packageMode && PackageRuleKeys.isBlankPackageFilter(key))
+            return Edit.NONE;
         int capacity = capacityOf(key);
         RuleUnit before = current == null ? RuleUnit.ITEMS : units.get(row);
         RuleUnit unit;
-        if (capacity <= 0)
+        if (packageMode && PackageRuleKeys.filterAddress(key).isPresent())
+            unit = RuleUnit.PACKAGES;
+        else if (capacity <= 0)
             unit = RuleUnit.ITEMS;
         else if (current != null && capacityOf(current.key()) > 0)
             unit = before; // a container replaced by a container keeps the unit the player chose
         else
             unit = RuleUnit.FLUID;
         StockRule<ItemKey> next = current == null ? StockRule.of(key) : converted(current.withKey(key), before, unit,
-                unit == RuleUnit.FLUID ? capacity : capacityOf(current.key()));
+                unit == RuleUnit.FLUID ? capacity : before == RuleUnit.FLUID ? capacityOf(current.key()) : 0);
         if (next.equals(current) && unit == before)
             return Edit.NONE;
         rows.set(row, next);
@@ -321,9 +335,10 @@ public final class StockKeeperRules {
     // --- persistence -------------------------------------------------------------------------------------------
 
     /**
-     * NBT form: {@code Rules: [{Row: int, Item: <ItemKey>, Min: long, Max: long, Reserve: long, Unit?: "fluid"}]}.
-     * Empty rows are left out, so an unconfigured keeper saves almost nothing; {@code Unit} is written for a fluid row
-     * only (M31), so an item row saves exactly what it saved before. Never throws.
+     * NBT form: {@code Rules: [{Row: int, Item: <ItemKey>, Min: long, Max: long, Reserve: long, Unit?: "fluid" |
+     * "packages"}]}. Empty rows are left out, so an unconfigured keeper saves almost nothing; {@code Unit} is written for
+     * a fluid row (M31) and a package row (issue #40) only, so an item row saves exactly what it saved before. Never
+     * throws.
      */
     public ListTag save(HolderLookup.Provider registries) {
         ListTag list = new ListTag();
@@ -341,8 +356,8 @@ public final class StockKeeperRules {
                 rowTag.putLong(MINIMUM, rule.minimum());
                 rowTag.putLong(MAXIMUM, rule.maximum());
                 rowTag.putLong(RESERVE, rule.reserve());
-                if (units.get(row) == RuleUnit.FLUID)
-                    rowTag.putString(UNIT, RuleUnit.FLUID_NAME);
+                if (units.get(row) != RuleUnit.ITEMS)
+                    rowTag.putString(UNIT, units.get(row).savedName());
                 list.add(rowTag);
             } catch (RuntimeException e) {
                 Wareworks.LOGGER.warn("Could not save stock rule row {}", row, e);

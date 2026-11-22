@@ -18,6 +18,15 @@ public enum NoJobReason {
      */
     NO_MATCHING_FILTER,
     /**
+     * Package mode (issue #40, owner decision E3, review fix 2026-11-22): an input station holds a box, and the only
+     * storage locations with room for it were <b>empty rack bays without a Create Package Filter</b>, which package
+     * mode keeps boxes out of (a bay holds one item key and every box is its own key). Told apart from
+     * {@link #WAREHOUSE_FULL} because the cure is a Package Filter in a bay's filter slot, or a chest behind an
+     * interface, not more room. Never reported with package mode off. Arms the back-off like {@link #WAREHOUSE_FULL}:
+     * it is reached after the same candidate walk.
+     */
+    PACKAGE_BAY_NEEDS_FILTER,
+    /**
      * An accepting warehouse port was the only target left for an input station's items and it accepts nothing right
      * now (M17, issue #12): the port's buffer is full, so the input backs up exactly as it does when a warehouse is
      * full — nothing is destroyed and nothing is dropped.

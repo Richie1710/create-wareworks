@@ -2,6 +2,7 @@ package dev.wareworks.client.gui;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,6 +23,7 @@ import com.simibubi.create.foundation.gui.widget.Label;
 import com.simibubi.create.foundation.gui.widget.ScrollInput;
 
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
@@ -35,6 +37,10 @@ import dev.wareworks.content.station.TerminalDoors;
 import dev.wareworks.content.station.TerminalFluids;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.content.station.TerminalListState;
+import dev.wareworks.content.station.TerminalPackageOrderState;
+import dev.wareworks.core.inventory.KeyCount;
+import dev.wareworks.core.terminal.PackageGroupSummary;
+import dev.wareworks.network.TerminalPackageOrderPayload;
 import dev.wareworks.content.station.TerminalMenuLayout;
 import dev.wareworks.content.station.TerminalPortionRefusal;
 import dev.wareworks.content.station.TerminalScreenStatus;
@@ -236,6 +242,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     private static final int RULE_BADGE_SIZE = 3;
     private static final int COLOR_RULE = 0xFF9FB4C7;
+    /** A cell of loose stock in package mode (issue #40): greyed, the section a player only takes out of. */
+    private static final int COLOR_LOOSE_CELL = 0x40000000;
+    /**
+     * Package mode (issue #40): a grey wash drawn <b>over</b> a loose cell's item, below its amount, so the loose section
+     * reads as greyed at a glance (review fix: the cell tint alone could not be seen under an item).
+     */
+    private static final int COLOR_LOOSE_ITEM = 0x908B8B8B;
+    /** The border between the address rows and the loose stock (issue #40). */
+    private static final int COLOR_SECTION = 0xFFC9A04B;
     private static final int COLOR_RULE_BELOW_MINIMUM = 0xFFFBDC7D;
     private static final int COLOR_RULE_AT_MAXIMUM = 0xFFFF8080;
     private static final int COLOR_RULE_AT_RESERVE = 0xFF89C7F1;
@@ -356,6 +371,14 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     private static WeakReference<WarehouseTerminalScreen> laidOut = new WeakReference<>(null);
 
     private final StockListModel<ItemKey> model = new StockListModel<>();
+    /**
+     * What the boxes of each address row hold (issue #40, owner decision E5), as the server last sent it: present for
+     * the rows of a package-mode screen that fold an address, and for nothing else. Every key of the model that is not
+     * in here is loose stock from before the switch, the list's second section.
+     */
+    private final Map<ItemKey, PackageGroupSummary<ItemKey>> groupSummaries = new HashMap<>();
+    /** The address order of package mode (issue #40), as the server last pushed it. */
+    private TerminalPackageOrderState packageOrderState = TerminalPackageOrderState.NONE;
     private TerminalScreenStatus status = TerminalScreenStatus.NONE;
     /** The aisle's production orders, newest last, as the server last pushed them (M11, ADR-024). */
     private List<ProductionScreenState.OrderView> orders = List.of();
@@ -522,7 +545,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     private final GlobalPos craftGridKey;
     /** Whether the crafting panel is folded out, making the window {@value TerminalMenuLayout#FOLDED_WIDTH} px wide. */
-    private boolean craftOpen = rememberedCraftPanel;
+    private boolean craftOpen = rememberedCraftPanel && !PackageModeGate.enabledOnClient();
     /** Whether the server's first craft-order state has arrived: the full sync that follows opening the screen. */
     private boolean craftOrderReceived;
     /** The server's answer to the last craft click, or {@code null} before the first one (M32, issue #24). */
@@ -584,6 +607,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // before that page (stockReceived), so a player never sees a list in an order they did not choose.
         model.setInStockOnly(rememberedInStockOnly);
         model.setQuery(rememberedQuery);
+        // Package mode (issue #40, owner decision E5): the address rows first, the loose stock from before the switch
+        // after them, whatever the sort. With the switch off the list stays one section, as it always was.
+        if (PackageModeGate.enabledOnClient())
+            model.setTrailingSection(key -> !groupSummaries.containsKey(key));
         keepGridsOfThisConnection();
         craftGridKey = GlobalPos.of(menu.terminalDimension(), menu.terminalPos());
         CraftGrid<ItemKey> remembered = rememberedGrids.get(craftGridKey);
@@ -672,6 +699,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         craftToggle.getToolTip().add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_TOGGLE));
         craftToggle.getToolTip().add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_TOGGLE_HINT)
                 .withStyle(ChatFormatting.GRAY));
+        // Package mode (issue #40, E6): the panel stays folded in, and the toggle says why.
+        if (PackageModeGate.enabledOnClient())
+            craftToggle.getToolTip().add(packageModeLine());
         addRenderableWidget(craftToggle);
         // The door button (M27, issue #18), the toggle's mirror left of the inventory. Its clicks and its scroll wheel
         // are taken in mouseClicked and mouseScrolled, like the toggle's, so the widget itself only draws and holds the
@@ -711,8 +741,15 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** The server sent the whole list (reset) or the entries that changed. */
     public void onStock(TerminalStockPayload payload) {
         List<StockLine<ItemKey>> lines = new ArrayList<>(payload.entries().size());
-        for (StockCount<ItemKey> entry : payload.entries())
-            lines.add(StockLine.of(entry, displayName(entry.key()), modId(entry.key())));
+        if (payload.reset())
+            groupSummaries.clear();
+        for (StockCount<ItemKey> entry : payload.entries()) {
+            // An address row (issue #40) is found by what its boxes hold as well as by its address: the content names
+            // are part of the text the search matches, after the row's own name, so the name sort is unchanged.
+            entry.group().ifPresentOrElse(group -> groupSummaries.put(entry.key(), group),
+                    () -> groupSummaries.remove(entry.key()));
+            lines.add(StockLine.of(entry, searchName(entry), modId(entry.key())));
+        }
         if (payload.reset())
             model.replaceAll(lines);
         else
@@ -1061,6 +1098,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * @return whether a request was sent
      */
     public boolean requestFluidVisible(int index, TerminalAmounts.Click click) {
+        // Package mode (issue #40, E6): the fluid cells are read-only, because a filled bucket would leave unsealed.
+        if (PackageModeGate.enabledOnClient())
+            return false;
         List<TerminalFluids.Row> visible = visibleFluids();
         if (index < 0 || index >= visible.size())
             return false;
@@ -1138,6 +1178,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         chosenRow().filter(door -> doorCueShown()).ifPresent(door -> tooltip.add(fitArgument(
                 name -> WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_CELL, name), doorName(door),
                 ROW_WIDTH).copy().withStyle(ChatFormatting.GOLD)));
+        if (PackageModeGate.enabledOnClient()) {
+            tooltip.add(packageModeFluidLine());
+            return tooltip;
+        }
         // A fluid click always asks, so the item cells' hint with its Alt skip would promise something it does not do.
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_FLUID_AMOUNT_HINT).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
@@ -1233,7 +1277,11 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         // server and only reported here (M11, ADR-024): the screen knows neither the patterns nor their promises.
         // A plain click on an item a pattern makes keeps its amount: the server may make it through a chain the one-step
         // producible number knows nothing of, and clamps it itself (issue #42).
-        int amount = TerminalAmounts.amountFor(click, selectedAmount, line.key().getMaxStackSize(), line.available(),
+        // An address row's "stack" is a buffer's worth of boxes (issue #40, the critic's m6): a box stacks to one, and
+        // Shift would otherwise ask for a single box.
+        int stackSize = groupSummaries.containsKey(line.key()) ? Math.max(1, menu.bufferSlots())
+                : line.key().getMaxStackSize();
+        int amount = TerminalAmounts.amountFor(click, selectedAmount, stackSize, line.available(),
                 line.producibleAmount(), line.producible(), maxRequestAmount());
         // To the door the button shows, or here (M27): the click carries the choice, and nothing else ever does.
         send(line.key(), amount, skipQuestion ? RequestAcknowledgement.ANY : RequestAcknowledgement.NONE,
@@ -1789,6 +1837,9 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             case CANCEL -> WareworksLang.TERMINAL_LIST_CANCEL;
             default -> WareworksLang.TERMINAL_LIST_FETCH;
         }));
+        // Package mode (issue #40, E6): no new list starts; an order open since the world loaded is still answered.
+        if (PackageModeGate.enabledOnClient() && listAction() == TerminalListActionPayload.Action.FETCH)
+            listButton.getToolTip().add(packageModeLine());
         // A list order always delivers to the terminal (M27, ADR-065 D10), whichever door the clicks go to.
         if (isDoorChosen())
             listButton.getToolTip().add(WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_LIST_HERE)
@@ -1821,6 +1872,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * player who had dismissed the panel with no way back to the question (M23 review fix).
      */
     public void sendListAction() {
+        if (PackageModeGate.enabledOnClient() && listAction() == TerminalListActionPayload.Action.FETCH) {
+            refusePackageMode(packageModeLine());
+            return;
+        }
         PacketDistributor.sendToServer(new TerminalListActionPayload(menu.containerId, listAction()));
     }
 
@@ -2085,6 +2140,26 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         return craftOrderState.locksGrid();
     }
 
+    /** The red line that says why the terminal no longer does something in package mode (issue #40, E6). */
+    static Component packageModeLine() {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_MODE_REFUSED).copy()
+                .withStyle(ChatFormatting.RED);
+    }
+
+    /** The red line of a fluid cell in package mode (issue #40, E6). */
+    static Component packageModeFluidLine() {
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_MODE_FLUID).copy()
+                .withStyle(ChatFormatting.RED);
+    }
+
+    /** Says in the status row what package mode refused, as every refusal of this screen is said. */
+    private void refusePackageMode(Component line) {
+        feedback = line;
+        feedbackColor = COLOR_ERROR;
+        feedbackTicks = FEEDBACK_TICKS;
+        playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.6F, 0.8F);
+    }
+
     /** Says in the status row why an edit of the locked grid did nothing: the fetch has to be given up first. */
     void refuseLockedEdit() {
         feedback = WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_GRID_LOCKED);
@@ -2247,6 +2322,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * for the client session, like the search.
      */
     public void toggleCraftPanel() {
+        // Package mode (issue #40, E6): the panel does not fold out, except to finish a craft order that was open when
+        // the world loaded. Folding in is always allowed.
+        if (!craftOpen && PackageModeGate.enabledOnClient() && !craftOrderState.isOpen()) {
+            refusePackageMode(packageModeLine());
+            return;
+        }
         craftOpen = !craftOpen;
         rememberedCraftPanel = craftOpen;
         if (!craftOpen)
@@ -2697,6 +2778,10 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             // A fluid cell (M31): its question is always asked, so there is no skip to hold.
             int items = itemCellOffset();
             if (cell < items) {
+                if (PackageModeGate.enabledOnClient()) {
+                    refusePackageMode(packageModeFluidLine());
+                    return true;
+                }
                 if (requestFluidVisible(cell, click))
                     return true;
             } else if (requestVisible(cell - items, click, hasAltDown())) {
@@ -2910,10 +2995,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
             renderFluidCell(graphics, fluidCells.get(cell), fluidX, fluidY);
         }
         int offset = itemCellOffset();
+        int firstLoose = firstLooseIndex();
         for (int index = 0; index < visible.size(); index++) {
             int cell = offset + index;
             int itemX = gridX + cellX(cell) + ITEM_INSET;
             int itemY = gridY + cellY(cell) + ITEM_INSET;
+            // Package mode (issue #40): the loose stock from before the switch is a section of its own, greyed, after
+            // a line that runs along the border between the two sections.
+            if (firstLoose >= 0 && index >= firstLoose)
+                graphics.fill(itemX - ITEM_INSET, itemY - ITEM_INSET, itemX - ITEM_INSET + TerminalMenuLayout.SLOT,
+                        itemY - ITEM_INSET + TerminalMenuLayout.SLOT, COLOR_LOOSE_CELL);
             // An item the aisle can only make gets a tinted cell as well as its "+" (M11, ADR-024): at a normal GUI
             // scale a four-pixel glyph is not what a player notices, the cell's colour is.
             if (visible.get(index).isProducibleOnly())
@@ -2924,19 +3015,60 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 graphics.fill(itemX - ITEM_INSET, itemY - ITEM_INSET, itemX - ITEM_INSET + TerminalMenuLayout.SLOT,
                         itemY - ITEM_INSET + TerminalMenuLayout.SLOT,
                         doorCueShown() ? COLOR_CELL_HOVER_DOOR : COLOR_CELL_HOVER);
-            renderEntry(graphics, visible.get(index), itemX, itemY);
+            renderEntry(graphics, visible.get(index), itemX, itemY, firstLoose >= 0 && index >= firstLoose);
         }
+        if (firstLoose >= 0 && firstLoose < visible.size())
+            renderSectionBorder(graphics, gridX, gridY, offset + firstLoose);
         renderScrollbar(graphics);
     }
 
+    /**
+     * The index within {@link #visibleEntries()} of the first cell of loose stock (issue #40), or -1 while the window
+     * shows none or the list has one section.
+     */
+    public int firstLooseIndex() {
+        int first = model.firstTrailing();
+        if (first < 0)
+            return -1;
+        int itemRows = layout.gridRows() - fluidRowsShown();
+        if (itemRows <= 0)
+            return -1;
+        int windowStart = model.clampScrollRow(Math.max(0, scrollRow - fluidRowCount()),
+                TerminalMenuLayout.GRID_COLUMNS, itemRows) * TerminalMenuLayout.GRID_COLUMNS;
+        return Math.max(0, first - windowStart);
+    }
+
+    /**
+     * The border between the address rows and the loose stock (issue #40): along the top of the first loose cell to the
+     * grid's right edge, down its left side, and along the bottom of the cells before it in its row — the step the two
+     * sections meet at.
+     */
+    private void renderSectionBorder(GuiGraphics graphics, int gridX, int gridY, int cell) {
+        int x = gridX + cellX(cell);
+        int y = gridY + cellY(cell);
+        int right = gridX + TerminalMenuLayout.GRID_COLUMNS * TerminalMenuLayout.SLOT;
+        if (y > gridY)
+            graphics.fill(x, y - 1, right, y, COLOR_SECTION);
+        if (x > gridX) {
+            graphics.fill(x - 1, y, x, y + TerminalMenuLayout.SLOT, COLOR_SECTION);
+            graphics.fill(gridX, y + TerminalMenuLayout.SLOT - 1, x, y + TerminalMenuLayout.SLOT, COLOR_SECTION);
+        }
+    }
+
     /** One item cell: the item as a Create GUI element plus its amount, compacted to at most four characters. */
-    private void renderEntry(GuiGraphics graphics, StockLine<ItemKey> line, int x, int y) {
+    private void renderEntry(GuiGraphics graphics, StockLine<ItemKey> line, int x, int y, boolean greyed) {
         ItemStack stack = line.key().toStack();
         PoseStack pose = graphics.pose();
         pose.pushPose();
         pose.translate(x, y, 0);
         GuiGameElement.of(stack).render(graphics);
         pose.popPose();
+        if (greyed) {
+            pose.pushPose();
+            pose.translate(0, 0, COUNT_SHIFT_Z - 1);
+            graphics.fill(x, y, x + 16, y + 16, COLOR_LOOSE_ITEM); // the 16x16 item
+            pose.popPose();
+        }
         pose.pushPose();
         pose.translate(0, 0, COUNT_SHIFT_Z);
         graphics.renderItemDecorations(font, stack, x, y, ""); // durability and cooldown, but not the stack's own count
@@ -3071,16 +3203,110 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
                 x + TerminalMenuLayout.MARGIN, y + layout.productionLabelY(), COLOR_DIM, false);
         List<PlanLine> shown = visibleOrderLines();
         List<TerminalFluids.FillLine> fills = visibleFillLines();
-        if (shown.isEmpty() && fills.isEmpty()) {
+        int packages = packageLineRows();
+        if (shown.isEmpty() && fills.isEmpty() && packages == 0) {
             graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_NO_ORDERS),
                     x + TerminalMenuLayout.MARGIN, y + layout.orderLineY(0), COLOR_DIM, false);
             return;
         }
-        // The fill requests of this terminal first (M31): they are what a player who just asked for fluid waits for.
+        // The address order of package mode first (issue #40): it is what a player who just clicked an address waits for.
+        if (packages > 0)
+            renderPackageOrderLine(graphics, x, y + layout.orderLineY(0));
+        // The fill requests of this terminal next (M31): they are what a player who just asked for fluid waits for.
         for (int line = 0; line < fills.size(); line++)
-            renderFillLine(graphics, x, y + layout.orderLineY(line), fills.get(line));
+            renderFillLine(graphics, x, y + layout.orderLineY(packages + line), fills.get(line));
         for (int line = 0; line < shown.size(); line++)
-            renderOrderLine(graphics, x, y + layout.orderLineY(fills.size() + line), shown.get(line));
+            renderOrderLine(graphics, x, y + layout.orderLineY(packages + fills.size() + line), shown.get(line));
+    }
+
+    /** 1 while the address order's line is shown at the top of the production section (issue #40), else 0. */
+    private int packageLineRows() {
+        return packageOrderState.isOpen() && layout.orderLines() > 0 ? 1 : 0;
+    }
+
+    /**
+     * The address order's line (issue #40): "Packages x5", "2 of 5 here" (or "at the door"), and the cancel mark that
+     * gives the order up.
+     */
+    private void renderPackageOrderLine(GuiGraphics graphics, int x, int top) {
+        int reserved = cancelColumnWidth();
+        Component item = packageOrderText();
+        int floor = Math.min(font.width(item), MIN_ITEM_WIDTH);
+        Component state = fitTo(packageOrderStateText(), Math.max(0, ROW_WIDTH - reserved - floor - TEXT_GAP));
+        int stateX = Math.max(TerminalMenuLayout.MARGIN,
+                TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN - reserved - font.width(state));
+        graphics.drawString(font, state, x + stateX, top, COLOR_PRODUCIBLE, false);
+        int room = stateX - TerminalMenuLayout.MARGIN - TEXT_GAP;
+        graphics.drawString(font, fitTo(item, Math.max(0, room)), x + TerminalMenuLayout.MARGIN, top, COLOR_TEXT,
+                false);
+        graphics.drawString(font, CANCEL_MARK, x + cancelMarkX(), top, COLOR_ERROR, false);
+    }
+
+    private Component packageOrderText() {
+        // The address it is for when there is one (review fix), as the row the player clicked reads.
+        if (packageOrderState.addresses().size() == 1)
+            return WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_ORDER_ADDRESS,
+                    packageOrderState.addresses().getFirst().isEmpty()
+                            ? WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_GROUP_NO_ADDRESS)
+                            : WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_GROUP,
+                                    packageOrderState.addresses().getFirst()),
+                    LangNumberFormat.format(packageOrderState.wanted()));
+        return WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_ORDER,
+                LangNumberFormat.format(packageOrderState.wanted()));
+    }
+
+    private Component packageOrderStateText() {
+        return WareworksLang.translateDirect(packageOrderState.door().isPresent()
+                ? WareworksLang.TERMINAL_PACKAGE_ORDER_DOOR : WareworksLang.TERMINAL_PACKAGE_ORDER_HERE,
+                LangNumberFormat.format(packageOrderState.delivered()),
+                LangNumberFormat.format(packageOrderState.wanted()));
+    }
+
+    /** The address order's tooltip: the line in full, the addresses, the boxes taken meanwhile, and how to cancel. */
+    private List<Component> packageOrderTooltip() {
+        List<Component> tooltip = new ArrayList<>();
+        tooltip.add(packageOrderText());
+        tooltip.add(packageOrderStateText().copy().withStyle(ChatFormatting.AQUA));
+        for (String address : packageOrderState.addresses())
+            tooltip.add(Component.literal(" ").append(address.isBlank()
+                    ? WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_GROUP_NO_ADDRESS)
+                    : WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_GROUP, address))
+                    .withStyle(ChatFormatting.GOLD));
+        if (packageOrderState.gone() > 0)
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_ORDER_GONE,
+                    LangNumberFormat.format(packageOrderState.gone())).copy().withStyle(ChatFormatting.GOLD));
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_CANCEL_HINT).copy()
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        return tooltip;
+    }
+
+    /** The server sent the address order's state (issue #40): with every full sync and whenever it moved. */
+    public void onPackageOrder(TerminalPackageOrderPayload payload) {
+        packageOrderState = payload.state();
+    }
+
+    /** The address order as the server last pushed it (dev harness and tests of the client side; issue #40). */
+    public TerminalPackageOrderState packageOrderState() {
+        return packageOrderState;
+    }
+
+    /** The address order's line as the production section draws it, uncut (dev harness; issue #40). */
+    public Component packageOrderLine() {
+        return packageOrderText();
+    }
+
+    /**
+     * Gives the address order up (dev harness and click handling; issue #40): its id, sent like a production order's
+     * ({@link ProductionCancelPayload}); the server checks it is this terminal's open address order.
+     *
+     * @return whether a cancellation was sent
+     */
+    public boolean cancelPackageOrder() {
+        if (!packageOrderState.isOpen())
+            return false;
+        PacketDistributor.sendToServer(new ProductionCancelPayload(menu.containerId, packageOrderState.id()));
+        playUiSound(SoundEvents.NOTE_BLOCK_BASS.value(), 0.8F, 0.8F);
+        return true;
     }
 
     /**
@@ -3180,7 +3406,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * M31 they share the section's rows with this terminal's fill lines, which come first ({@link #visibleFillLines}).
      */
     public List<PlanLine> visibleOrderLines() {
-        int rows = Math.max(0, layout.orderLines() - visibleFillLines().size());
+        int rows = Math.max(0, layout.orderLines() - packageLineRows() - visibleFillLines().size());
         List<PlanLine> shown = new ArrayList<>(rows);
         for (int line = 0; line < rows && line < planLines.size(); line++)
             shown.add(planLines.get(planLines.size() - 1 - line));
@@ -3193,7 +3419,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      * of the section's rows while a production line is there to show.
      */
     public List<TerminalFluids.FillLine> visibleFillLines() {
-        int rows = Math.max(0, layout.orderLines());
+        int rows = Math.max(0, layout.orderLines() - packageLineRows());
         if (!planLines.isEmpty() && rows > 1)
             rows -= 1;
         List<TerminalFluids.FillLine> all = fluids.fills();
@@ -3250,8 +3476,12 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
 
     /** A click on the section's row {@code row}: a fill line cancels its request, a production line does its own. */
     private boolean clickOrderRow(int row, double mouseX) {
+        int packages = packageLineRows();
+        if (row < packages)
+            return cancelPackageOrder();
         int fills = visibleFillLines().size();
-        return row < fills ? cancelVisibleFill(row) : clickOrderLine(row - fills, mouseX);
+        int below = row - packages;
+        return below < fills ? cancelVisibleFill(below) : clickOrderLine(below - fills, mouseX);
     }
 
     /** Every line the server's orders were folded into, oldest first (dev harness and tests of the client side). */
@@ -3343,7 +3573,7 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         if (layout.orderLines() <= 0 || mouseX < leftPos + TerminalMenuLayout.MARGIN
                 || mouseX >= leftPos + TerminalMenuLayout.WIDTH - TerminalMenuLayout.MARGIN)
             return -1;
-        int shown = visibleFillLines().size() + visibleOrderLines().size();
+        int shown = packageLineRows() + visibleFillLines().size() + visibleOrderLines().size();
         for (int line = 0; line < shown; line++) {
             int top = topPos + layout.orderLineY(line);
             if (mouseY >= top && mouseY < top + TerminalMenuLayout.LABEL_HEIGHT)
@@ -3632,12 +3862,16 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         int index = cell - itemCellOffset();
         if (cell >= 0 && index >= 0 && index < visible.size())
             return itemTooltip(visible.get(index));
-        int order = orderAt(mouseX, mouseY);
+        int row = orderAt(mouseX, mouseY);
+        int packages = packageLineRows();
+        if (row >= 0 && row < packages)
+            return packageOrderTooltip();
+        int order = row - packages;
         List<TerminalFluids.FillLine> fillLines = visibleFillLines();
-        if (order >= 0 && order < fillLines.size())
+        if (row >= 0 && order < fillLines.size())
             return fillTooltip(fillLines.get(order));
         List<PlanLine> shownLines = visibleOrderLines();
-        if (order >= 0 && order - fillLines.size() < shownLines.size())
+        if (row >= 0 && order - fillLines.size() < shownLines.size())
             return orderTooltip(shownLines.get(order - fillLines.size()));
         return List.of();
     }
@@ -4222,6 +4456,14 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
      */
     public List<Component> itemTooltip(StockLine<ItemKey> line) {
         List<Component> tooltip = new ArrayList<>(getTooltipFromItem(minecraft, line.key().toStack()));
+        // Package mode (issue #40, owner decision E5): an address row says what its boxes hold; a loose row says that it
+        // is stock from before the switch, there to be taken out.
+        PackageGroupSummary<ItemKey> group = groupSummaries.get(line.key());
+        if (group != null)
+            addGroupLines(tooltip, group);
+        else if (PackageModeGate.enabledOnClient())
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_LOOSE_STOCK).copy()
+                    .withStyle(ChatFormatting.GOLD));
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_STORED,
                 LangNumberFormat.format(line.total())).copy().withStyle(ChatFormatting.GRAY));
         tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_AVAILABLE,
@@ -4270,13 +4512,43 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
         chosenRow().filter(row -> doorCueShown()).ifPresent(row -> tooltip.add(fitArgument(
                 name -> WareworksLang.translateDirect(WareworksLang.TERMINAL_DOOR_CELL, name), doorName(row),
                 ROW_WIDTH).copy().withStyle(ChatFormatting.GOLD)));
-        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_AMOUNT_HINT).copy()
+        // An address row's own hint (issue #40, review fix): Shift asks for a buffer's worth of boxes there, and nothing
+        // is made, so there is no question to skip.
+        tooltip.add(WareworksLang.translateDirect(groupSummaries.containsKey(line.key())
+                ? WareworksLang.TERMINAL_PACKAGE_GROUP_AMOUNT_HINT : WareworksLang.TERMINAL_AMOUNT_HINT).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         // While the crafting panel is out a right-click lays the item into its grid (M32), which nothing else shows.
         if (craftOpen)
             tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_CRAFT_STOCK_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return tooltip;
+    }
+
+    /**
+     * What an address row's boxes hold (issue #40): "Inside:", the largest contents with their totals, how many more
+     * kinds there are, and whether a box belongs to a network order.
+     */
+    private static void addGroupLines(List<Component> tooltip, PackageGroupSummary<ItemKey> group) {
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_GROUP_INSIDE).copy()
+                .withStyle(ChatFormatting.GRAY));
+        for (KeyCount<ItemKey> content : group.contents())
+            tooltip.add(Component.literal(" ").append(WareworksLang.translateDirect(WareworksLang.GOGGLES_ITEM_COUNT,
+                    content.key().toStack().getHoverName(), LangNumberFormat.format(content.count())))
+                    .withStyle(ChatFormatting.GRAY));
+        if (group.moreKinds() > 0)
+            tooltip.add(Component.literal(" ").append(WareworksLang.translateDirect(
+                    WareworksLang.TERMINAL_PACKAGE_GROUP_MORE, LangNumberFormat.format(group.moreKinds())))
+                    .withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC));
+        if (group.networkOrder())
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_GROUP_NETWORK_ORDER).copy()
+                    .withStyle(ChatFormatting.AQUA));
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.TERMINAL_PACKAGE_GROUP_HINT).copy()
+                .withStyle(ChatFormatting.GOLD));
+    }
+
+    /** What the server says the boxes of an address row hold (issue #40); empty for every other row. */
+    public Optional<PackageGroupSummary<ItemKey>> groupSummary(ItemKey key) {
+        return Optional.ofNullable(groupSummaries.get(key));
     }
 
     /**
@@ -4664,6 +4936,20 @@ public class WarehouseTerminalScreen extends AbstractSimiContainerScreen<Warehou
     /** The item's name as the player reads it; the search matches on it ({@link TerminalSearch}). */
     private static String displayName(ItemKey key) {
         return key.toStack().getHoverName().getString();
+    }
+
+    /**
+     * The text the search matches for one row: the item's name, and for an address row of package mode (issue #40) the
+     * names of what its boxes hold after it, so "iron" finds the address whose boxes carry iron.
+     */
+    private static String searchName(StockCount<ItemKey> entry) {
+        String name = displayName(entry.key());
+        if (entry.group().isEmpty())
+            return name;
+        StringBuilder text = new StringBuilder(name);
+        for (KeyCount<ItemKey> content : entry.group().get().contents())
+            text.append(' ').append(displayName(content.key()));
+        return text.toString();
     }
 
     private static String modId(ItemKey key) {

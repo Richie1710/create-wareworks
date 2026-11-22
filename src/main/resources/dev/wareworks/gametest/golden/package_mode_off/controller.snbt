@@ -1,0 +1,93 @@
+{
+    Layout: {
+        Facing: "east",
+        Height: 4,
+        Length: 6
+    },
+    Locations: [
+        {
+            Kind: "STORAGE",
+            Side: "L",
+            Stock: [
+                {
+                    Count: 32L,
+                    Item: {
+                        id: "minecraft:iron_ingot"
+                    }
+                }
+            ],
+            X: 1,
+            Y: 0
+        },
+        {
+            Kind: "INPUT",
+            Side: "R",
+            X: 1,
+            Y: 0
+        },
+        {
+            Kind: "STORAGE",
+            Side: "L",
+            Stock: [
+                {
+                    Count: 20L,
+                    Item: {
+                        id: "minecraft:cobblestone"
+                    }
+                }
+            ],
+            X: 2,
+            Y: 0
+        },
+        {
+            Kind: "OUTPUT",
+            Side: "R",
+            X: 2,
+            Y: 0
+        },
+        {
+            Kind: "KEEPER",
+            Side: "R",
+            X: 3,
+            Y: 0
+        },
+        {
+            Kind: "OUTPUT",
+            Side: "R",
+            X: 4,
+            Y: 0
+        }
+    ],
+    Misaligned: [I;],
+    ProductionOrders: [],
+    Requests: [
+        {
+            Destination: [I; 5, 0, 1],
+            Id: "uuid#0",
+            Item: {
+                id: "minecraft:iron_ingot"
+            },
+            Remaining: 4,
+            Requested: 4
+        }
+    ],
+    ScrollValue: 0,
+    StockPauses: [],
+    StockRules: [
+        {
+            Rules: [
+                {
+                    Item: {
+                        id: "minecraft:iron_ingot"
+                    },
+                    Max: 256L,
+                    Min: 8L,
+                    Reserve: 4L
+                }
+            ],
+            Side: "R",
+            X: 3,
+            Y: 0
+        }
+    ]
+}

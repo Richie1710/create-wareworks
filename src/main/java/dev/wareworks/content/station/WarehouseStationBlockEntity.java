@@ -139,6 +139,11 @@ public abstract class WarehouseStationBlockEntity extends SmartBlockEntity
 
     private void onBufferChanged() {
         setChanged(); // null-safe; also lets comparators and neighbours notice the change
+        onBufferContentsChanged();
+    }
+
+    /** Called after every change of the buffer's contents, after {@link #setChanged}. Nothing by default. */
+    protected void onBufferContentsChanged() {
     }
 
     // --- goggles -------------------------------------------------------------------------------------------------

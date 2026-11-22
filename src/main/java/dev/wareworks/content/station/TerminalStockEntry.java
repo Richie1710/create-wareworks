@@ -7,6 +7,7 @@ import java.util.Optional;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.PackageGroupSummary;
 
 /**
  * One line of a warehouse terminal's stock snapshot ({@code docs/warehouse-system.md} §3.4): an item type of the aisle
@@ -36,9 +37,12 @@ import dev.wareworks.core.stock.StockRuleStatus;
  * @param ruleMaximum the most of this item the rule lets the warehouse store, or {@code StockRule.UNSET} for no cap
  *                   (M15 part 2). The screen needs it to say, before a click, that an order would bring in more than
  *                   the warehouse wants to hold
+ * @param group      what the boxes of an address hold, present exactly for the one row a package-mode terminal folds
+ *                   every box of that address into (issue #40, {@code WarehouseTerminalBlockEntity#screenStockSnapshot})
  */
 public record TerminalStockEntry(ItemKey key, long total, long available, boolean producible, long producibleAmount,
-                                 Optional<StockRuleStatus> rule, long ruleReserved, long ruleMaximum) {
+                                 Optional<StockRuleStatus> rule, long ruleReserved, long ruleMaximum,
+                                 Optional<PackageGroupSummary<ItemKey>> group) {
     /**
      * Stable order of a snapshot, independent of the client's language: the largest stock first, then the most
      * available, then {@link ItemKey#ORDER} (item id, then the key's text). The same warehouse always produces the same
@@ -70,6 +74,29 @@ public record TerminalStockEntry(ItemKey key, long total, long available, boolea
         ruleReserved = rule.isPresent() ? Math.max(0L, Math.min(ruleReserved, available)) : 0L;
         ruleMaximum = rule.isPresent() && ruleMaximum >= 0L ? Math.min(ruleMaximum, StockRule.MAX_AMOUNT)
                 : StockRule.UNSET;
+        if (group == null)
+            group = Optional.empty();
+    }
+
+    /** An entry that is no package group: every entry a snapshot held before package mode (issue #40). */
+    public TerminalStockEntry(ItemKey key, long total, long available, boolean producible, long producibleAmount,
+            Optional<StockRuleStatus> rule, long ruleReserved, long ruleMaximum) {
+        this(key, total, available, producible, producibleAmount, rule, ruleReserved, ruleMaximum, Optional.empty());
+    }
+
+    /**
+     * The row of one address of a package-mode warehouse (issue #40, owner decision E5): {@code key} is the synthetic
+     * key of the address ({@code PackageGroupKey}), the amounts count boxes, and the summary says what is inside.
+     */
+    public static TerminalStockEntry group(ItemKey key, long boxes, long available,
+            PackageGroupSummary<ItemKey> summary) {
+        return new TerminalStockEntry(key, boxes, available, false, 0L, Optional.empty(), 0L, StockRule.UNSET,
+                Optional.of(Objects.requireNonNull(summary, "summary")));
+    }
+
+    /** Whether this is the row of an address of a package-mode warehouse. */
+    public boolean isGroup() {
+        return group.isPresent();
     }
 
     /** An entry of an item that is simply in stock. */

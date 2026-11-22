@@ -124,6 +124,8 @@ public final class Wareworks {
         // Issue #37: what keeps a loaded hand truck in its player's inventory (menus, entities, tossing, deaths) and the
         // part of its penalty that is not the walk itself (HandTruckHooks).
         HandTruckHooks.register(NeoForge.EVENT_BUS);
+        // Issue #40: a joining player's client is told whether this world's warehouses are in package mode.
+        dev.wareworks.content.packagemode.PackageModeHooks.register(NeoForge.EVENT_BUS);
         // Issue #45: the Schematicannon Requester's sneak-click take-out, which vanilla would otherwise swallow whenever
         // the player carries anything in the off hand (SchematicannonRequesterHooks).
         SchematicannonRequesterHooks.register(NeoForge.EVENT_BUS);

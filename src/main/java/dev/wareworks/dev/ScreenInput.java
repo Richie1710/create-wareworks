@@ -103,6 +103,8 @@ final class ScreenInput {
             double.class, double.class, int.class);
     private static final Method KEEPER_TOOLTIP_AT = method(WarehouseStockKeeperScreen.class, "tooltipAt", int.class,
             int.class);
+    private static final Method KEEPER_OVER_CELL = method(WarehouseStockKeeperScreen.class, "isOverCell",
+            double.class, double.class, int.class);
     /** The Warehouse Optimizer's hit tests, its tooltip, its status line and its Optimise button (issue #46). */
     private static final Method OPTIMIZER_ROW_AT = method(WarehouseOptimizerScreen.class, "rowAt", double.class,
             double.class);
@@ -702,6 +704,32 @@ final class ScreenInput {
                         + ProductionMenuLayout.SLOT / 2.0);
         if (!(Boolean) invoke(PRODUCTION_OVER_ARROW, screen, point.x(), point.y()))
             throw new VisualTestException("the production screen's hit test does not put " + point + " on its arrow");
+        return point;
+    }
+
+    /**
+     * The centre of the item cell of keeper row {@code row}, where a click with an item on the cursor writes that row's
+     * item (issue #40: a Package Filter makes a package row), checked with the screen's own hit tests for the row, the
+     * number fields and the cell.
+     */
+    static Point keeperItemCell(WarehouseStockKeeperScreen screen, int row) {
+        StockKeeperMenuLayout layout = screen.getMenu().layout();
+        int line = row - screen.scroll();
+        if (line < 0 || line >= layout.visibleRows())
+            throw new VisualTestException("row " + row + " is not on screen (scroll " + screen.scroll() + ")");
+        Point point = new Point(screen.getGuiLeft() + layout.slotX() + StockKeeperMenuLayout.SLOT / 2.0,
+                screen.getGuiTop() + layout.rowY(line) + StockKeeperMenuLayout.SLOT / 2.0);
+        int hitRow = (Integer) invoke(KEEPER_ROW_AT, screen, point.x(), point.y());
+        if (hitRow != row)
+            throw new VisualTestException("the keeper screen's hit test puts " + point + " on row " + hitRow + ", not "
+                    + row);
+        int hitField = (Integer) invoke(KEEPER_FIELD_AT, screen, point.x(), row);
+        if (hitField != NO_NUMBER_FIELD)
+            throw new VisualTestException("the keeper screen's hit test puts " + point + " on number field " + hitField
+                    + " rather than on the item cell");
+        if (!(Boolean) invoke(KEEPER_OVER_CELL, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the keeper screen's hit test does not put " + point + " on the item cell of "
+                    + "row " + row);
         return point;
     }
 

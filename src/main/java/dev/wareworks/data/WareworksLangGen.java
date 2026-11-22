@@ -742,6 +742,7 @@ public final class WareworksLangGen {
                 // warehouse input, and a collect-only aisle need not contain an input at all.
                 case WAREHOUSE_FULL -> "no storage location accepts these items";
                 case NO_MATCHING_FILTER -> "no storage location takes these items, whatever room it has";
+                case PACKAGE_BAY_NEEDS_FILTER -> "boxes need a rack bay with a Package Filter or a chest";
                 case PORT_FULL -> "an accepting port was the only place left for these items and it is full";
                 case AT_MAXIMUM -> "a stock rule for these items is at its maximum";
                 case OUTPUT_FULL -> "an output is full";
@@ -834,6 +835,8 @@ public final class WareworksLangGen {
                 case BOX_WAITING -> "box waiting";
                 case IGNORES_REDSTONE -> "ignores redstone";
                 case NOT_LOADED -> "not loaded";
+                case PLAIN_PORT -> "no Packager";
+                case STRIPS_ADDRESS -> "no sign";
             }));
             // What to do about the state, said once, in the chosen door's detail line of the button's tooltip.
             state.detailKey().ifPresent(key -> lang.accept(WareworksLang.key(key), switch (state) {
@@ -843,6 +846,8 @@ public final class WareworksLangGen {
                 case BOX_WAITING -> "A box waits: is anything taking it?";
                 case IGNORES_REDSTONE -> "Stock Link: the door never sends";
                 case NOT_LOADED -> "Not loaded: come closer to choose it";
+                case PLAIN_PORT -> "No Packager: the box leaves as it is";
+                case STRIPS_ADDRESS -> "No sign: it would erase the address";
             }));
         }
         // The screen's door choice (M27): one button left of the inventory, a gold label in the title row while a door
@@ -991,6 +996,7 @@ public final class WareworksLangGen {
                 case NOT_RUNNING -> "No list is being worked off here";
                 case NO_AISLE -> "This terminal is not part of a warehouse";
                 case OUT_OF_REACH -> "You are too far away";
+                case PACKAGE_MODE -> "Off in package mode";
             });
         }
         // Crafting at the terminal (M32, issue #24, ADR-059). The panel is 54 px wide, so it holds numbers and the one
@@ -1090,6 +1096,7 @@ public final class WareworksLangGen {
                 case NOT_RUNNING -> "No ingredients are being fetched here";
                 case LAID -> "Laid the recipe for %1$s";
                 case NOT_LAID -> "This recipe cannot be laid here";
+                case PACKAGE_MODE -> "Off in package mode";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_PATTERNS), "Patterns");
@@ -1202,6 +1209,7 @@ public final class WareworksLangGen {
                 case PAUSED -> "Paused: the warehouse stopped ordering this";
                 case SATISFIED -> "Enough in stock";
                 case DISABLED -> "Automatic restocking is switched off";
+                case PACKAGE_MODE -> "Package mode: nothing is made";
                 case ORDER_OPEN -> "An order for this is already running";
                 case ORDERS_BUSY -> "Too many orders are running; this one waits";
                 case NO_PATTERN -> "No production station here makes this";
@@ -1377,6 +1385,9 @@ public final class WareworksLangGen {
                 case NOT_A_DOOR -> "not a package door of this warehouse";
                 case DOOR_IGNORES_REDSTONE -> "that door ignores redstone";
                 case NO_EMPTY_CONTAINERS -> "no empty containers in stock";
+                case PACKAGE_MODE -> "package mode: nothing is made";
+                case DOOR_STRIPS_ADDRESS -> "no sign: the address would go";
+                case PACKAGE_ORDER_ELSEWHERE -> "a package order elsewhere is running";
             });
         }
 
@@ -1518,6 +1529,65 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_BAY_WRONG_KIND),
                 "A pallet goes into a rack bay, not a fluid bay");
 
+        // Package mode (issue #40): the entrances of a warehouse that stores sealed Create packages only.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_PACKAGES_ONLY),
+                "Takes only sealed packages");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_PACKAGER_IN_PACKAGE_MODE),
+                "A Packager here would open the boxes: feed packages in with a funnel or a Package Frogport");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_LOOSE_REFUSED),
+                "Last loose item refused: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_BOXES_HELD),
+                "Boxes over a maximum, to take out by hand: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_PACKAGE_MODE_NEEDS_FILTER),
+                "Package mode: boxes only with a Package Filter here");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_BAY_PACKAGE_MODE_LOOSE),
+                "Package mode: loose goods only go out");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECTS_PACKAGES),
+                "Package mode: fetches boxes only, loose results stay");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_GROUP_AMOUNT_HINT),
+                "Click for this many boxes, Shift for a buffer's worth, Ctrl for all");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_ORDER_ADDRESS), "%1$s x%2$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_LOOSE_HELD),
+                "Loose items to take out by hand: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.PACKAGE_MODE_HAND_REFUSED),
+                "Package mode: only sealed packages go into this warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.PACKAGE_MODE_TOOK_OUT),
+                "Took %1$s out of the input");
+        lang.accept(WareworksLang.key(WareworksLang.HAND_TRUCK_BAY_PACKAGE_MODE),
+                "Package mode: a pallet of loose goods does not go into a rack bay");
+        // Package mode's lockouts (issue #40, owner decision E6): what the terminal no longer does, and the one line every
+        // block that would start production shows. Status-row lines, so they are short (PackageModeTextWidthTest).
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_MODE_REFUSED), "Off in package mode");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_MODE_FLUID), "Package mode: no buckets go out");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PACKAGE_MODE_NO_PRODUCTION),
+                "Package mode: nothing new is made here");
+        // Package mode's terminal (issue #40, owner decisions E5 and E11): one row per address, what is inside, the loose
+        // stock from before, and the address order's line in the production section.
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_GROUP), "Packages → %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_GROUP_NO_ADDRESS), "Packages without an address");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_GROUP_INSIDE), "Inside:");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_GROUP_MORE), "and %1$s more");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_GROUP_NETWORK_ORDER), "Part of a network order");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_GROUP_HINT),
+                "A click fetches sealed boxes of this address");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LOOSE_STOCK),
+                "Loose stock from before package mode: take out only");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_ORDER), "Packages x%1$s");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_ORDER_HERE), "%1$s of %2$s here");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_ORDER_DOOR), "%1$s of %2$s at the door");
+        lang.accept(WareworksLang.key(WareworksLang.TERMINAL_PACKAGE_ORDER_GONE), "%1$s taken out meanwhile");
+        // Package mode's stock rules (issue #40, S5): a keeper row whose ghost is a Package Filter counts the packages of
+        // its address; its minimum only signals, and an input refuses a box whose address is at its maximum.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_PACKAGE_AT_MAXIMUM),
+                "Boxes for %1$s wait outside: at their maximum");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_PACKAGES_ROW), "Packages → %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_UNIT_PACKAGES), "Counts sealed packages addressed to %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_PACKAGES_MINIMUM_SIGNAL),
+                "Minimum is a signal only: the warehouse does not pack");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_PACKAGES_MODE_OFF), "Package mode is off: this row does nothing");
+        lang.accept(WareworksLang.key(WareworksLang.KEEPER_PACKAGES_NEED_ADDRESS),
+                "Set an address on the Package Filter first");
+
         // Issue #44: the Warehouse Remote. Its name comes from the item builder; these are its description and messages.
         tooltip(lang, "item.wareworks.warehouse_remote",
                 "Opens a linked _Warehouse Terminal_ from afar. The crane still delivers to the terminal or a "
@@ -1604,6 +1674,7 @@ public final class WareworksLangGen {
                 case LINK_GONE -> "The linked terminal is gone";
                 case LINK_NOT_ALLOWED -> "%1$s may not use the terminal there";
                 case NO_CONTROLLER -> "The terminal belongs to no warehouse";
+                case PACKAGE_MODE -> "Package mode: the Requester orders nothing new";
                 case NOT_PRINTING -> "The cannon is not printing";
                 case BLOCKED -> "Cannon: %1$s";
                 case PRINTING -> "The cannon has what it needs";

@@ -7,6 +7,8 @@ import org.jetbrains.annotations.Nullable;
 import com.simibubi.create.api.packager.unpacking.UnpackingHandler;
 import com.simibubi.create.content.logistics.stockTicker.PackageOrderWithCrafts;
 
+import dev.wareworks.content.packagemode.PackageModeGate;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
@@ -49,6 +51,16 @@ import net.minecraft.world.level.block.state.BlockState;
  * ({@code WarehouseStationBlockEntity#onGoggleObserved}).
  * <p>
  * Registered exactly once, in {@code WareworksUnpackingHandlers}.
+ * <p>
+ * <b>Package mode (issue #40).</b> With the world's switch on ({@link PackageModeGate}), opening a box here would put
+ * loose items into a warehouse that takes only packages. So this handler then answers false <b>in both passes</b>
+ * before Create's default handler is asked, and the box waits whole in front of the Packager: the real pass of
+ * {@code DefaultUnpackingHandler} inserts without checking, so a refusal that only the simulate pass saw would void
+ * items. The one exception is the drain rule: a box whose every stack is a loose result that a production order open
+ * at world load still waits for ({@code WarehouseInputBlockEntity#mayOpenInPackageMode}) is opened as before, with the
+ * input's entrance gate held open for that one call, so both passes see the same buffer. With the switch off nothing
+ * of this runs. (An <b>empty</b> box is destroyed by Create's {@code PackagerBlockEntity#unwrapBox} before any handler
+ * is asked, package mode or not.)
  */
 public final class WarehouseInputUnpackingHandler implements UnpackingHandler {
     /** The single instance; Create's own handlers are singletons too ({@code AllUnpackingHandlers}). */
@@ -60,6 +72,20 @@ public final class WarehouseInputUnpackingHandler implements UnpackingHandler {
     @Override
     public boolean unpack(Level level, BlockPos pos, BlockState state, Direction side, List<ItemStack> items,
             @Nullable PackageOrderWithCrafts orderContext, boolean simulate) {
+        if (PackageModeGate.enabled() && !level.isClientSide
+                && level.getBlockEntity(pos) instanceof WarehouseInputBlockEntity gated) {
+            if (!gated.mayOpenInPackageMode(items)) {
+                gated.onPackageRefusedForPackageMode();
+                return false;
+            }
+            return gated.withUnpackBypass(() -> unpackCounted(level, pos, state, side, items, orderContext, simulate));
+        }
+        return unpackCounted(level, pos, state, side, items, orderContext, simulate);
+    }
+
+    /** Create's default handler, with the M26 diagnosis around it. */
+    private static boolean unpackCounted(Level level, BlockPos pos, BlockState state, Direction side,
+            List<ItemStack> items, @Nullable PackageOrderWithCrafts orderContext, boolean simulate) {
         // Counted before the delegate, because the delegate empties the entries it finds room for: afterwards the
         // list no longer says how big the package was.
         int packageStacks = simulate ? stacks(items) : 0;

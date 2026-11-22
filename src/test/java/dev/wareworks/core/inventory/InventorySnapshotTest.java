@@ -217,4 +217,18 @@ class InventorySnapshotTest {
         assertThrows(NullPointerException.class, () -> new KeyCount<String>(null, 1));
         assertThrows(IllegalArgumentException.class, () -> new KeyCount<>("iron", -1));
     }
+
+    /** Package mode's collecting port (issue #40): rejected keys vanish with their slots, empty slots stay. */
+    @Test
+    void retainingDropsRejectedSlotsAndKeepsEmptyOnes() {
+        InventorySnapshot<String> snapshot = InventorySnapshot.<String>builder(4)
+                .add("box", 1, 64, 1).add("iron", 30, 64, 64).addEmpty(64).add("box", 1, 64, 1).build();
+        InventorySnapshot<String> boxes = snapshot.retaining(key -> key.equals("box"));
+        assertEquals(3, boxes.totalSlots(), "the iron slot is gone");
+        assertEquals(1, boxes.freeSlots(), "the empty slot stays");
+        assertEquals(2L, boxes.count("box"));
+        assertEquals(0L, boxes.count("iron"));
+        assertSame(snapshot, snapshot.retaining(key -> true), "nothing rejected: the same snapshot");
+        assertEquals(0L, snapshot.retaining(key -> false).totalItems());
+    }
 }

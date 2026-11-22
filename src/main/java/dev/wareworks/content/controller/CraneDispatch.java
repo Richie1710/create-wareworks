@@ -387,6 +387,7 @@ final class CraneDispatch {
         // of the aisle — including the input a bucket arriving would cure the request through.
         if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
                 || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
+                || result.reasons().contains(NoJobReason.PACKAGE_BAY_NEEDS_FILTER)
                 || result.reasons().contains(NoJobReason.PORT_FULL))
             backoffUntilTick = now + Math.max(1, WareworksConfig.fullBackoffTicks());
     }
@@ -937,7 +938,10 @@ final class CraneDispatch {
                 .storeHeadroom(controller::storeHeadroom)
                 // Recipe Selector quarantine (ADR-085, I7): a selector station's own return input stores only what the
                 // station makes; anything else stays in it for the player to see. Free without a selector station.
-                .storeHeld(controller::selectorStoreHeld)
+                .storeHeld(controller::storeHeld)
+                // Package mode (issue #40, E3): an empty rack bay without a Package Filter takes no box, on every path that
+                // stores into a location. One config read and nothing else while the mode is off.
+                .storeExcluded(controller::packageModeExcludes)
                 .insertRefused((rack, key) -> insertRefusals.isRefused(rack, key, now))
                 .extractRefused((rack, key) -> extractRefusals.isRefused(rack, key, now))
                 .liveExtract((rack, key, max) -> simulate(level, layout, rack, true, key, max, now))

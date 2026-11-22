@@ -41,6 +41,8 @@ public final class StockIndex<K, L> implements StockView<K, L> {
     private final Comparator<? super L> locationOrder;
     private final Map<L, LocationEntry<K>> entries = new HashMap<>();
     private final Map<K, Map<L, Long>> countsByKey = new HashMap<>();
+    /** Bumped on every changed total and on {@link #clear()} ({@link #revision()}). */
+    private long revision;
     private final Map<K, Long> totals = new HashMap<>();
     /** Moves only when a key enters or leaves {@link #totals}: the cache key of everything built over the key set. */
     private long keyGeneration;
@@ -159,6 +161,8 @@ public final class StockIndex<K, L> implements StockView<K, L> {
 
     private void apply(K key, L location, long oldCount, long newCount) {
         long delta = newCount - oldCount;
+        if (delta != 0L)
+            revision++;
         totalItems += delta;
         long total = totals.getOrDefault(key, 0L) + delta;
         if (total == 0) {
@@ -258,6 +262,14 @@ public final class StockIndex<K, L> implements StockView<K, L> {
         return keyGeneration;
     }
 
+    /**
+     * A number that changes whenever any total changes, by any amount (issue #40): a caller that derives something from
+     * {@link #totals()} — package mode's boxes per address — keeps it until this number moves. Never saved.
+     */
+    public long revision() {
+        return revision;
+    }
+
     @Override
     public boolean contains(L location) {
         return entries.containsKey(Objects.requireNonNull(location, "location"));
@@ -281,6 +293,7 @@ public final class StockIndex<K, L> implements StockView<K, L> {
 
     /** Removes all locations and stock. */
     public void clear() {
+        revision++;
         entries.clear();
         countsByKey.clear();
         if (!totals.isEmpty())

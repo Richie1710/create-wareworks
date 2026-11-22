@@ -33,7 +33,10 @@ class TerminalCraftResultTest {
     void fetchValuesAreExactlyTheOnesNoCraftEndsIn() {
         for (TerminalCraftResult result : TerminalCraftResult.values())
             assertEquals(!CRAFT.contains(result), result.isFetch(), result.name());
-        assertEquals(13, EnumSet.complementOf(EnumSet.copyOf(CRAFT)).size(), "the thirteen values of the Fetch");
+        // Thirteen since slice 4, and package mode's refusal of a Fetch and a lay (issue #40) is the fourteenth.
+        assertEquals(14, EnumSet.complementOf(EnumSet.copyOf(CRAFT)).size(), "the fourteen values of the Fetch");
+        assertTrue(TerminalCraftResult.PACKAGE_MODE.isFetch() && !TerminalCraftResult.PACKAGE_MODE.isSuccess(),
+                "package mode refuses a Fetch");
     }
 
     @Test

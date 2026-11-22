@@ -17,7 +17,12 @@ public final class PalletIntoBay {
         /** The bay's store filter does not take the carried item. */
         FILTERED,
         /** The bay holds fewer of the carried item than the pallet carries. */
-        TOO_SMALL
+        TOO_SMALL,
+        /**
+         * Package mode (issue #40): the pallet carries loose goods, and a package-mode warehouse takes in sealed
+         * packages only. Checked first, because no other answer would let the pallet in.
+         */
+        PACKAGES_ONLY
     }
 
     private PalletIntoBay() {
@@ -32,6 +37,18 @@ public final class PalletIntoBay {
      */
     public static Verdict verdict(boolean empty, boolean craneBringing, boolean filterAllows, long capacity,
             int count) {
+        return verdict(false, empty, craneBringing, filterAllows, capacity, count);
+    }
+
+    /**
+     * {@link #verdict(boolean, boolean, boolean, long, int)} with package mode (issue #40) asked first.
+     *
+     * @param looseRefused package mode is on and the pallet carries loose goods, not packages
+     */
+    public static Verdict verdict(boolean looseRefused, boolean empty, boolean craneBringing, boolean filterAllows,
+            long capacity, int count) {
+        if (looseRefused)
+            return Verdict.PACKAGES_ONLY;
         if (!empty)
             return Verdict.NOT_EMPTY;
         if (craneBringing)

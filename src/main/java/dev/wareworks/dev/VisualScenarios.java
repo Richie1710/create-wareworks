@@ -58,6 +58,7 @@ final class VisualScenarios {
             Map.entry(RoboBeeVisualScenario.NAME, RoboBeeVisualScenario::new),
             Map.entry(SelectorVisualScenario.NAME, SelectorVisualScenario::new),
             Map.entry(SelectorRemoteVisualScenario.NAME, SelectorRemoteVisualScenario::new),
+            Map.entry(PackageModeVisualScenario.NAME, PackageModeVisualScenario::new),
             Map.entry(ArmDedicatedServerScenario.NAME, ArmDedicatedServerScenario::new));
 
     private VisualScenarios() {

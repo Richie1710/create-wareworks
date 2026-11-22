@@ -8,6 +8,7 @@ import com.simibubi.create.AllSoundEvents;
 import dev.wareworks.content.controller.AisleNaming;
 import dev.wareworks.content.crane.head.TransferContexts;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.util.WareworksLang;
 import net.minecraft.core.BlockPos;
 import net.minecraft.sounds.SoundEvents;
@@ -196,8 +197,21 @@ public final class RackBayGestures {
         boolean wholeStack = player.isSecondaryUseActive();
         if (AisleNaming.isGesture(stack))
             return wholeStack ? ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION : refuseNaming(level, player);
+        if (!stack.isEmpty() && !PackageModeGate.admits(stack))
+            return refusePackageMode(level, player);
         return stack.isEmpty() ? take(level, pos, bay, player, wholeStack)
                 : insert(level, pos, bay, player, stack, wholeStack);
+    }
+
+    /**
+     * Package mode (issue #40): a player's hand is an entrance like a hopper, so a loose item is not put into a bay. The
+     * click is consumed with one action-bar line, as the naming refusal is, so the item is not placed against the bay
+     * instead. Taking out by hand is untouched: loose stock from before the switch stays retrievable.
+     */
+    private static ItemInteractionResult refusePackageMode(Level level, Player player) {
+        if (!level.isClientSide)
+            player.displayClientMessage(WareworksLang.translateDirect(WareworksLang.PACKAGE_MODE_HAND_REFUSED), true);
+        return ItemInteractionResult.sidedSuccess(level.isClientSide);
     }
 
     /**

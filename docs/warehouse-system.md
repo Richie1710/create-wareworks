@@ -1484,8 +1484,10 @@ is let near it, because the delegate empties the entries it placed.
 * **A package already standing in the port is relabelled, not boxed again.** The Packager passes that very package
   through and rewrites its address: `clearAddress` then the sign's. Free relabelling, surprising, harmless.
 * **A box is stored as an ordinary item when there is no Packager.** A package funnelled straight into a warehouse
-  input is stock like anything else — and `ItemKey` is item **plus** components, so it is **one stock row per address**.
-  Two boxes addressed `Base North` count 2 and a third addressed `Base South` counts 1 as a separate row. That is the
+  input is stock like anything else — and `ItemKey` is item **plus** components, so it is **one stock row per box
+  key**: address, contents and the box's style (`PackageStyles` picks a random one per box) are all components, so two
+  boxes almost never share a row. Only two boxes of the same style, contents and address count 2 in one row (package
+  mode, §3.12, lists boxes per address instead; issue #40 corrected the earlier "one row per address" here). That is the
   same class of thing as a hundred distinct enchanted books, the terminal list is already capped, and refusing the box
   instead would back a funnel up with nothing to read. Accepted and pinned by `packagestoredasanitem`. A box holding
   a Create Toolbox with a filter (a bulky item travels alone, so a door ordered one makes such a box) is a stock row
@@ -8001,6 +8003,54 @@ making (ADR-081).
   rest made by a vanilla Crafter, English and German); `blocks`, `tooltips` and `ponder` (the scene
   `requester/ordering`) include the block.
 * `runRobustnessTest`, once, because the harness registrations changed.
+
+### 3.12 Package mode ([issue #40](https://github.com/Richie1710/create-wareworks/issues/40), M37, ADR-086)
+
+One server switch, `[packageMode] enabled` (default `false`, `worldRestart()`, per world in
+`<world>/serverconfig/wareworks-server.toml`), read through `WareworksConfig.packageModeEnabled()` and
+`content.packagemode.PackageModeGate`. While it is on, **every** warehouse of the world takes in and hands out sealed
+Create packages only (`PackageItem.isPackage`; an empty box counts). There is no per-warehouse flag and nothing is
+saved for the mode; with the switch off every block behaves and saves exactly as before (pinned against golden SNBT
+written by 0.23.0-beta, `gametest.PackageModeGoldenGameTests`).
+
+* **Entrances.** A Warehouse Input's capability view and belt side refuse loose stacks (the crane's own reroute insert
+  is not gated). A Packager behind an input is refused the box in both passes unless every stack in it is a drained
+  result (below). A collecting port sees only the packages in its machine. Every rack bay refuses loose inserts from
+  automation, a hand and a hand-truck pallet (`PalletIntoBay.Verdict.PACKAGES_ONLY`). Backstop: the crane never stores
+  a loose key without a drain allowance (`WarehouseControllerBlockEntity#packageModeHolds`); such items wait in the
+  input, its goggles show them, and an empty-hand click takes them out.
+* **Drain of work open at load.** No new production order, crafting fetch, list fetch, fluid fill, selector selection
+  or Requester order starts (`aislePatterns()` answers empty, both creation sites refuse with
+  `RequestRejection.PACKAGE_MODE`). Orders open when the world loaded run on. The controller's drain ledger
+  (`core.production.PackageModeDrain`, not saved) lets a loose key in and stored only up to what the orders' machines
+  can still give back: what the delivered ingredients make (0 before any delivery) minus what the order counted or the
+  ledger booked, plus one empty container per delivered filled one; a forgotten order keeps its rest until used up.
+  Every loose item leaving an input is booked, so an ended or uncredited order stops letting items in. The input admits
+  that much (`drainRoom`), the planner stores that much minus what is carried in (`storeHeadroom`), and the rest waits
+  in the input for a hand.
+* **Storage.** Each box is its own `ItemKey`, so one crane trip moves one box. The planner skips an **empty** item
+  rack bay without a Package Filter for a package key when it stores or relocates (`PlannerInput.storeExcluded`, asked
+  by `JobPlanner#collectStorage`), and names it (`NoJobReason.PACKAGE_BAY_NEEDS_FILTER`) when that is all that stopped a
+  box. A reroute of items that already left the warehouse ranks such a bay last instead (§8), so the crane never holds a
+  box for ever. A box an input holds over a package rule's maximum comes out with an empty hand.
+* **Terminal.** The screen gets one row per address (`PackageGroupKey`, a synthetic key whose name carries the
+  address), folded before the 512-row cut, with a contents summary (`PackageGroupSummary`) in the tooltip; the loose
+  rows from before follow as a trailing greyed section and stay clickable. A computer keeps the per-key list. A click
+  on an address row picks that many boxes (lowest storage priority first, ADR-078) and starts the terminal's **address
+  order** (`TerminalPackageOrder`, saved as `PackageOrder` only while open), delivered to the terminal or a door.
+* **Doors.** A requesting port without a Packager is a door (`DoorState.PLAIN_PORT`); a Packager door without a sign is
+  `DoorState.STRIPS_ADDRESS`, unselectable and refused (`RequestRejection.DOOR_STRIPS_ADDRESS`), because a Packager
+  always clears a box's address and writes only its sign's (ADR-065 D3 as corrected).
+* **Stock rules.** A keeper row whose item is an addressed Package Filter is a `RuleUnit.PACKAGES` row
+  (`core.stock.PackageRules`): it counts the boxes whose address matches (Create's `matchAddress`), the strictest
+  maximum and reserve of all matching rows apply, the maximum is enforced at the input (`packageAdmitRoom`), the
+  reserve holds boxes back from automation only, and the minimum only signals (lamp, comparator). With the switch off
+  such a row is kept and saved but does nothing.
+
+Proof: GameTests `PackageModeGameTests`, `PackageModeLockoutGameTests`, `PackageModeTerminalGameTests`,
+`PackageRuleGameTests`, `PackageModeGoldenGameTests`; the `packagemode` visual scenario (its own world, the switch in
+that world's `serverconfig`, real clicks, a census that counts every box as itself); the robustness run's package-mode
+phase; the Ponder scene `warehouse/package_mode`.
 
 ## 4. Discovery and membership (no permanent world searches)
 

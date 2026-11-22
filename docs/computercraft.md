@@ -30,7 +30,9 @@ other change made from outside.
 ## 2. What a computer can and cannot do
 
 * **Read** the terminal's stock list (what the warehouse holds and can make), the open requests to this terminal and
-  its package doors, the package doors and the warehouse's status.
+  its package doors, the package doors and the warehouse's status. In package mode (issue #40) a computer still reads
+  one row per item key, every stored box with its own fingerprint, and requests exact boxes: the screen's one row per
+  address and its address orders are for players only.
 * **Request** items, delivered into the terminal's buffer or through one of its package doors. A computer request is
   an ordinary **automation** request, exactly like a warehouse output's redstone pulse: the controller plans it and the
   crane carries it. Nothing is teleported.
@@ -154,6 +156,9 @@ of that item (often an ingredient, not the item asked for). A refusal is not an 
 | `production_paused` | the warehouse has stopped making the item or an ingredient on its way (the production safety stop); a player has to look at the machine |
 | `not_a_door` | `door` is not a package door of this terminal's warehouse |
 | `door_ignores_redstone` | the door's Packager has a Stock Link, so it would never send the items |
+| `package_mode` | the server runs every warehouse in package mode (`[packageMode] enabled`): the item would have to be made, and nothing is made then |
+| `door_strips_address` | package mode only: the door's Packager has no sign, so it would send a stored package out with no address |
+| `package_order_elsewhere` | package mode only, and never given to a computer: a terminal click on an address row named another destination than the terminal's running address order |
 
 The words are the lowercase names of Wareworks' request refusals. Four more exist there and never reach a computer:
 `no_filter` (a warehouse output only), `out_of_reach` (a player only), `invalid_amount` (a computer's amount is a
@@ -192,7 +197,7 @@ Returns the package doors the terminal's screen lists (at most 16):
 | `x`, `y`, `z` | number | the door's position, the value `request` takes as `door` |
 | `label` | string | the sign address at its Packager (empty without a sign) |
 | `rack` | string | the door's rack address, e.g. `A-12-03R` |
-| `state` | string | `ready`, `no_address`, `port_full`, `box_waiting`, `ignores_redstone` or `not_loaded` |
+| `state` | string | `ready`, `no_address`, `port_full`, `box_waiting`, `ignores_redstone` or `not_loaded`; in package mode also `plain_port` (a requesting port with no Packager: the box leaves as it is) and `strips_address` (a Packager without a sign; cannot be chosen) |
 | `waiting` | number | items the open requests to this door still wait for |
 | `delivered` | number | items of those requests already in the door's buffer |
 

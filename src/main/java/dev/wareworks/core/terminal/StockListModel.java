@@ -7,6 +7,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Predicate;
+
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The item list a warehouse terminal screen shows: everything the server sent, narrowed by the search and the "only
@@ -30,7 +33,16 @@ public final class StockListModel<K> {
     /** What this player asks for most often, as the server last reported it; {@link TerminalSort#USED} reads it. */
     private TerminalUsageCounts<K> usage = TerminalUsageCounts.none();
 
+    /**
+     * The keys that form the list's <b>trailing section</b>, or {@code null} for one section: package mode's loose stock
+     * from before the switch (issue #40, owner decision E5), which comes after every address row whatever the sort.
+     */
+    @Nullable
+    private Predicate<? super K> trailing;
+
     private List<StockLine<K>> visible = List.of();
+    /** Index in {@link #visible} of the first line of the trailing section, -1 while it has none. */
+    private int firstTrailing = -1;
     private boolean dirty = true;
 
     /** Replaces the whole list (a screen opened, or the server re-synced everything). */
@@ -112,6 +124,27 @@ public final class StockListModel<K> {
         return true;
     }
 
+    /**
+     * Splits the list into two sections (issue #40): the lines whose key {@code section} accepts come after all the
+     * others, each section in the chosen order. {@code null} is one section, which is every list before package mode.
+     * Always marks the list dirty: a predicate cannot be compared for equality, and the one re-sort it costs happens
+     * when the screen opens or the mode changes, never per frame.
+     */
+    public void setTrailingSection(@Nullable Predicate<? super K> section) {
+        trailing = section;
+        dirty = true;
+    }
+
+    /**
+     * The index within {@link #visible()} of the first line of the trailing section, or -1 when the list has no
+     * trailing section or none of its lines is visible. The screen draws the section's divider before that cell.
+     */
+    public int firstTrailing() {
+        if (dirty)
+            recompute();
+        return firstTrailing;
+    }
+
     public String query() {
         return query;
     }
@@ -182,6 +215,18 @@ public final class StockListModel<K> {
                 matching.add(line);
         }
         matching.sort(sort.comparator(usage));
+        firstTrailing = -1;
+        if (trailing != null) {
+            // A stable partition of the sorted list: each section keeps the chosen order.
+            List<StockLine<K>> leading = new ArrayList<>(matching.size());
+            List<StockLine<K>> after = new ArrayList<>();
+            for (StockLine<K> line : matching)
+                (trailing.test(line.key()) ? after : leading).add(line);
+            if (!after.isEmpty())
+                firstTrailing = leading.size();
+            leading.addAll(after);
+            matching = leading;
+        }
         visible = List.copyOf(matching);
         dirty = false;
     }

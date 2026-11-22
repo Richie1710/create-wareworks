@@ -166,6 +166,14 @@ import dev.wareworks.core.inventory.StockView;
  *                             collecting ports, reroutes and requests never ask it. The default holds nothing, which
  *                             makes an input built without it <b>literally</b> the input the planner received before
  *                             ADR-085
+ * @param storeExcluded        whether a storage location is never a target for a key, whatever else it says (package
+ *                             mode, issue #40, owner decision E3: an empty rack bay without a Package Filter takes no
+ *                             package, because a bay holds one key and a box is its own key). Asked by every path that
+ *                             stores into a location ({@code JobPlanner#collectStorage}: the store plan, every reroute
+ *                             into storage and the relocation stage) before the store filter, so an excluded location
+ *                             costs no estimate and no live call and adds no reason. The default excludes nothing,
+ *                             which makes an input built without it <b>literally</b> the input the planner received
+ *                             before package mode
  * @param liveSimulationBudget maximum number of live callback calls per planner run (bounds the cost of a full
  *                             warehouse or a long fall-through)
  * @param <K>                  item key type
@@ -185,7 +193,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         BiFunction<? super L, ? super K, FilterMatch> storeFilter, ToIntFunction<? super L> storePriority,
         ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, FillSupply<K, L> fillSupply,
         List<RelocateNeed<K>> relocations, BiPredicate<? super L, ? super K> relocateTarget,
-        BiPredicate<? super L, ? super K> storeHeld, int liveSimulationBudget) {
+        BiPredicate<? super L, ? super K> storeHeld, BiPredicate<? super L, ? super K> storeExcluded,
+        int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
      * the builder's default, so an aisle without rules plans exactly as it did before M15.
@@ -280,6 +289,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         relocations = List.copyOf(relocations);
         Objects.requireNonNull(relocateTarget, "relocateTarget");
         Objects.requireNonNull(storeHeld, "storeHeld");
+        Objects.requireNonNull(storeExcluded, "storeExcluded");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
     }
@@ -499,6 +509,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private List<RelocateNeed<K>> relocations = List.of();
         private BiPredicate<? super L, ? super K> relocateTarget = (location, key) -> true;
         private BiPredicate<? super L, ? super K> storeHeld = (location, key) -> false;
+        private BiPredicate<? super L, ? super K> storeExcluded = (location, key) -> false;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
         private Builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
@@ -739,6 +750,15 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * Which storage locations are never a target for which key ({@link PlannerInput#storeExcluded()}, package mode).
+         * Left out, none is, which is the input the planner received before package mode.
+         */
+        public Builder<K, L> storeExcluded(BiPredicate<? super L, ? super K> storeExcluded) {
+            this.storeExcluded = storeExcluded;
+            return this;
+        }
+
         public Builder<K, L> liveSimulationBudget(int liveSimulationBudget) {
             this.liveSimulationBudget = liveSimulationBudget;
             return this;
@@ -752,7 +772,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     inputBuffers, inputCursor, LocationAvailability.of(available),
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, roomBound,
                     stackSize, storeFilter, storePriority,
-                    portRank, storeHeadroom, fillSupply, relocations, relocateTarget, storeHeld,
+                    portRank, storeHeadroom, fillSupply, relocations, relocateTarget, storeHeld, storeExcluded,
                     liveSimulationBudget);
         }
     }

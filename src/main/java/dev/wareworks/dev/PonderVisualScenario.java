@@ -81,8 +81,9 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("controller", WareworksBlocks.WAREHOUSE_CONTROLLER, 2),
             new Subject("interface", WareworksBlocks.WAREHOUSE_INTERFACE, 3),
             // M26 (issue #18) adds the package door, which both stations show: it is the same Packager on either side
-            // of the warehouse, and which station its back touches is what decides the direction.
-            new Subject("input", WareworksBlocks.WAREHOUSE_INPUT, 2),
+            // of the warehouse, and which station its back touches is what decides the direction. Issue #40 adds
+            // package mode, which the input and the terminal show.
+            new Subject("input", WareworksBlocks.WAREHOUSE_INPUT, 3),
             // M17: retrieving, plus the two port scenes (the second of which the keeper shows as well). M18 adds the
             // third direction, which the production station shows as well, and M26 the package door. M27 (issue #18,
             // second half) adds ordering to a door, which the terminal shows as well.
@@ -93,8 +94,9 @@ public final class PonderVisualScenario implements VisualScenario {
             // warehouse looks for a fluid row and finds buckets, and that scene is where the answer is.
             // M27 (issue #18, second half) adds ordering to a door: the door is chosen at the terminal and is the
             // output, so both blocks show it.
-            // M31 (issue #21) adds asking for fluid, which the terminal shows beside both fluid bays.
-            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 6),
+            // M31 (issue #21) adds asking for fluid, which the terminal shows beside both fluid bays, and issue #40
+            // package mode, which it shows beside the input.
+            new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 7),
             // Issue #34 adds the Crafter Feeder scene, which the station shows as well: the feeder is its machine.
             // ADR-085 adds both Recipe Selector scenes, which the station shows as well: they set its machine.
             new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 6),

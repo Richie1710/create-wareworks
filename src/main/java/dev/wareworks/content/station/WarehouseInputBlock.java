@@ -48,7 +48,8 @@ public class WarehouseInputBlock extends WarehouseStationBlock<WarehouseInputBlo
 
     /**
      * An empty-hand click: the server hands the player what the quarantine keeps in this input
-     * ({@link WarehouseInputBlockEntity#takeQuarantined}) and says what was taken.
+     * ({@link WarehouseInputBlockEntity#takeQuarantined}), or in package mode the loose items the backstop keeps here
+     * ({@link WarehouseInputBlockEntity#takePackageModeHeld}), and says what was taken.
      * <p>
      * Vanilla calls this for the main hand whenever the held item's own use passes, so "empty hand" is checked here,
      * on both sides alike (review fix, Create API 4): a click with an item in the main hand is that item's click and
@@ -66,12 +67,18 @@ public class WarehouseInputBlock extends WarehouseStationBlock<WarehouseInputBlo
         if (!(level.getBlockEntity(pos) instanceof WarehouseInputBlockEntity input))
             return InteractionResult.PASS;
         List<ItemStack> taken = input.takeQuarantined();
+        String message = WareworksLang.SELECTOR_TOOK_OUT;
+        if (taken.isEmpty()) {
+            // Package mode (issue #40, owner decision E4): the loose items the backstop keeps here come out the same
+            // way. With package mode off this takes nothing and the click passes as it always did.
+            taken = input.takePackageModeHeld();
+            message = WareworksLang.PACKAGE_MODE_TOOK_OUT;
+        }
         if (taken.isEmpty())
             return InteractionResult.PASS;
         for (ItemStack stack : taken)
             player.getInventory().placeItemBackInInventory(stack.copy());
-        player.displayClientMessage(WareworksLang.translateDirect(WareworksLang.SELECTOR_TOOK_OUT,
-                taken.getFirst().getHoverName()), true);
+        player.displayClientMessage(WareworksLang.translateDirect(message, taken.getFirst().getHoverName()), true);
         return InteractionResult.SUCCESS;
     }
 }

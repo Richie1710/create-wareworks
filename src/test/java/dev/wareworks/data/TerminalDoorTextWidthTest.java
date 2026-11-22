@@ -126,10 +126,10 @@ class TerminalDoorTextWidthTest {
                         SHORTFALL.arguments(), SHORTFALL.nameFloor()),
                         fill(text(lang, RELATIVE_PREFIX + SHORTFALL.key()), "", sentence), ROW_WIDTH, advances);
             }
-            // Both rejections stand bare in the row: the "Request refused: " frame makes them too wide in both
+            // The door rejections (package mode's DOOR_STRIPS_ADDRESS too, issue #40) stand bare in the row: the "Request refused: " frame makes them too wide in both
             // languages, and the screen drops it then.
             for (RequestRejection rejection : List.of(RequestRejection.NOT_A_DOOR,
-                    RequestRejection.DOOR_IGNORES_REDSTONE))
+                    RequestRejection.DOOR_IGNORES_REDSTONE, RequestRejection.DOOR_STRIPS_ADDRESS))
                 measured += check(tooWide, code, "status row", new Line(rejection.langKey(), "", 0),
                         text(lang, rejection.langKey()), ROW_WIDTH, advances);
             for (String title : List.of(lang.get(TERMINAL_TITLE), text(lang, REMOTE_TITLE))) {

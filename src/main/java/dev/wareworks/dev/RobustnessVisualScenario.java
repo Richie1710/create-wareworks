@@ -149,6 +149,12 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  *       carries nothing of several cranes), placed again, and a rail closed between its machine and its dock while it
  *       carries (it is stranded, finishes on the warehouse's side and rejoins once the rail is open); then the phase
  *       takes the second dock and its input down again, so the phases after it see the warehouse they always saw;</li>
+ *   <li><b>package mode</b> (issue #40, ADR-086) — the switch is written into this world's own {@code serverconfig}
+ *       while the world is closed, and read at the rejoin; a loose stack offered to the input is refused whole, sealed
+ *       boxes are stored, and an address order of {@value #PM_BOXES} boxes to the package door rides a chunk unload and a
+ *       save, quit and rejoin, each in the middle of a crane trip, with every box followed as itself
+ *       ({@link SceneItemCensus#boxes}); then the switch is taken out of the file again and the next world load is
+ *       back to normal, so the phase after it sees the warehouse it always saw;</li>
  *   <li><b>blocks broken at defined moments</b> — the controller is broken while the crane carries items, and later the
  *       dock itself, which drops the handling head at the dock.</li>
  * </ol>
@@ -205,7 +211,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
      * The robustness run waits for chunk unloads and a world reload, so it needs more than the default run budget. It
      * stays well below ten minutes, so the watchdog always fires before any CI or tool timeout around the Gradle task.
      */
-    private static final long RUN_TIMEOUT_MILLIS = 7L * 60L * 1000L;
+    private static final long RUN_TIMEOUT_MILLIS = 9L * 60L * 1000L;
     private static final int CHUNK_TIMEOUT_TICKS = 1200;
     private static final int UNLOAD_TIMEOUT_TICKS = 2400;
     private static final int SCENE_READY_TIMEOUT_TICKS = 600;
@@ -452,6 +458,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         feederOrder(script);
         chunkHold(script);
         twoCranesInFlight(script);
+        packageMode(script);
         brokenBlocks(script);
 
         script.client("robustness: every step passed",
@@ -1009,6 +1016,351 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> refill(server, context, bayTailFill()))
                 .serverUntil("robustness: wait until the crane carries items again", this::craneCarries,
                         JOB_TIMEOUT_TICKS);
+    }
+
+    // --- package mode (issue #40, ADR-086) ---------------------------------------------------------------------------
+
+    /** Boxes of the package-mode phase: one per crane trip, so one trip is cut by the unload and a later one by the save. */
+    private static final int PM_BOXES = 4;
+    /** A stack the input must refuse whole in package mode (it never enters the scene), and takes again once it is off. */
+    private static final ItemKey PM_LOOSE = ItemKey.of(Items.BRICK);
+    /** The folder a world's own server configs live in; a file there overrides the global one for that world only. */
+    private static final String PM_SERVER_CONFIG = "serverconfig";
+    /** Every box of the phase, by its exact identity, and how many of each the scene holds (the box rule). */
+    private volatile Map<ItemKey, Long> expectedBoxes = Map.of();
+    private volatile java.util.UUID pmOrderId;
+    private volatile long pmDeliveredBefore;
+    private volatile long pmLooseBefore;
+    private volatile WarehouseTerminalBlockEntity pmTerminalBeforeUnload;
+    /** Torches in the terminal before the order that drains in package mode (review fix, owner decision E2). */
+    private volatile long pmTorchesBefore;
+
+    /**
+     * <b>Package mode survives a chunk unload and a save, quit and rejoin</b> (issue #40, ADR-086).
+     * <p>
+     * The switch is a world-load setting ({@code worldRestart()}), so the phase writes it into this world's own
+     * {@code serverconfig} folder while the world is closed and rejoins. In package mode it offers the input a loose
+     * stack (refused whole: nothing of it enters the scene), feeds {@value #PM_BOXES} sealed boxes addressed to the
+     * package door's sign through the input's capability as a funnel would, and orders them all with one click on their
+     * address row to the door. The order is the terminal's own state, saved with the terminal only while it is open, so a
+     * chunk unload and a save, quit and rejoin, each in the middle of a crane trip, must give it back with its id and
+     * its count. Every box is followed as a thing of its own after every step ({@link SceneItemCensus#boxes}), on top of
+     * the plain census. Then the switch is taken out of the file again, and the next world load is back to normal: the
+     * input takes a loose stack again.
+     */
+    private void packageMode(VisualScript script) {
+        // Work open at load (owner decision E2, review fix): a torch order through the crafter feeder is opened with the
+        // switch off and saved with a batch in the Crafter; after the rejoin in package mode its machine's loose results
+        // must still come back through the warehouse input, be stored and finish the order, with the craft ledger exact.
+        script.server("robustness: slow the feeder down for the order that drains in package mode",
+                        (server, context) -> feederMotor(server.overworld(), context.origin()).generatedSpeed
+                                .setValue(FEEDER_SLOW_RPM))
+                .server("robustness: store coal and sticks for the order that drains",
+                        (server, context) -> refill(server, context, feederFill()))
+                .serverUntil("robustness: wait until the coal and sticks for the drained order are stored",
+                        this::craneIdleAndInputEmpty, JOB_TIMEOUT_TICKS)
+                .server("robustness: census before the drained order",
+                        (server, context) -> census(server, "the coal and sticks for the drained order were stored"))
+                .server("robustness: order torches through the crafter feeder before the switch", (server, context) -> {
+                    pmTorchesBefore = terminal(server, context).bufferedItems().count(FEEDER_TORCH);
+                    orderFeederTorches(server, context);
+                })
+                .serverUntil("robustness: wait until the feeder laid the order that drains into the Crafter",
+                        this::feederLaid, JOB_TIMEOUT_TICKS)
+                .server("robustness: a batch lies in the Crafter before the switch",
+                        (server, context) -> requireFeederBatch(server, context, "before package mode was switched "
+                                + "on"));
+        script.server("robustness: census before package mode", (server, context) -> {
+                    // On the craft ledger: the slow feeder may already have crafted a run of the open order.
+                    feederCensus(server, "before package mode was switched on");
+                    expectedBoxes = SceneItemCensus.boxes(server.overworld(), censusBox);
+                    if (WareworksConfig.packageModeEnabled())
+                        throw new VisualTestException("package mode is on before this phase switched it on");
+                })
+                .server("robustness: save the world before switching package mode on",
+                        (server, context) -> server.saveEverything(true, true, true));
+        VisualWorld.reload(script, worldProfile(), atTitle -> atTitle.client(
+                "robustness: write [packageMode] enabled = true into the closed world's serverconfig",
+                context -> writePackageModeConfig(context, true)));
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded in package mode", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: package mode is on after the rejoin", (server, context) -> {
+                    if (!WareworksConfig.packageModeEnabled())
+                        throw new VisualTestException("the rejoined world does not read package mode from its own "
+                                + "serverconfig");
+                    pmFeederCensus(server, "package mode switched on at the world load");
+                    requireFeederBatch(server, context, "after the rejoin in package mode");
+                })
+                .server("robustness: speed the feeder up so the order open at load drains",
+                        (server, context) -> feederMotor(server.overworld(), context.origin()).generatedSpeed
+                                .setValue(FEEDER_FAST_RPM))
+                .serverUntil("robustness: wait until the order open at load finished in package mode",
+                        this::feederOrderDone, JOB_TIMEOUT_TICKS)
+                .server("robustness: the drained order's torches came back, were stored and delivered",
+                        (server, context) -> {
+                            long torches = terminal(server, context).bufferedItems().count(FEEDER_TORCH)
+                                    - pmTorchesBefore;
+                            if (torches != (long) FEEDER_RUNS * TORCHES_PER_RUN)
+                                throw new VisualTestException("robustness FAIL: the order open at load delivered "
+                                        + torches + " torches in package mode instead of "
+                                        + FEEDER_RUNS * TORCHES_PER_RUN);
+                            int crafted = feederCensus(server, "the order open at load drained in package mode");
+                            if (crafted != FEEDER_RUNS)
+                                throw new VisualTestException(crafted + " torch crafts on the ledger instead of "
+                                        + FEEDER_RUNS);
+                            if (!controller(server, context).packageModeDrainAllowance().isEmpty())
+                                throw new VisualTestException("the finished order still lets loose items in: "
+                                        + controller(server, context).packageModeDrainAllowance());
+                            LOGGER.info(PREFIX + "robustness: PASS the order open at load drained in package mode: "
+                                    + "{} torches came back through the input, {} crafts on the ledger", torches,
+                                    crafted);
+                            pmCensus(server, "the order open at load drained in package mode");
+                        })
+                .server("robustness: a loose stack is refused whole at the input", this::pmLooseRefused)
+                .server("robustness: feed " + PM_BOXES + " sealed boxes for the door through the input",
+                        this::pmFeedBoxes)
+                .serverUntil("robustness: wait until the boxes are stored", this::pmBoxesStored, JOB_TIMEOUT_TICKS)
+                .server("robustness: census with the boxes stored",
+                        (server, context) -> pmCensus(server, "sealed boxes stored in package mode"))
+                .server("robustness: order every box with one click on its address row to the door",
+                        this::pmStartOrder)
+                .serverUntil("robustness: wait until the crane carries a box to the door", this::pmCarriesToTheDoor,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: remember the order and move the camera far away", (server, context) -> {
+                    pmDeliveredBefore = pmOpenOrder(server, context, "before the camera left").delivered();
+                    dockBeforeUnload = crane(server, context);
+                    pmTerminalBeforeUnload = terminal(server, context);
+                    moveAway(server, context);
+                })
+                .serverUntil("robustness: wait until the aisle with the address order really unloads",
+                        (server, context) -> dockUnloaded(server, context) && pmTerminalBeforeUnload.isRemoved(),
+                        UNLOAD_TIMEOUT_TICKS)
+                .waitTicks(UNLOADED_TICKS)
+                .server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded again", this::sceneLoaded, CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the address order was read from the save again", (server, context) -> {
+                    if (terminal(server, context) == pmTerminalBeforeUnload)
+                        throw new VisualTestException("the terminal block entity was never unloaded and read again");
+                    pmOrderCameBack(server, context, "the chunk round trip");
+                    pmCensus(server, "chunk unload and reload while an address order ran");
+                })
+                .serverUntil("robustness: wait until the crane carries a later box to the door",
+                        (server, context) -> pmOpenOrder(server, context, "before a later trip").delivered()
+                                > pmDeliveredBefore && pmCarriesToTheDoor(server, context), JOB_TIMEOUT_TICKS)
+                .server("robustness: save the world in the middle of the address order", (server, context) -> {
+                    pmDeliveredBefore = pmOpenOrder(server, context, "before the save").delivered();
+                    server.saveEverything(true, true, true);
+                    LOGGER.info(PREFIX + "robustness: saving with the address order at {} of {}", pmDeliveredBefore,
+                            PM_BOXES);
+                });
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the address order came back after the rejoin", (server, context) -> {
+                    if (!WareworksConfig.packageModeEnabled())
+                        throw new VisualTestException("package mode is off after the rejoin");
+                    pmOrderCameBack(server, context, "the save, quit and rejoin");
+                    pmCensus(server, "save, quit and rejoin while an address order ran");
+                })
+                .serverUntil("robustness: wait until the address order finished", (server, context) ->
+                        !terminal(server, context).hasOpenPackageOrder() && craneIdleAndEmpty(server, context),
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: the door holds exactly the boxes, sealed", this::pmAssertDelivered)
+                .server("robustness: save the world before switching package mode off",
+                        (server, context) -> server.saveEverything(true, true, true));
+        VisualWorld.reload(script, worldProfile(), atTitle -> atTitle.client(
+                "robustness: take package mode out of the closed world's serverconfig",
+                context -> writePackageModeConfig(context, false)));
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded with package mode off", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: package mode is off again and the boxes are where they were", (server, context) -> {
+                    if (WareworksConfig.packageModeEnabled())
+                        throw new VisualTestException("package mode is still on after its file was removed");
+                    pmCensus(server, "package mode switched off at the world load");
+                })
+                .server("robustness: a loose stack goes into the input again", (server, context) -> {
+                    pmLooseBefore = controller(server, context).stockIndex().count(PM_LOOSE);
+                    refill(server, context, List.of(PM_LOOSE.toStack(STACK)));
+                })
+                .serverUntil("robustness: wait until the loose stack is stored", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census after package mode", (server, context) -> {
+                    // An earlier phase stores bricks too, so the stack is measured as what it added.
+                    long stored = controller(server, context).stockIndex().count(PM_LOOSE) - pmLooseBefore;
+                    if (stored != STACK)
+                        throw new VisualTestException("the loose stack was not stored with package mode off: "
+                                + stored + " of " + STACK);
+                    pmCensus(server, "a loose stack stored again with package mode off");
+                });
+    }
+
+    /**
+     * Writes (or, for {@code on == false}, removes) the world's own server config with package mode on. Run at the
+     * title screen, so no running server ever sees the file change; the next world load reads it.
+     */
+    private static void writePackageModeConfig(VisualContext context, boolean on) throws java.io.IOException {
+        java.nio.file.Path folder = context.minecraft().getLevelSource().getBaseDir()
+                .resolve(VisualWorldProfile.camera().worldFolder()).resolve(PM_SERVER_CONFIG);
+        java.nio.file.Path file = folder.resolve(dev.wareworks.Wareworks.ID + "-server.toml");
+        if (!on) {
+            java.nio.file.Files.deleteIfExists(file);
+            LOGGER.info(PREFIX + "robustness: removed {}", file);
+            return;
+        }
+        java.nio.file.Files.createDirectories(folder);
+        java.nio.file.Files.writeString(file, """
+                # Written by the Wareworks robustness run (issue #40): package mode is read at the world load, so this
+                # throw-away world gets it in its own serverconfig folder; the phase removes the file again.
+                [packageMode]
+                \tenabled = true
+                """, java.nio.charset.StandardCharsets.UTF_8);
+        LOGGER.info(PREFIX + "robustness: wrote {}", file);
+    }
+
+    /** The plain census, and every box of the scene as itself. */
+    /** {@link #pmCensus} on the craft ledger of the feeder order that is open ({@link #feederCensus}). */
+    private void pmFeederCensus(MinecraftServer server, String step) {
+        feederCensus(server, step);
+        checkBoxes(server, step);
+    }
+
+    private void pmCensus(MinecraftServer server, String step) {
+        census(server, step);
+        checkBoxes(server, step);
+    }
+
+    /** Every box is still there as itself ({@link SceneItemCensus#boxes}). */
+    private void checkBoxes(MinecraftServer server, String step) {
+        Map<ItemKey, Long> actual = SceneItemCensus.boxes(server.overworld(), censusBox);
+        if (!actual.equals(expectedBoxes)) {
+            LOGGER.error(PREFIX + "robustness FAIL: {}: boxes expected {} but found {}", step,
+                    SceneItemCensus.describe(expectedBoxes), SceneItemCensus.describe(actual));
+            throw new VisualTestException("a box was lost, duplicated or changed after " + step + ": expected "
+                    + SceneItemCensus.describe(expectedBoxes) + " but found " + SceneItemCensus.describe(actual));
+        }
+        LOGGER.info(PREFIX + "robustness PASS: {} (boxes as themselves: {})", step, actual.values().stream()
+                .mapToLong(Long::longValue).sum());
+    }
+
+    private void pmLooseRefused(MinecraftServer server, VisualContext context) {
+        BlockPos input = layout(context.origin()).rackPos(INPUT);
+        IItemHandler handler = server.overworld().getCapability(Capabilities.ItemHandler.BLOCK, input, null);
+        if (handler == null)
+            throw new VisualTestException("the warehouse input has no item handler");
+        ItemStack offered = PM_LOOSE.toStack(STACK);
+        ItemStack rest = ItemHandlerHelper.insertItem(handler, offered.copy(), false);
+        if (rest.getCount() != STACK)
+            throw new VisualTestException("the input took " + (STACK - rest.getCount()) + " loose " + PM_LOOSE
+                    + " in package mode");
+        pmCensus(server, "a loose stack refused whole at the input");
+    }
+
+    private void pmFeedBoxes(MinecraftServer server, VisualContext context) {
+        List<ItemStack> boxes = new ArrayList<>();
+        for (int box = 0; box < PM_BOXES; box++) {
+            ItemStack stack = com.simibubi.create.content.logistics.box.PackageItem.containing(
+                    List.of(new ItemStack(Items.FLINT, 3 + box), new ItemStack(Items.CLAY_BALL, 2)));
+            com.simibubi.create.content.logistics.box.PackageItem.addAddress(stack, DOOR_ADDRESS);
+            boxes.add(stack);
+        }
+        Map<ItemKey, Long> nextBoxes = new java.util.HashMap<>(expectedBoxes);
+        for (ItemStack box : boxes)
+            nextBoxes.merge(ItemKey.of(box), 1L, Long::sum);
+        expectedBoxes = nextBoxes;
+        refill(server, context, boxes);
+    }
+
+    private boolean pmBoxesStored(MinecraftServer server, VisualContext context) {
+        if (!craneIdleAndInputEmpty(server, context))
+            return false;
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        return expectedBoxes.keySet().stream().filter(key -> DOOR_ADDRESS.equals(
+                        com.simibubi.create.content.logistics.box.PackageItem.getAddress(key.toStack())))
+                .allMatch(key -> controller.stockIndex().count(key) == 1L);
+    }
+
+    /** One click on the door address's row, to the door, through the menu's payload entry as the screen sends it. */
+    private void pmStartOrder(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminal(server, context);
+        ServerPlayer player = context.serverPlayer(server);
+        BlockPos at = layout(context.origin()).rackPos(TERMINAL);
+        teleport(server, context, at.getX() + 0.5, at.getY() + 1.0, at.getZ() + 0.5);
+        if (!terminal.openScreen(player) || !(player.containerMenu instanceof WarehouseTerminalMenu menu))
+            throw new VisualTestException("the terminal screen could not be opened for the camera player");
+        Optional<TerminalRequestOutcome> answer = WarehouseTerminalMenu.submitRequest(player, menu.containerId,
+                dev.wareworks.content.packagemode.PackageGroupKey.of(DOOR_ADDRESS), PM_BOXES,
+                RequestAcknowledgement.NONE, Optional.of(doorPos(context)));
+        player.closeContainer();
+        moveToBuildSite(server, context);
+        RequestResult result = answer.flatMap(TerminalRequestOutcome::result)
+                .orElseThrow(() -> new VisualTestException("the click on the address row got no answer"));
+        if (!result.isAccepted() || !terminal.hasOpenPackageOrder()
+                || terminal.packageOrderState().wanted() != PM_BOXES)
+            throw new VisualTestException("the click on the address row should order " + PM_BOXES + " boxes: "
+                    + result + ", " + terminal.packageOrderState());
+        pmOrderId = terminal.packageOrderState().id();
+        LOGGER.info(PREFIX + "robustness: the address order started: {} boxes for '{}' to the door, id {}", PM_BOXES,
+                DOOR_ADDRESS, pmOrderId);
+    }
+
+    private dev.wareworks.content.station.TerminalPackageOrderState pmOpenOrder(MinecraftServer server,
+            VisualContext context, String moment) {
+        var state = terminal(server, context).packageOrderState();
+        if (!state.isOpen() || !state.id().equals(pmOrderId))
+            throw new VisualTestException("the address order is not open " + moment + ": " + state);
+        return state;
+    }
+
+    private boolean pmCarriesToTheDoor(MinecraftServer server, VisualContext context) {
+        pmOpenOrder(server, context, "while the crane was awaited");
+        StackerCraneBlockEntity crane = crane(server, context);
+        return crane.heldItems().entries().stream().anyMatch(entry -> expectedBoxes.containsKey(entry.key()))
+                && crane.currentJob().map(job -> job.target().equals(DOOR)).orElse(false);
+    }
+
+    /**
+     * After an interruption the address order is the one that was saved (same id, all boxes wanted, nothing delivered
+     * forgotten), or it already ended with every box in the door's port.
+     */
+    private void pmOrderCameBack(MinecraftServer server, VisualContext context, String after) {
+        var state = terminal(server, context).packageOrderState();
+        long inPort = pmBoxesInPort(server, context);
+        if (!state.isOpen()) {
+            if (inPort != PM_BOXES)
+                throw new VisualTestException("the address order is gone after " + after + " with " + inPort
+                        + " boxes at the door");
+            LOGGER.info(PREFIX + "robustness: PASS the address order came back after {} and finished already", after);
+            return;
+        }
+        if (!state.id().equals(pmOrderId) || state.wanted() != PM_BOXES || state.delivered() < pmDeliveredBefore)
+            throw new VisualTestException("the address order came back as " + state + " after " + after + ", with "
+                    + pmDeliveredBefore + " delivered before");
+        if (inPort != state.delivered())
+            throw new VisualTestException("the door holds " + inPort + " boxes but the order counts "
+                    + state.delivered() + " after " + after);
+        LOGGER.info(PREFIX + "robustness: PASS the address order came back after {}: {} of {} boxes at the door ({} "
+                + "before)", after, state.delivered(), state.wanted(), pmDeliveredBefore);
+    }
+
+    private long pmBoxesInPort(MinecraftServer server, VisualContext context) {
+        var buffer = port(server, context).bufferedItems();
+        return buffer.keys().stream().filter(key -> DOOR_ADDRESS.equals(
+                        com.simibubi.create.content.logistics.box.PackageItem.getAddress(key.toStack())))
+                .mapToLong(buffer::count).sum();
+    }
+
+    private void pmAssertDelivered(MinecraftServer server, VisualContext context) {
+        long inPort = pmBoxesInPort(server, context);
+        if (inPort != PM_BOXES)
+            throw new VisualTestException("the door's port holds " + inPort + " boxes instead of " + PM_BOXES);
+        for (ItemKey key : expectedBoxes.keySet())
+            if (DOOR_ADDRESS.equals(com.simibubi.create.content.logistics.box.PackageItem.getAddress(key.toStack()))
+                    && controller(server, context).stockIndex().count(key) != 0L)
+                throw new VisualTestException("a box at the door is still counted in stock: " + key);
+        pmCensus(server, "the address order finished after both interruptions");
     }
 
     // --- two cranes in flight (issue #14, ADR-075) --------------------------------------------------------------------
@@ -2202,6 +2554,15 @@ public final class RobustnessVisualScenario implements VisualScenario {
                 || !station.setPatternEntry(0, MIDDLE_LEFT, FEEDER_STICK, 1)
                 || !station.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY, FEEDER_TORCH, TORCHES_PER_RUN))
             throw new VisualTestException("the torch pattern could not be written into the station");
+        orderFeederTorches(server, context);
+    }
+
+    /**
+     * Orders {@value #FEEDER_RUNS} runs of the torch pattern the feeder's station already holds to the terminal (the
+     * second torch order, package mode's drained order, where the pattern from the feeder phase is still written).
+     */
+    private void orderFeederTorches(MinecraftServer server, VisualContext context) {
+        WarehouseProductionBlockEntity station = feederStation(server, context);
         if (station.crafterCheck(0).check() != CrafterPatternCheck.VALID)
             throw new VisualTestException("the torch pattern is not checked as a recipe: " + station.crafterCheck(0));
         if (!feeder(server, context).running())

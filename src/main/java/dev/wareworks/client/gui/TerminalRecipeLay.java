@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseTerminalMenu;
 import dev.wareworks.core.crafting.IngredientPicker;
@@ -66,6 +67,19 @@ public final class TerminalRecipeLay {
         Objects.requireNonNull(menu, "menu");
         return WarehouseTerminalScreen.forMenu(menu.containerId).map(WarehouseTerminalScreen::isCraftGridLocked)
                 .orElse(false);
+    }
+
+    /**
+     * What a viewer's transfer button says in package mode (issue #40, E6): the terminal's own sentence, in red like a
+     * refusal. Translated when it is drawn, so one instance serves every language.
+     */
+    public static Component packageModeLine() {
+        return WarehouseTerminalScreen.packageModeLine();
+    }
+
+    /** Whether package mode keeps the panel off (issue #40, E6): as the server told this client at login, so nothing is laid. */
+    public static boolean packageMode() {
+        return PackageModeGate.enabledOnClient();
     }
 
     /**

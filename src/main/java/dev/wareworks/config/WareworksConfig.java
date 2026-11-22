@@ -579,6 +579,17 @@ public final class WareworksConfig {
         return get(SERVER.computerAccess);
     }
 
+    // --- package mode --------------------------------------------------------------------------------------------
+
+    /**
+     * Whether every warehouse of this world is in package mode (issue #40, owner decisions E1/E2): its entrances take
+     * only sealed Create packages. A {@code worldRestart} value, so it never changes under running work; off by
+     * default, and while off nothing behaves or saves differently ({@code gametest.PackageModeGoldenGameTests}).
+     */
+    public static boolean packageModeEnabled() {
+        return get(SERVER.packageModeEnabled);
+    }
+
     // --- remote --------------------------------------------------------------------------------------------------
 
     /**
@@ -776,6 +787,8 @@ public final class WareworksConfig {
         public final ModConfigSpec.IntValue requesterPollIntervalTicks;
         public final ModConfigSpec.IntValue requesterOrderTimeoutTicks;
         public final ModConfigSpec.IntValue requesterChecklistRefreshTicks;
+
+        public final ModConfigSpec.BooleanValue packageModeEnabled;
 
         Server(ModConfigSpec.Builder builder) {
             builder.comment("Aisle geometry").push("aisle");
@@ -1377,6 +1390,27 @@ public final class WareworksConfig {
                             + "missing in between.")
                     .defineInRange("checklistRefreshTicks", RequesterLimits.DEFAULT_REFRESH_TICKS,
                             RequesterLimits.MIN_REFRESH_TICKS, RequesterLimits.MAX_REFRESH_TICKS);
+            builder.pop();
+
+            builder.comment("Package mode: warehouses that store sealed Create packages only (issue #40)")
+                    .push("packageMode");
+            packageModeEnabled = builder
+                    .comment("Puts every warehouse of this world in package mode: warehouse inputs, collecting ports "
+                            + "and rack bays then take in only sealed Create packages, and loose items stay with "
+                            + "whatever brought them. The warehouses then also make nothing new (no production order, "
+                            + "crafting Fetch, clipboard list, fluid fill or Schematicannon Requester order starts), "
+                            + "the crane keeps packages out of empty rack bays without a Package Filter, and a "
+                            + "Packager door without a sign is refused. Off by default. Takes effect at the next world "
+                            + "load.",
+                            "Work already open when the world loads drains: the loose results of a production order "
+                                    + "that was open are still let in, up to what the ingredients its machine was "
+                                    + "given make (nothing while it still waits for them). Loose "
+                                    + "items already in an input stay there (shown in the goggles) until a player "
+                                    + "takes them out with an empty hand; nothing is stored, converted or lost. "
+                                    + "Production orders, Fetches, lists and requester orders already open run to "
+                                    + "their end.")
+                    .worldRestart()
+                    .define("enabled", false);
             builder.pop();
         }
     }

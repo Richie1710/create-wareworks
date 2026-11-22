@@ -4087,3 +4087,52 @@ you get tired of waiting, and put it back before judging check 160.
 498. **The Ender selector's latch.** Point two slip stations at one Ender selector: packages of the second are refused
      (goggles say so) until you sneak-click the selector with an empty hand. Try to place it outside the Packager's
      chunk: it is refused with its line.
+
+## BW. Package mode ([issue #40](https://github.com/Richie1710/create-wareworks/issues/40), ADR-086)
+
+> `PackageModeGoldenGameTests` (off means unchanged, against saves of 0.23.0-beta), `PackageModeGameTests`,
+> `PackageModeLockoutGameTests`, `PackageModeTerminalGameTests`, `PackageRuleGameTests`, the `packagemode` visual
+> scenario (its own world, the switch in that world's `serverconfig`, real clicks, every box counted as itself) and the
+> robustness run's package-mode phase check the server side. What a person has to judge:
+
+499. **Switching it on in single player.** Open a world once, quit, set `enabled = true` under `[packageMode]` in
+     `saves/<world>/serverconfig/wareworks-server.toml`, open it again: is the README's description enough to find the
+     file, and does nothing at all change in a second world without the line?
+500. **A dedicated server.** The same on a dedicated server, with a client joining: the terminal's greyed crafting
+     toggle, list button and fluid cells, the input's goggles and the door rows all follow the server's switch.
+501. **Loose items at the input.** Feed a belt with boxes and loose items mixed: the boxes go in, the first loose item
+     stops the belt in front of the input. Is that what a player expects, and is the goggle line ("Last loose item
+     refused") enough to find the cause? Try a Package Filter on a funnel or Brass Tunnel to route the loose item away.
+502. **The terminal by address.** A warehouse with many addresses and loose stock from before: one row per address, the
+     contents in the tooltip, the search finding an address by an item inside, the loose section greyed with its
+     border, at your usual GUI scale and at the smallest window, in English and German. Is it readable?
+503. **An address order.** Click an address row with Shift and without, to the terminal and to a signed door, then
+     cancel one on its line: the right boxes arrive sealed, and the line counts them.
+504. **Doors.** A signed Packager door, a signless one (greyed, refused, the click skips it) and a plain requesting
+     port without a Packager (the box leaves it as it is): does the door button's tooltip make the difference clear?
+505. **A package rule.** A keeper row with a Package Filter addressed "Base*", a minimum and a maximum: the lamp and the
+     comparator follow the count, a box over the maximum waits outside the input with its goggle line, and nothing is
+     ever made. Wire the comparator to your own Packager: does the loop feel right?
+506. **Open work at the switch.** Start a production order and a Recipe Selector order, quit, switch package mode on
+     and rejoin: both finish, their results come back, nothing new can be ordered, and the goggles say why.
+507. **Ponder.** The package mode scene on the Warehouse Input and the Warehouse Terminal: readable in English and
+     German, and clear that the switch is in the server config.
+508. **The recipe viewer's "+".** With JEI installed and package mode on, open the terminal and a crafting recipe in
+     JEI: the "+" is greyed and its tooltip says "Off in package mode" (German: "Im Paketmodus aus").
+509. **The Schematicannon Requester.** A linked requester in a package-mode world: its lamp is red and its goggles say
+     "Package mode: the Requester orders nothing new"; an order that was open before the switch still finishes.
+510. **Production goggles.** The goggles on a Warehouse Production station, a Crafter Feeder, a Recipe Selector and an
+     Ender Recipe Selector each carry the package-mode line, in English and German; a selector's hold is still released
+     by a sneak-click.
+511. **A rack bay refuses a hand.** Right-click an empty Rack Bay with loose items in hand: the hotbar line says only
+     sealed packages go in; with a box in hand it goes in. The bay's goggles say a box needs a Package Filter there, and
+     a bay that still holds loose goods from before says they only go out.
+512. **The hand-truck pallet.** Set a pallet of loose goods into an empty Rack Bay with the hand truck: refused, with the
+     hotbar line about pallets of loose goods.
+513. **Boxes over a maximum in an input.** Lower a package rule's maximum while a box of its address waits in an input:
+     the goggles count it ("Boxes over a maximum, to take out by hand") and an empty-hand click takes it out sealed.
+514. **A collecting port.** A collecting port in front of a machine that makes loose results and boxes: its goggles say
+     it fetches boxes only, and the loose results stay in the machine's chest.
+515. **An operator edits the file on a running server.** Change `[packageMode] enabled` in the world's server config
+     while the server runs and let a second player join: both players still see the mode the server runs in (the switch
+     takes effect at the next start), never the edited value.

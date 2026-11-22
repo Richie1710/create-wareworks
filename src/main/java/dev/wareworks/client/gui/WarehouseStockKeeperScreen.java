@@ -4,11 +4,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.jetbrains.annotations.Nullable;
+
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.simibubi.create.foundation.gui.AllGuiTextures;
 import com.simibubi.create.foundation.gui.menu.AbstractSimiContainerScreen;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
+import dev.wareworks.content.packagemode.PackageRuleKeys;
 import dev.wareworks.content.station.StockKeeperMenu;
 import dev.wareworks.content.station.StockKeeperMenuLayout;
 import dev.wareworks.content.station.StockKeeperRules;
@@ -55,6 +59,10 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * end of its name — "B" while it counts the fluid in the fluid bays, "x" while it counts the containers as items. A
  * fluid row shows its numbers in buckets ({@link BucketFormat}), steps them by a bucket (Shift: 16), and names the
  * exact millibuckets in its tooltip.
+ * <p>
+ * <b>Package rows</b> (issue #40, package mode): a row whose item is a Create Package Filter with an address counts the
+ * sealed packages of that address (Create's wildcards included); it is named "Packages → address", its numbers are boxes,
+ * and its minimum only signals. A Package Filter with a blank address is refused here with a line that says why.
  */
 public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<StockKeeperMenu> {
     /** How an unset number reads. */
@@ -94,9 +102,13 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
     private static final int COLOR_ORDERING = 0xFF5FD3E0;
     private static final int COLOR_PAUSED = 0xFFFF4040;
 
+    private static final int COLOR_UNIT_PACKAGES = 0xFFD9A86C;
+
     private StockKeeperScreenState state = StockKeeperScreenState.NONE;
     private StockKeeperMenuLayout layout;
     private int scroll;
+    /** A refusal the screen said itself (package mode's blank Package Filter); cleared by the next server state. */
+    private @Nullable Component notice;
 
     public WarehouseStockKeeperScreen(StockKeeperMenu menu, Inventory inventory, Component title) {
         super(menu, inventory, title);
@@ -115,6 +127,12 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
     /** The server sent the keeper's rules and what the warehouse holds of them. */
     public void onState(dev.wareworks.network.StockKeeperScreenPayload payload) {
         state = payload.state();
+        notice = null;
+    }
+
+    /** The line the screen shows of its own accord, if any (dev harness and tests of the client side). */
+    public Optional<Component> notice() {
+        return Optional.ofNullable(notice);
     }
 
     /** The rules as last pushed by the server (dev harness and tests of the client side). */
@@ -243,7 +261,14 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
             send(StockKeeperRulePayload.clearRow(menu.containerId, row));
             return;
         }
-        send(StockKeeperRulePayload.setItem(menu.containerId, row, ItemKey.of(stack)));
+        // Package mode (issue #40): a Package Filter without an address would count nothing a player means, so the server
+        // refuses it; the screen says why instead of silently doing nothing.
+        ItemKey key = ItemKey.of(stack);
+        if (PackageModeGate.enabledOnClient() && PackageRuleKeys.isBlankPackageFilter(key)) {
+            notice = WareworksLang.translateDirect(WareworksLang.KEEPER_PACKAGES_NEED_ADDRESS);
+            return;
+        }
+        send(StockKeeperRulePayload.setItem(menu.containerId, row, key));
     }
 
     private void send(StockKeeperRulePayload payload) {
@@ -313,13 +338,30 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
     private void renderName(GuiGraphics graphics, Optional<StockKeeperScreenState.RowView> view, int rowY) {
         int x = leftPos + layout.nameX();
         int y = rowY + (StockKeeperMenuLayout.SLOT - font.lineHeight) / 2;
+        boolean packages = view.map(StockKeeperScreenState.RowView::countsPackages).orElse(false);
         Component name = view.flatMap(StockKeeperScreenState.RowView::key)
-                .map(key -> (Component) key.toStack().getHoverName())
+                .map(key -> packages ? packageRowName(key) : (Component) key.toStack().getHoverName())
                 .orElseGet(() -> WareworksLang.translateDirect(WareworksLang.KEEPER_EMPTY_ROW));
         boolean empty = view.flatMap(StockKeeperScreenState.RowView::key).isEmpty();
         boolean switchable = view.map(StockKeeperScreenState.RowView::canSwitchUnit).orElse(false);
         int room = layout.nameWidth() - (switchable ? StockKeeperMenuLayout.UNIT_WIDTH + 2 : 0);
-        graphics.drawString(font, fitTo(name, room), x, y, empty ? COLOR_OFF : COLOR_TEXT, false);
+        graphics.drawString(font, fitTo(name, room), x, y,
+                empty ? COLOR_OFF : packages ? COLOR_UNIT_PACKAGES : COLOR_TEXT, false);
+    }
+
+    /** "Packages → address" for a package row (issue #40): the address is what the row counts, not the filter item. */
+    private static Component packageRowName(ItemKey filter) {
+        return WareworksLang.translateDirect(WareworksLang.KEEPER_PACKAGES_ROW,
+                PackageRuleKeys.filterAddress(filter).orElse("-"));
+    }
+
+    /** The lines that say what a package row is (issue #40): what it counts, and that it rests while the mode is off. */
+    private static void addPackageRowLines(List<Component> tooltip, ItemKey filter) {
+        tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_UNIT_PACKAGES,
+                PackageRuleKeys.filterAddress(filter).orElse("-")).copy().withStyle(ChatFormatting.GOLD));
+        if (!PackageModeGate.enabledOnClient())
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_PACKAGES_MODE_OFF).copy()
+                    .withStyle(ChatFormatting.RED));
     }
 
     /** The unit switch of a filled container's row (M31): "B" while it counts fluid, "x" while it counts items. */
@@ -417,7 +459,7 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
 
     /** Gold for a correction, red while a rule is paused, quiet otherwise. */
     private int statusLineColor() {
-        if (state.adjustment() != StockRuleAdjustment.NONE)
+        if (notice != null || state.adjustment() != StockRuleAdjustment.NONE)
             return COLOR_WARNING;
         for (StockKeeperScreenState.RowView row : state.rows()) {
             if (row.paused())
@@ -436,6 +478,8 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
     /** What the last edit had to correct, or the hint that says how a rule is written; always cut to the window. */
     private Component statusLine() {
         int room = StockKeeperMenuLayout.WIDTH - 2 * StockKeeperMenuLayout.MARGIN;
+        if (notice != null)
+            return fitTo(notice, room);
         if (state.adjustment() != StockRuleAdjustment.NONE)
             return fitTo(WareworksLang.translateDirect(WareworksLang.keeperAdjustmentKey(state.adjustment())), room);
         // Re-arming an automatic order is never silent: an edit that lifted a safety stop says so, whether the player
@@ -485,9 +529,13 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
                             .withStyle(ChatFormatting.GRAY));
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_FLUID_NUMBER_HINT).copy()
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
-            } else if (view.isPresent() && view.get().key().isPresent())
+            } else if (view.isPresent() && view.get().key().isPresent()) {
+                if (view.get().countsPackages() && field == StockKeeperMenuLayout.FIELD_MINIMUM)
+                    tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_PACKAGES_MINIMUM_SIGNAL).copy()
+                            .withStyle(ChatFormatting.GOLD));
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_NUMBER_HINT).copy()
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            }
             return tooltip;
         }
         if (view.isPresent() && view.get().canSwitchUnit() && isOverUnit(mouseX, mouseY, row)) {
@@ -519,6 +567,12 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
             if (fluid)
                 tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_UNIT_FLUID).copy()
                         .withStyle(ChatFormatting.AQUA));
+            if (shown.countsPackages()) {
+                addPackageRowLines(tooltip, shown.key().orElseThrow());
+                if (shown.minimum() != StockRule.UNSET)
+                    tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_PACKAGES_MINIMUM_SIGNAL).copy()
+                            .withStyle(ChatFormatting.GRAY));
+            }
             tooltip.add(WareworksLang.translateDirect(WareworksLang.KEEPER_LIMITS,
                     amount(shown.minimum(), fluid), amount(shown.maximum(), fluid),
                     amount(shown.reserve(), fluid)).copy().withStyle(ChatFormatting.GRAY));

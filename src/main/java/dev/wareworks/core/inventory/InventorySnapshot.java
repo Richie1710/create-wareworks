@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Immutable copy of an inventory's contents at one moment, generic over the item key type.
@@ -163,6 +164,30 @@ public final class InventorySnapshot<K> {
             }
         }
         return total == 0 && unknownKeys.contains(key) ? CapacityMath.UNKNOWN_CAPACITY : total;
+    }
+
+    /**
+     * This snapshot without the occupied slots whose key {@code keep} rejects; empty slots stay. The same instance when
+     * nothing is rejected, so a caller that filters every read allocates nothing in the usual case. Used for a
+     * collecting port in package mode (issue #40), whose crane may only ever see the packages behind it.
+     */
+    public InventorySnapshot<K> retaining(Predicate<? super K> keep) {
+        Objects.requireNonNull(keep, "keep");
+        boolean all = true;
+        for (SlotView<K> slot : slots) {
+            if (!slot.isEmpty() && !keep.test(slot.key())) {
+                all = false;
+                break;
+            }
+        }
+        if (all)
+            return this;
+        List<SlotView<K>> kept = new ArrayList<>(slots.size());
+        for (SlotView<K> slot : slots) {
+            if (slot.isEmpty() || keep.test(slot.key()))
+                kept.add(slot);
+        }
+        return new InventorySnapshot<>(kept);
     }
 
     /** Stored amount of {@code key}, see {@link CapacityMath#extractable(Iterable, Object)}. */

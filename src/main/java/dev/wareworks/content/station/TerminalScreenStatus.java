@@ -59,6 +59,16 @@ public record TerminalScreenStatus(boolean hasAisle, ControllerStatus controller
         deliveredHere = Math.max(0L, deliveredHere);
     }
 
+    /**
+     * This status with {@code types} as the number of item types, for a screen whose rows are not one per key: in
+     * package mode (issue #40) the screen gets one row per address, so its "+N not shown" must be measured against the
+     * folded rows and not against the boxes, each of which is a key of its own.
+     */
+    public TerminalScreenStatus withItemTypes(int types) {
+        return new TerminalScreenStatus(hasAisle, controllerStatus, aisleLetter, types, totalItems, openRequests,
+                requestsHere, requestedHere, deliveredHere, craneLinked, cranePhase, cranePause, cranes);
+    }
+
     /** The screen form of a terminal's {@link TerminalStatus}. */
     public static TerminalScreenStatus of(TerminalStatus status) {
         Objects.requireNonNull(status, "status");

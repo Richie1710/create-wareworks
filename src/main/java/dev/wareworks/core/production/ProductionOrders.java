@@ -1170,6 +1170,15 @@ public final class ProductionOrders<K, L> {
         return List.copyOf(orders.values());
     }
 
+    /**
+     * Every order, open and recently finished, as a read-only live view in creation order: no copy, for a caller that
+     * only reads in passing (package mode's backstop, asked by the planner for every key of every input). Must not be
+     * held across a change.
+     */
+    public java.util.Collection<ProductionOrder<K, L>> view() {
+        return java.util.Collections.unmodifiableCollection(orders.values());
+    }
+
     /** The open orders in creation order (unmodifiable copy). */
     public List<ProductionOrder<K, L>> open() {
         List<ProductionOrder<K, L>> result = new ArrayList<>();

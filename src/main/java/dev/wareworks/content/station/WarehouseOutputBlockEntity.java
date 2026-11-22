@@ -19,6 +19,7 @@ import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemHandlerSnapshots;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.storage.AttachedInventoryCache;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.job.NoJobReason;
@@ -751,6 +752,10 @@ public class WarehouseOutputBlockEntity extends WarehouseDeliveryStationBlockEnt
         WareworksLang.translate(WareworksLang.GOGGLES_PORT_COLLECTS, filter.isEmpty()
                         ? WareworksLang.translateDirect(WareworksLang.GOGGLES_PORT_ACCEPTS_ANY) : filter.getHoverName())
                 .forGoggles(tooltip, 2);
+        // Package mode (issue #40, review fix): only boxes are fetched; loose results stay in the machine's inventory.
+        if (PackageModeGate.enabledOnClient())
+            WareworksLang.translate(WareworksLang.GOGGLES_PORT_COLLECTS_PACKAGES).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 2);
         PortCollectSummary collect = shown.collect();
         if (collect.hasInventory()) {
             collect.attachedBlockName()

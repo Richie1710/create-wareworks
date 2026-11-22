@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.core.port.DoorFacts;
 import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.port.PackagerSignAddress;
@@ -86,8 +87,12 @@ public final class PackageDoors {
                 || port.portDirection() != PortDirection.REQUEST)
             return new Sighting(new DoorFacts(true, false, false, false, false, false, false), PackagerSignAddress.NONE);
         Optional<BlockPos> packager = PackageHandover.packagerFor(level, pos);
+        // Package mode (issue #40): a plain port is a door too, and a Packager without a sign is refused. Off, the facts
+        // are exactly the ones before package mode, and a plain port reads nothing more.
+        boolean packageMode = PackageModeGate.enabled();
         if (packager.isEmpty())
-            return new Sighting(new DoorFacts(true, true, false, false, false, false, false), PackagerSignAddress.NONE);
+            return new Sighting(new DoorFacts(true, true, false, false, false, packageMode && !port.hasEmptySlot(),
+                    false, packageMode), PackagerSignAddress.NONE);
         boolean linked = PackageHandover.ignoresRedstone(level, packager.get());
         // Read whatever the link says: a linked door still has a name on its row, and a red row with a name tells the
         // player which Packager to look at.
@@ -97,7 +102,7 @@ public final class PackageDoors {
         // earlier one.
         boolean boxWaiting = port.boxWaitsAt(packager.get(), level.getGameTime());
         return new Sighting(new DoorFacts(true, true, true, linked, !address.isEmpty(), !port.hasEmptySlot(),
-                boxWaiting), address);
+                boxWaiting, packageMode), address);
     }
 
     /** {@link #look} without the address: what was read about {@code pos}. */
@@ -121,6 +126,8 @@ public final class PackageDoors {
             return Optional.of(RequestRejection.NOT_A_DOOR);
         if (state.get() == DoorState.IGNORES_REDSTONE)
             return Optional.of(RequestRejection.DOOR_IGNORES_REDSTONE);
+        if (state.get() == DoorState.STRIPS_ADDRESS)
+            return Optional.of(RequestRejection.DOOR_STRIPS_ADDRESS);
         // A live look never answers "not loaded" (an unloaded position is no request destination), so this is only the
         // guard that keeps every unselectable state a refusal.
         if (!state.get().selectable())

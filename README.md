@@ -614,7 +614,9 @@ not at all**, so a box of four different items needs **room** for all four stack
 already holding that very item with space left. Until it has that, the box waits in the funnel and the input says
 *"Last package refused: stacks in it 4, free slots 1"* — which means wait for the crane, not rebuild the door. A box
 addressed somewhere else is opened anyway: the sign on a door is for the boxes that **leave** it. And a box that
-reaches an input with no Packager behind it is simply stored as an item, one stock row per address.
+reaches an input with no Packager behind it is simply stored as an item. It is a stock row of its own: a box is its
+item plus its address, its contents and its look, so two boxes almost never share a row (package mode below lists them
+by address instead).
 
 **Ordering to a door.** A requesting Warehouse Output with a Packager at its back is a **door** the terminal can
 deliver to, named by the sign on its Packager. In the terminal's screen, the button left of your inventory chooses
@@ -902,6 +904,72 @@ idle aisle with nothing pending unloads and will not see a furnace that finishes
 `chunkLoading.maxCollectHoldAislesPerLevel` keeps a collection that is **already running** alive across the gap between
 one machine output and the next; it cannot start one. It is a cap of its own, and an aisle waiting behind it says so on
 its goggles.
+
+## Package mode (for server operators)
+
+A server can make every warehouse of a world a **warehouse for sealed Create packages**: it takes in only packages,
+stores each box as it is, and hands boxes out by their address. This is for a post-office or cold-storage build, where
+Packagers pack goods at the factory, the warehouse keeps the boxes, and the terminal sends them on unopened.
+
+> **It is switched off in the shipped configuration**, and with the switch off nothing about any warehouse changes: no
+> behaviour, no saved data.
+
+**Switching it on.** Set `enabled = true` in the `[packageMode]` section of `wareworks-server.toml` and load the world
+again: the setting is read when a world loads, not while it runs.
+
+* **Server:** edit `<world>/serverconfig/wareworks-server.toml` (or `defaultconfigs/wareworks-server.toml` for new
+  worlds), then restart the server.
+* **Single player:** the file lives inside the save: `saves/<world>/serverconfig/wareworks-server.toml`. Open the world
+  once so the file exists, quit to the title screen, edit the file, and open the world again.
+
+There is one switch for the whole world; it puts every warehouse of that world in package mode, and switching it off
+again (and reloading) gives you ordinary warehouses back with every box still stored.
+
+**What changes while it is on:**
+
+* **Inputs take sealed packages only.** A loose item from a funnel, chute, hopper, belt or Mechanical Arm is refused
+  and waits where it is — on your belt, in your funnel. Route it elsewhere with a Package Filter on the funnel or
+  tunnel. The input's goggles name the last item it refused. A Packager behind an input is refused the box instead of
+  opening it, and a rack bay takes no loose items from automation, by hand or off a hand truck pallet.
+* **Boxes are stored as themselves.** Address and contents are never touched; the warehouse never packs or unpacks. A
+  crane carries one box per trip (every box is its own item), and it puts no box into an **empty** rack bay unless the
+  bay has a Package Filter, so a rack wall does not fill up with one box per bay. Chests and barrels behind interfaces
+  are the usual storage. The bay's goggles say when it needs a Package Filter, and the controller's planning line says
+  "boxes need a rack bay with a Package Filter or a chest" when that is all that stops a box. The one exception is a
+  box that already left the warehouse and has nowhere else to go, for example an address order given up while the crane
+  carries the box: it goes back into the bay it came from rather than staying in the crane.
+* **The terminal lists one row per address** ("Packages → Base North") with what the boxes hold in the tooltip; the
+  search finds an address by its contents. A click on a row fetches that many boxes, sealed, to the terminal or to a
+  package door (Shift asks for a buffer's worth). The loose stock from before the switch follows in its own greyed
+  section and can still be clicked out, so a warehouse can be emptied.
+* **Nothing is made.** The crafting panel, Fetch, a recipe viewer's "+", clipboard lists and fluid fills are greyed out
+  with the reason ("Off in package mode"); no production order starts from the terminal, a computer, a Schematicannon
+  Requester or a Stock Keeper's minimum (its row says "Package mode: nothing is made"). Orders that were already
+  running when the world loaded still finish: their loose results are let back in through an input, but only as many as
+  the ingredients the crane really delivered to the machine make (none while an order still waits for its
+  ingredients), plus one empty container per filled one it was given. What one order lets in is counted down as the
+  crane stores it, also after the order ended. A byproduct, anything beyond that, and the late results of an order the
+  server forgot in a restart are refused and wait on your belt for a hand. Recipe Selector holds stay releasable by
+  sneak-click as always.
+* **Loose items already in an input stay there.** Loose items that were in an input's buffer when the world loaded
+  with the switch on (or that got into one another way, such as a crane's leftovers) are never stored: the input's
+  goggles count them ("Loose items to take out by hand"), and a click on the input with an empty hand takes them out.
+  The same click takes out a box that a stock rule's maximum keeps out of the warehouse.
+* **Doors keep the address only with a sign.** A Packager door re-addresses every box with its sign, so a Packager door
+  **without** a sign is refused (it would wipe the address). A requesting port with no Packager is a door too: the box
+  leaves it unchanged.
+* **Stock rules count boxes.** A Stock Keeper row whose item is a Package Filter with an address counts the boxes of
+  that address (Create's wildcards work: "Base*" counts "Base North" and "Base South"). Its maximum keeps further boxes
+  out of the input, so they wait with their sender; its reserve holds boxes back from redstone requests and computers;
+  its minimum only lights the lamp and drives the comparator — the warehouse never packs, so wire that signal to your
+  own Packager.
+
+**What it does not do.** Fluids still enter fluid bays by pipe. A computer still sees every box on its own. Loose
+items can still get in where no Wareworks block is asked: a chest filled by hand behind an interface, or a chest set
+down by a hand truck behind one. An empty box fed to a Packager behind an input is destroyed by Create before the
+warehouse sees it. A crane that was already carrying loose items out of an input when the world was saved (with the
+switch off) finishes that one trip after the reload and stores them, at most one load per crane; likewise a box it was
+already carrying may still land in an empty bay. The `[packageMode]` section and the network version are part of every install, used or not.
 
 ## Compatibility
 

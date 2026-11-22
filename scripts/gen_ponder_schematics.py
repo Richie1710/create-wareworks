@@ -87,6 +87,10 @@ OUT_DIR = REPO_ROOT / "src/main/resources/assets/wareworks/ponder"
 # The Ender Recipe Selector scene (ADR-085) is aisle-free on the square 9 plate: the station, its Packager and its
 #   return input at the back right (x = 5..6, z = 6..7), the factory's Packager, chest, saw and Ender selector at the
 #   front left (x = 1..3, z = 2..3) (dev.wareworks.client.ponder.scenes.RecipeSelectorScenes#ender).
+# The package mode scene (issue #40, ADR-086) uses the shared square 9 plate: the input with a funnel on it, the stock
+#   keeper, the terminal and the signed door (port, Packager behind it, sign beside it) on the rack plane LEFT at
+#   positions 1, 2, 3 and 5, and the rack the box goes into on the plane RIGHT at position 3
+#   (dev.wareworks.client.ponder.scenes.PackageScenes#packageMode).
 TEMPLATES = {
     "stacker_crane/overview": (9, 7, 9),
     "warehouse/corner": (9, 7, 9),
@@ -117,6 +121,7 @@ TEMPLATES = {
     "requester/ordering": (9, 7, 9),
     "warehouse/recipe_selector": (9, 7, 9),
     "warehouse/ender_recipe_selector": (9, 7, 9),
+    "warehouse/package_mode": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

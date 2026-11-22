@@ -14,6 +14,7 @@ import org.jetbrains.annotations.Nullable;
 
 import com.simibubi.create.content.logistics.filter.AttributeFilterWhitelistMode;
 import com.simibubi.create.content.logistics.filter.FilterItemStack;
+import com.simibubi.create.content.logistics.filter.PackageFilterItem;
 import com.simibubi.create.content.logistics.filter.FilterItemStack.AttributeFilterItemStack;
 import com.simibubi.create.content.logistics.filter.FilterItemStack.ListFilterItemStack;
 
@@ -395,6 +396,21 @@ final class AisleFilters {
         Objects.requireNonNull(resolver, "resolver");
         Entry entry = entryFor(rack, resolver);
         return entry != null && entry.acceptsFluid() != null;
+    }
+
+    /**
+     * Package mode (issue #40, owner decision E3): whether the storage location at {@code rack} is an <b>item rack
+     * bay</b> (a location that holds one item type only and takes no fluid) whose filter slot holds no Create
+     * <b>Package Filter</b>. A bay holds one item key, and every box is its own key, so such a bay would hold one box;
+     * the controller keeps packages out of it while it is empty. From the same cache and the same one-shot resolve as
+     * the store filter, so it is one hash map read per candidate.
+     */
+    boolean isBayWithoutPackageFilter(RackPosition rack, Function<RackPosition, Optional<StoreSettings>> resolver) {
+        Objects.requireNonNull(rack, "rack");
+        Objects.requireNonNull(resolver, "resolver");
+        Entry entry = entryFor(rack, resolver);
+        return entry != null && entry.holdsOneTypeOnly() && entry.acceptsFluid() == null
+                && !(entry.source().getItem() instanceof PackageFilterItem);
     }
 
     /**

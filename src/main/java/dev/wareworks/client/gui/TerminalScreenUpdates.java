@@ -11,6 +11,7 @@ import dev.wareworks.network.TerminalFluidQuestionPayload;
 import dev.wareworks.network.TerminalListAnswerPayload;
 import dev.wareworks.network.TerminalListPayload;
 import dev.wareworks.network.TerminalOrdersPayload;
+import dev.wareworks.network.TerminalPackageOrderPayload;
 import dev.wareworks.network.TerminalResultPayload;
 import dev.wareworks.network.TerminalStatusPayload;
 import dev.wareworks.network.TerminalStockPayload;
@@ -130,6 +131,11 @@ public final class TerminalScreenUpdates {
      */
     public static void onCraftOrder(TerminalCraftOrderStatePayload payload) {
         screen(payload.containerId()).ifPresent(screen -> screen.onCraftOrder(payload));
+    }
+
+    /** How far the open screen's terminal's address order has got (issue #40, package mode). */
+    public static void onPackageOrder(TerminalPackageOrderPayload payload) {
+        screen(payload.containerId()).ifPresent(screen -> screen.onPackageOrder(payload));
     }
 
     /**

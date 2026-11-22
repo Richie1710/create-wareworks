@@ -30,6 +30,9 @@ import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.item.ClipboardList;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageGroupKey;
+import dev.wareworks.content.packagemode.PackageKeyInfos;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.remote.RemoteAccess;
 import dev.wareworks.content.remote.RemoteBinding;
 import dev.wareworks.core.address.RackPosition;
@@ -57,6 +60,8 @@ import dev.wareworks.core.terminal.ListOrderConfirmation;
 import dev.wareworks.core.terminal.ListOrderState;
 import dev.wareworks.core.terminal.ListPass;
 import dev.wareworks.core.terminal.ListPortion;
+import dev.wareworks.core.terminal.PackageGroupFold;
+import dev.wareworks.core.terminal.PackagePick;
 import dev.wareworks.core.terminal.RequestAcknowledgement;
 import dev.wareworks.core.terminal.RequestConfirmation;
 import dev.wareworks.core.terminal.RequestScope;
@@ -176,6 +181,21 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      */
     @Nullable
     private UUID terminalId;
+    /**
+     * The address order (issue #40, owner decision E11): the sealed boxes a click on an address row of a package-mode
+     * screen picked, fetched here or to one package door. A third list order beside {@link #listOrder} and
+     * {@link #craftOrder}; {@code null} while there is none, and dropped as soon as it is done. Saved with this block
+     * entity while it exists, so a terminal without one saves what it saved before package mode.
+     */
+    @Nullable
+    private TerminalPackageOrder packageOrder;
+    /** What each package key of the index says about itself (issue #40): read once per key, transient. */
+    private final PackageKeyInfos packageInfos = new PackageKeyInfos();
+    /**
+     * Package mode only: how many rows the last {@link #screenStockSnapshot()} had before the window was cut (one per
+     * address plus the loose keys), which is what a screen's "+N not shown" is measured against. Not saved.
+     */
+    private int screenRowTypes;
 
     public WarehouseTerminalBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state, WareworksConfig.terminalBufferSlots());
@@ -293,9 +313,72 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * (every {@link WarehouseTerminalMenu#REFRESH_INTERVAL_TICKS} ticks per open screen), never per tick.
      */
     public List<TerminalStockEntry> stockSnapshot() {
-        Optional<WarehouseControllerBlockEntity> found = controller();
+        return rows().map(rows -> window(rows.stocked(), rows.pinned())).orElse(List.of());
+    }
+
+    /**
+     * Server: the list a <b>screen</b> is told (issue #40, owner decision E5). With package mode off it is
+     * {@link #stockSnapshot()} itself, the very same list.
+     * <p>
+     * In package mode every stored box is folded into one row per <b>address</b> before the cut at
+     * {@code maxTerminalStockEntries}: a {@link PackageGroupKey} row whose amounts count boxes and whose summary says
+     * what is inside ({@link PackageGroupFold}). Every box with its own contents is its own item key, so without the fold
+     * the window would hold the first 512 boxes and nothing else. The address rows come first and the loose stock from
+     * before the switch after them, so the cut takes loose rows first; rows a rule pins at zero stock keep their
+     * reserved room, and a package key is never pinned (package rules are a later slice).
+     * <p>
+     * The computers attached to this terminal keep reading {@link #stockSnapshot()}, one row per key (the critic's
+     * M7): a computer asks for exact boxes, and a script that read the per-key list before the switch still works.
+     */
+    public List<TerminalStockEntry> screenStockSnapshot() {
+        if (!PackageModeGate.enabled())
+            return stockSnapshot();
+        Optional<Rows> found = rows();
         if (found.isEmpty())
             return List.of();
+        Rows rows = found.get();
+        packageInfos.expect(rows.stocked().size());
+        PackageGroupFold<ItemKey> fold = new PackageGroupFold<>(ItemKey.ORDER);
+        List<TerminalStockEntry> loose = new ArrayList<>(rows.stocked().size());
+        for (TerminalStockEntry entry : rows.stocked()) {
+            Optional<PackageKeyInfos.Info> info = packageInfos.of(entry.key());
+            if (info.isPresent())
+                fold.add(info.get().address(), entry.key(), entry.total(), entry.available(), info.get().perBox(),
+                        info.get().networkOrder());
+            else
+                loose.add(entry);
+        }
+        List<TerminalStockEntry> groups = new ArrayList<>();
+        for (PackageGroupFold.Row<ItemKey> row : fold.rows())
+            groups.add(TerminalStockEntry.group(PackageGroupKey.of(row.address()), row.boxes(), row.available(),
+                    row.summary()));
+        List<TerminalStockEntry> pinned = new ArrayList<>(rows.pinned().size());
+        for (TerminalStockEntry entry : rows.pinned()) {
+            if (!PackageModeGate.isPackage(entry.key()))
+                pinned.add(entry);
+        }
+        screenRowTypes = groups.size() + loose.size();
+        return groupedWindow(groups, loose, pinned);
+    }
+
+    /**
+     * Package mode: the stocked rows of the last {@link #screenStockSnapshot()} before the cut (issue #40), the number
+     * a screen's "+N not shown" compares with what it got. Outside package mode the status's own count of item types
+     * is used, as before.
+     */
+    public int screenRowTypes() {
+        return screenRowTypes;
+    }
+
+    /** The stocked rows and the rows kept at zero stock, before the window is cut. */
+    private record Rows(List<TerminalStockEntry> stocked, List<TerminalStockEntry> pinned) {
+    }
+
+    /** {@link #stockSnapshot()}'s rows before the cut; empty without an aisle. */
+    private Optional<Rows> rows() {
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return Optional.empty();
         WarehouseControllerBlockEntity controller = found.get();
         StockView<ItemKey, RackPosition> stock = controller.stockIndex();
         ReservationView<ItemKey, RackPosition> reservations = controller.reservations();
@@ -361,7 +444,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             if (stock.count(key) <= 0 && !producible.containsKey(key) && !isCarried(moving, key))
                 pinned.add(entry(controller, rules, levels, key, 0L, 0L, false, 0L));
         }
-        return window(entries, pinned);
+        return Optional.of(new Rows(entries, pinned));
     }
 
     /** Whether a relocation carries {@code key} in a crane's head: it then has a stocked row of its own. */
@@ -434,6 +517,28 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     }
 
     /**
+     * {@link #window} for a package-mode screen (issue #40): the address rows first, then the loose stock from before
+     * the switch, cut to {@code maxTerminalStockEntries} in that order, so loose rows are what the cap drops; the rows
+     * pinned at zero stock keep the room {@link #window} reserves for them.
+     */
+    private static List<TerminalStockEntry> groupedWindow(List<TerminalStockEntry> groups,
+            List<TerminalStockEntry> loose, List<TerminalStockEntry> pinned) {
+        int max = Math.max(1, WareworksConfig.maxTerminalStockEntries());
+        groups.sort(TerminalStockEntry.ORDER);
+        loose.sort(TerminalStockEntry.ORDER);
+        pinned.sort(TerminalStockEntry.ORDER);
+        int pinnedRoom = Math.min(pinned.size(), Math.max(1, max / 2));
+        int stockedRoom = Math.max(0, max - pinnedRoom);
+        int groupRoom = Math.min(groups.size(), stockedRoom);
+        int looseRoom = Math.min(loose.size(), stockedRoom - groupRoom);
+        List<TerminalStockEntry> reported = new ArrayList<>(groupRoom + looseRoom + pinnedRoom);
+        reported.addAll(groups.subList(0, groupRoom));
+        reported.addAll(loose.subList(0, looseRoom));
+        reported.addAll(pinned.subList(0, pinnedRoom));
+        return List.copyOf(reported);
+    }
+
+    /**
      * Server: whether {@code key} is still worth a row on a screen — the aisle holds it, a production station can make
      * it (M11, ADR-024), or a stock rule governs it (M15) — whether or not it is inside the last
      * {@link #stockSnapshot()}. The menu asks this before it tells a screen that an item type is gone.
@@ -461,10 +566,27 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
     public boolean holdsInStock(ItemKey key, Set<ItemKey> producible) {
         if (key == null)
             return false;
+        // The row of an address (issue #40, the critic's M7): held while any box of that address is.
+        Optional<String> address = PackageGroupKey.addressOf(key);
+        if (address.isPresent())
+            return controller().map(controller -> holdsAddress(controller, address.get())).orElse(false);
         if (producible.contains(key))
             return true;
         return controller().map(controller -> controller.heldCount(key) > 0 || controller.stockRules().governsKey(key))
                 .orElse(false);
+    }
+
+    /**
+     * Whether the index holds a box of {@code address} (issue #40): one pass over the index's keys, asked only for an
+     * address row that dropped out of a screen's list, which happens when its last box left or the window cut it.
+     */
+    private boolean holdsAddress(WarehouseControllerBlockEntity controller, String address) {
+        for (Map.Entry<ItemKey, Long> stored : controller.stockIndex().totals().entrySet()) {
+            if (stored.getValue() > 0L && packageInfos.of(stored.getKey())
+                    .filter(info -> info.address().equals(address)).isPresent())
+                return true;
+        }
+        return false;
     }
 
     /**
@@ -755,7 +877,98 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         Objects.requireNonNull(acknowledged, "acknowledged");
         Optional<BlockPos> target = door == null ? Optional.empty()
                 : door.filter(pos -> !pos.equals(worldPosition)).map(BlockPos::immutable);
+        // A click on an address row (issue #40, owner decision E11) picks concrete boxes and starts an address order.
+        // Only in package mode: with the switch off no screen is ever told a group key, and one sent anyway is no item
+        // the index holds.
+        if (PackageModeGate.enabled()) {
+            Optional<String> address = PackageGroupKey.addressOf(key);
+            if (address.isPresent())
+                return requestPackages(player, key, address.get(), amount, target).withDoor(target);
+        }
         return requestTo(player, key, amount, acknowledged, target).withDoor(target);
+    }
+
+    /**
+     * Server: a click on the row of {@code address} in a package-mode screen (issue #40, owner decision E11, design
+     * §6.3): picks up to {@code amount} boxes of the address that a player may still be promised, lowest storage priority
+     * first ({@link PackagePick}), and fetches them sealed by an <b>address order</b> ({@link TerminalPackageOrder}),
+     * here or to {@code door}.
+     * <p>
+     * The checks are a click's, in a click's order ({@link #checkPlace}): reach, amount, aisle, the door (a Packager
+     * without a sign is refused with {@link RequestRejection#DOOR_STRIPS_ADDRESS}). Then:
+     * <ul>
+     * <li>while an address order is open for <b>another</b> destination the click is refused with
+     * {@link RequestRejection#PACKAGE_ORDER_ELSEWHERE}: one order has one destination, and the player cancels it on its
+     * line or waits;</li>
+     * <li>while one is open for the <b>same</b> destination the new boxes are added to it, so clicking three addresses
+     * after each other fetches all three;</li>
+     * <li>no box of the address is left to promise: {@link RequestRejection#NOT_IN_STOCK}.</li>
+     * </ul>
+     * The answer is an accepted request in the click's shape — the address row's key, the boxes this click added, and
+     * the boxes the order still waits for — so the screen's own result line says "Requested Packages → Base North x3".
+     * The click counts once towards the player's "most used" order, under the address row's key.
+     */
+    private TerminalRequestOutcome requestPackages(Player player, ItemKey groupKey, String address, int amount,
+            Optional<BlockPos> door) {
+        RequestCheck checked = checkPlace(player, amount, door);
+        if (checked.refusal().isPresent())
+            return TerminalRequestOutcome.of(checked.refusal().get());
+        WarehouseControllerBlockEntity controller = checked.controller();
+        TerminalPackageOrder open = hasOpenPackageOrder() ? packageOrder : null;
+        if (open != null && !open.door().equals(door))
+            return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.PACKAGE_ORDER_ELSEWHERE));
+        int asked = Math.max(1, Math.min(amount, Math.max(1, WareworksConfig.maxTerminalRequestAmount())));
+        List<KeyCount<ItemKey>> picked = pickBoxes(controller, address, asked, open);
+        if (picked.isEmpty())
+            return TerminalRequestOutcome.of(remembered(player, door,
+                    RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
+        long now = level.getGameTime();
+        int granted;
+        if (open == null) {
+            packageOrder = TerminalPackageOrder.start(address, picked, door, now);
+            long boxes = 0L;
+            for (KeyCount<ItemKey> box : picked)
+                boxes += box.count();
+            granted = (int) Math.min(Integer.MAX_VALUE, boxes);
+        } else {
+            granted = open.add(address, picked, now);
+            if (granted < 1)
+                return TerminalRequestOutcome.of(RequestResult.rejected(RequestRejection.REQUEST_FULL));
+        }
+        setChanged();
+        controller.onListOrderStarted(worldPosition);
+        markSummaryDirty();
+        TerminalPreferences.countRequest(player, groupKey);
+        ListOrder<ItemKey> order = packageOrder.order();
+        int wanted = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, order.wanted()));
+        int waiting = (int) Math.max(granted, Math.min(wanted, order.outstanding()));
+        RetrievalRequest<ItemKey, BlockPos> shown = new RetrievalRequest<>(packageOrder.id(), groupKey,
+                Math.max(wanted, waiting), waiting, door.orElse(worldPosition));
+        RequestResult result = RequestResult.accepted(shown, granted, open != null);
+        if (door.isEmpty())
+            rememberRejection(result);
+        return TerminalRequestOutcome.of(result);
+    }
+
+    /**
+     * The boxes of {@code address} a new click may take (issue #40): every stocked package key of the address with what
+     * a player may still be promised of it, less what the open address order already waits for without a request,
+     * picked in retrieval order ({@link PackagePick}). One pass over the index's keys, on a click only.
+     */
+    private List<KeyCount<ItemKey>> pickBoxes(WarehouseControllerBlockEntity controller, String address, int wanted,
+            @Nullable TerminalPackageOrder open) {
+        List<PackagePick.Candidate<ItemKey>> candidates = new ArrayList<>();
+        for (Map.Entry<ItemKey, Long> stored : controller.stockIndex().totals().entrySet()) {
+            ItemKey key = stored.getKey();
+            if (stored.getValue() <= 0L || packageInfos.of(key).filter(info -> info.address().equals(address))
+                    .isEmpty())
+                continue;
+            long available = controller.availableTo(StockAccess.PLAYER, key)
+                    - (open == null ? 0L : open.unrequested(key));
+            if (available > 0L)
+                candidates.add(new PackagePick.Candidate<>(key, available, controller.retrievalPriority(key)));
+        }
+        return PackagePick.pick(candidates, wanted, ItemKey.ORDER);
     }
 
     /**
@@ -941,6 +1154,28 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * @param player the clicking player, or {@code null} for a computer
      */
     private RequestCheck checkRequest(@Nullable Player player, ItemKey key, int amount, Optional<BlockPos> door) {
+        RequestCheck place = checkPlace(player, amount, door);
+        if (place.refusal().isPresent())
+            return place;
+        WarehouseControllerBlockEntity controller = place.controller();
+        // Resolve against the server's own state: a key the aisle neither holds nor can produce is refused before it
+        // reaches the queue, whatever the client claimed. ItemKey compares item and components, so a matching key is
+        // the indexed one. A producible key is allowed through here and the controller decides how much of it can
+        // really be promised (M11, ADR-024). Items a Warehouse Optimizer's crane carries are held all the same (issue #46).
+        if (controller.heldCount(key) <= 0 && !controller.producibleKeys().contains(key))
+            // Package mode (issue #40): an item a pattern would make is refused for what really stops it.
+            return RequestCheck.refused(remembered(player, door, RequestResult.rejected(
+                    controller.packageModeWouldMake(key) ? RequestRejection.PACKAGE_MODE
+                            : RequestRejection.NOT_IN_STOCK)));
+        return place;
+    }
+
+    /**
+     * The checks of {@link #checkRequest} that are about the click and not about the item: server side and not removed,
+     * reach, amount, a loaded controller and the door. An address order (issue #40) passes these and picks its boxes
+     * itself.
+     */
+    private RequestCheck checkPlace(@Nullable Player player, int amount, Optional<BlockPos> door) {
         if (level == null || level.isClientSide || isRemoved())
             return RequestCheck.refused(RequestResult.rejected(RequestRejection.NO_CONTROLLER));
         // Player-scoped refusals are answered, not remembered: they say nothing about this terminal (see above).
@@ -960,13 +1195,6 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             if (notADoor.isPresent())
                 return RequestCheck.refused(RequestResult.rejected(notADoor.get()));
         }
-        // Resolve against the server's own state: a key the aisle neither holds nor can produce is refused before it
-        // reaches the queue, whatever the client claimed. ItemKey compares item and components, so a matching key is
-        // the indexed one. A producible key is allowed through here and the controller decides how much of it can
-        // really be promised (M11, ADR-024). Items a Warehouse Optimizer's crane carries are held all the same (issue #46).
-        if (controller.heldCount(key) <= 0 && !controller.producibleKeys().contains(key))
-            return RequestCheck.refused(remembered(player, door,
-                    RequestResult.rejected(RequestRejection.NOT_IN_STOCK)));
         return new RequestCheck(controller, Optional.empty());
     }
 
@@ -1063,6 +1291,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.OUT_OF_REACH));
         if (amountMb < 1L)
             return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.INVALID_AMOUNT));
+        // Package mode (issue #40, owner decision E6): a filled bucket would leave unsealed. Answered, never remembered:
+        // it is about the server setting, not about this terminal.
+        if (PackageModeGate.enabled())
+            return TerminalFluidOutcome.of(RequestResult.rejected(RequestRejection.PACKAGE_MODE));
         Optional<WarehouseControllerBlockEntity> found = controller();
         if (found.isEmpty())
             return TerminalFluidOutcome.of(rememberHere(door, RequestResult.rejected(RequestRejection.NO_CONTROLLER)));
@@ -1244,6 +1476,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return TerminalCraftOutcome.of(TerminalCraftResult.OUT_OF_REACH);
         if (hasOpenCraftOrder())
             return TerminalCraftOutcome.of(TerminalCraftResult.ALREADY_RUNNING);
+        // Package mode (issue #40, owner decision E6): a Fetch brings loose ingredients, so none starts. An order that
+        // was open when the world loaded is past this point already and drains.
+        if (PackageModeGate.enabled())
+            return TerminalCraftOutcome.of(TerminalCraftResult.PACKAGE_MODE);
         Optional<WarehouseControllerBlockEntity> found = controller();
         if (found.isEmpty())
             return TerminalCraftOutcome.of(TerminalCraftResult.NO_AISLE);
@@ -1487,7 +1723,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      * run them without knowing there are two.
      */
     public boolean hasOpenListOrder() {
-        return hasOpenClipboardOrder() || hasOpenCraftOrder();
+        return hasOpenClipboardOrder() || hasOpenCraftOrder() || hasOpenPackageOrder();
     }
 
     /** Whether the clipboard order still has work to do. */
@@ -1548,6 +1784,9 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // Only another clipboard order blocks this one: a craft fetch runs beside it (issue #24, ADR-062).
         if (hasOpenClipboardOrder())
             return TerminalListOutcome.of(TerminalListResult.ALREADY_RUNNING);
+        // Package mode (issue #40, owner decision E6): a clipboard list fetches loose items, so none starts.
+        if (PackageModeGate.enabled())
+            return TerminalListOutcome.of(TerminalListResult.PACKAGE_MODE);
         ItemStack clipboard = listClipboard();
         if (!ClipboardList.isClipboard(clipboard))
             return TerminalListOutcome.of(TerminalListResult.NO_CLIPBOARD);
@@ -1716,9 +1955,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return;
         ListOrder<ItemKey> craft = hasOpenCraftOrder() ? craftOrder.order() : null;
         ListOrder<ItemKey> clipboard = hasOpenClipboardOrder() ? listOrder : null;
-        if (craft == null && clipboard == null)
+        ListOrder<ItemKey> packages = hasOpenPackageOrder() ? packageOrder.order() : null;
+        if (craft == null && clipboard == null && packages == null)
             return;
-        if (ListOrder.shortfallInTurn(id, owed, Arrays.asList(craft, clipboard)) > 0) {
+        if (ListOrder.shortfallInTurn(id, owed, Arrays.asList(craft, clipboard, packages)) > 0) {
             setChanged();
             markSummaryDirty();
         }
@@ -1747,7 +1987,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return false;
         boolean clipboard = tickClipboardOrder(now);
         boolean craft = tickCraftOrder(now);
-        return clipboard || craft;
+        boolean packages = tickPackageOrder(now);
+        return clipboard || craft || packages;
     }
 
     /**
@@ -1806,6 +2047,16 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
      */
     private PassOutcome runPass(ListOrder<ItemKey> order, RequestScope scope, WarehouseControllerBlockEntity controller,
             long now) {
+        return runPass(order, scope, controller, now, worldPosition, WareworksConfig.terminalListStallTicks());
+    }
+
+    /**
+     * {@link #runPass(ListOrder, RequestScope, WarehouseControllerBlockEntity, long)} with the portions delivered to
+     * {@code destination} and parked after {@code stallTicks} (0 never parks): the address order's pass (issue #40),
+     * which may deliver to a package door and waits for its boxes instead of parking.
+     */
+    private PassOutcome runPass(ListOrder<ItemKey> order, RequestScope scope, WarehouseControllerBlockEntity controller,
+            long now, BlockPos destination, long stallTicks) {
         order.beginPass(controller::hasOpenRequest);
         int perRequest = Math.max(1, WareworksConfig.maxTerminalRequestAmount());
         int openLimit = Math.max(1, WareworksConfig.terminalListOpenRequests());
@@ -1814,7 +2065,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         Optional<ListPortion<ItemKey>> next;
         while ((next = order.nextPortion(openLimit, perRequest)).isPresent()) {
             ListPortion<ItemKey> portion = next.get();
-            TerminalRequestOutcome outcome = controller.request(worldPosition, portion.key(), portion.amount(),
+            TerminalRequestOutcome outcome = controller.request(destination, portion.key(), portion.amount(),
                     perRequest, StockAccess.PLAYER, order.budgetFor(portion.key()), scope);
             if (outcome.isAsking()) {
                 order.ask(outcome.question().orElseThrow());
@@ -1835,8 +2086,7 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
                     refused = refusal;
             }
         }
-        ListPass pass = order.finishPass(now, WareworksConfig.terminalListIntervalTicks(),
-                WareworksConfig.terminalListStallTicks());
+        ListPass pass = order.finishPass(now, WareworksConfig.terminalListIntervalTicks(), stallTicks);
         return new PassOutcome(pass, refused, granted);
     }
 
@@ -1886,17 +2136,134 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return false;
         ListOrder<ItemKey> craft = hasOpenCraftOrder() ? craftOrder.order() : null;
         ListOrder<ItemKey> clipboard = hasOpenClipboardOrder() ? listOrder : null;
-        if (craft == null && clipboard == null)
+        // An address order that fetches here takes its turn after the two (issue #40); one for a door is credited at
+        // the door instead (creditPackageDoorDelivery).
+        ListOrder<ItemKey> packages = hasOpenPackageOrder() && packageOrder.door().isEmpty() ? packageOrder.order()
+                : null;
+        if (craft == null && clipboard == null && packages == null)
             return false;
-        List<ListCredit<ItemKey>> credits = ListOrder.creditInTurn(id, amount, now, Arrays.asList(craft, clipboard));
+        List<ListCredit<ItemKey>> credits = ListOrder.creditInTurn(id, amount, now,
+                Arrays.asList(craft, clipboard, packages));
         ListCredit<ItemKey> craftCredit = credits.get(0);
         ListCredit<ItemKey> clipboardCredit = credits.get(1);
-        if (craftCredit.isEmpty() && clipboardCredit.isEmpty())
+        ListCredit<ItemKey> packageCredit = credits.get(2);
+        if (craftCredit.isEmpty() && clipboardCredit.isEmpty() && packageCredit.isEmpty())
             return false;
         if (!clipboardCredit.completed().isEmpty())
             writeTickMarks(listClipboard(), clipboardCredit.completed());
+        forgetFinishedPackageOrder();
         setChanged();
         markSummaryDirty();
+        return true;
+    }
+
+    // --- the address order of package mode (issue #40, owner decision E11) ----------------------------------------
+
+    /** Whether an address order still has boxes to fetch. */
+    public boolean hasOpenPackageOrder() {
+        return packageOrder != null && packageOrder.isOpen();
+    }
+
+    /**
+     * How far the address order has got, in the bounded form every screen open at this terminal is given;
+     * {@link TerminalPackageOrderState#NONE} while there is none.
+     */
+    public TerminalPackageOrderState packageOrderState() {
+        TerminalPackageOrder packages = packageOrder;
+        return packages == null ? TerminalPackageOrderState.NONE : packages.state();
+    }
+
+    /**
+     * Server: boxes of request {@code id} arrived at a <b>package door</b> (issue #40,
+     * {@code WarehouseControllerBlockEntity#onCraneDelivered}): an address order that sends its boxes there claims them,
+     * bounded by what its lines were owed, exactly as a delivery here is claimed ({@link ListOrder#credit}).
+     *
+     * @return whether the order claimed any of the delivery
+     */
+    public boolean creditPackageDoorDelivery(UUID id, int amount, long now) {
+        if (id == null || amount < 1 || !hasOpenPackageOrder() || packageOrder.door().isEmpty())
+            return false;
+        if (packageOrder.order().credit(id, amount, now).isEmpty())
+            return false;
+        forgetFinishedPackageOrder();
+        setChanged();
+        markSummaryDirty();
+        return true;
+    }
+
+    /**
+     * Server: {@code player} gives the address order {@code orderId} up — the cancel mark on its line, whose id the
+     * screen sends like a production order's ({@code ProductionCancelPayload}). Any player who may use the terminal may.
+     *
+     * @return whether an order was given up
+     */
+    public boolean cancelPackageOrder(Player player, UUID orderId) {
+        Objects.requireNonNull(player, "player");
+        if (level == null || level.isClientSide || isRemoved() || orderId == null || !canPlayerUse(player))
+            return false;
+        if (!hasOpenPackageOrder() || !packageOrder.id().equals(orderId))
+            return false;
+        return cancelPackageOrder();
+    }
+
+    /**
+     * Server: gives the address order up (its cancel mark, the terminal broken or cleared). Only the order's own share
+     * of its requests is given back ({@link #giveBackShares}); boxes that arrived stay where they are, and a crane
+     * already carrying one takes it back into storage when the share was the whole request.
+     *
+     * @return whether an open order was given up
+     */
+    public boolean cancelPackageOrder() {
+        TerminalPackageOrder packages = packageOrder;
+        if (packages == null || !packages.isOpen())
+            return false;
+        giveBackShares(packages.order());
+        packageOrder = null;
+        setChanged();
+        markSummaryDirty();
+        return true;
+    }
+
+    /**
+     * One address order pass: the shared top-up pass ({@link #runPass}) to the order's destination, never parking, then
+     * the boxes somebody else took out are taken off their lines ({@link TerminalPackageOrder#dropGone}). A finished
+     * order is forgotten: the boxes are where they were sent, and the result line told the player what was asked.
+     *
+     * @return whether the address order is still open
+     */
+    private boolean tickPackageOrder(long now) {
+        TerminalPackageOrder packages = packageOrder;
+        if (packages == null || !packages.isOpen())
+            return false;
+        Optional<WarehouseControllerBlockEntity> found = controller();
+        if (found.isEmpty())
+            return true; // no aisle right now (misaligned, unloaded): wait, never give the order up for it
+        ListOrder<ItemKey> order = packages.order();
+        if (!order.due(now))
+            return true;
+        WarehouseControllerBlockEntity controller = found.get();
+        // A box that reached the door while this terminal was not loaded is credited first, or the pass below would
+        // forget its finished request and send a second box (review fix, 2026-11-22).
+        if (packages.door().isPresent())
+            controller.claimPendingDoorCredits((id, amount) -> !order.credit(id, amount, now).isEmpty());
+        PassOutcome pass = runPass(order, RequestScope.LIST, controller, now, packages.door().orElse(worldPosition),
+                0L);
+        boolean changed = pass.pass() != ListPass.WAITING;
+        if (packages.dropGone(controller::heldCount))
+            changed = true;
+        if (forgetFinishedPackageOrder())
+            changed = true;
+        if (changed)
+            setChanged();
+        markSummaryDirty();
+        return hasOpenPackageOrder();
+    }
+
+    /** Drops an address order that has nothing left to do; true when it did. */
+    private boolean forgetFinishedPackageOrder() {
+        if (packageOrder == null || packageOrder.isOpen())
+            return false;
+        packageOrder = null;
         return true;
     }
 
@@ -2055,6 +2422,8 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
             return;
         cancelCraftOrder();
         craftOrder = null;
+        cancelPackageOrder();
+        packageOrder = null;
         ItemStack clipboard = listSlot.extractItem(LIST_SLOT, Integer.MAX_VALUE, false);
         if (!clipboard.isEmpty())
             Containers.dropItemStack(level, worldPosition.getX(), worldPosition.getY(), worldPosition.getZ(),
@@ -2072,9 +2441,12 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         listOrder = null;
         listTicksPending = false;
         listRefusal = Optional.empty();
-        if (level != null && !level.isClientSide)
+        if (level != null && !level.isClientSide) {
             cancelCraftOrder();
+            cancelPackageOrder();
+        }
         craftOrder = null;
+        packageOrder = null;
     }
 
     // --- persistence ---------------------------------------------------------------------------------------------
@@ -2115,6 +2487,9 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // The craft order beside it, under a compound of its own (issue #24, ADR-062). A finished one is kept, as the
         // clipboard's is, until the next Fetch replaces it.
         TerminalCraftOrder.write(tag, craftOrder, registries);
+        // The address order of package mode (issue #40), only while one is open: a terminal without one saves exactly
+        // what it saved before (PackageModeGoldenGameTests).
+        TerminalPackageOrder.write(tag, packageOrder, registries);
         // The identity a remote's link names (issue #44), only once it exists. writeSafe never reaches here, so a
         // schematic print gets a new one.
         if (terminalId != null)
@@ -2147,6 +2522,10 @@ public class WarehouseTerminalBlockEntity extends WarehouseDeliveryStationBlockE
         // asking comes back running and asks again (TerminalCraftOrder#read). Reading never throws.
         craftOrder = TerminalCraftOrder.read(tag, registries, now).orElse(null);
         shownCraft = craftOrderState().forGoggles();
+        // An address order saved open (issue #40) runs on, also with the switch off by now: its lines are plain box
+        // requests, and only new address orders need package mode.
+        packageOrder = TerminalPackageOrder.read(tag, registries, now).filter(TerminalPackageOrder::isOpen)
+                .orElse(null);
         // The clipboard and the order were saved together, but a tick mark is written to the item and the lines live in
         // the block entity: re-asserting them once after the load is what makes the two agree whatever the save caught.
         listTicksPending = listOrder != null;

@@ -39,10 +39,14 @@ import dev.wareworks.core.stock.StockRuleStatus;
  * @param ruleMaximum the most of this item the rule lets the warehouse store, or {@link StockRule#UNSET} for no cap
  *                  (M15 part 2). It travels because it is the one number a screen needs to say, <b>before</b> a click,
  *                  that an order would bring in more than the warehouse wants to hold
+ * @param group     what the boxes of an <b>address</b> hold, present exactly for the one row a package-mode terminal
+ *                  folds every box of that address into (issue #40, owner decision E5, {@link PackageGroupFold}); empty
+ *                  for every other row, and for every row of a warehouse that is not in package mode
  * @param <K>       item key type
  */
 public record StockCount<K>(K key, long total, long available, boolean producible, long producibleAmount,
-                            Optional<StockRuleStatus> rule, long ruleReserved, long ruleMaximum) {
+                            Optional<StockRuleStatus> rule, long ruleReserved, long ruleMaximum,
+                            Optional<PackageGroupSummary<K>> group) {
     public StockCount {
         Objects.requireNonNull(key, "key");
         total = Math.max(0L, total);
@@ -54,6 +58,14 @@ public record StockCount<K>(K key, long total, long available, boolean producibl
         ruleReserved = rule.isPresent() ? Math.max(0L, Math.min(ruleReserved, available)) : 0L;
         ruleMaximum = rule.isPresent() && ruleMaximum >= 0L ? Math.min(ruleMaximum, StockRule.MAX_AMOUNT)
                 : StockRule.UNSET;
+        if (group == null)
+            group = Optional.empty();
+    }
+
+    /** An entry that is no package group: every entry a terminal reported before package mode (issue #40). */
+    public StockCount(K key, long total, long available, boolean producible, long producibleAmount,
+            Optional<StockRuleStatus> rule, long ruleReserved, long ruleMaximum) {
+        this(key, total, available, producible, producibleAmount, rule, ruleReserved, ruleMaximum, Optional.empty());
     }
 
     /** An entry of an item that is simply in stock. */
@@ -80,6 +92,20 @@ public record StockCount<K>(K key, long total, long available, boolean producibl
     /** The marker for an item type that left the index: the client drops it from its list. */
     public static <K> StockCount<K> gone(K key) {
         return new StockCount<>(key, 0L, 0L, false, 0L, Optional.empty(), 0L, StockRule.UNSET);
+    }
+
+    /**
+     * The row of one address of a package-mode warehouse (issue #40): {@code key} is the terminal's synthetic key for
+     * the address, the amounts count boxes, and nothing is producible or ruled.
+     */
+    public static <K> StockCount<K> group(K key, long boxes, long available, PackageGroupSummary<K> summary) {
+        return new StockCount<>(key, boxes, available, false, 0L, Optional.empty(), 0L, StockRule.UNSET,
+                Optional.of(Objects.requireNonNull(summary, "summary")));
+    }
+
+    /** Whether this is the row of an address of a package-mode warehouse rather than of one item type. */
+    public boolean isGroup() {
+        return group.isPresent();
     }
 
     /**

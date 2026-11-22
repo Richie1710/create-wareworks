@@ -6,6 +6,7 @@ import java.util.Optional;
 import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageRuleKeys;
 import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.core.stock.StockRule;
 
@@ -48,5 +49,16 @@ public record KeeperRule(StockRule<ItemKey> rule, RuleUnit unit) {
         if (unit != RuleUnit.FLUID)
             return Optional.empty();
         return FluidContainers.contents(rule.key()).map(FluidContainers.Contents::fluid);
+    }
+
+    /**
+     * The address this row counts packages of (issue #40, package mode): the address of its Package Filter ghost, for a
+     * {@link RuleUnit#PACKAGES} row only. Empty for every other row, and for a package row whose ghost is no Package
+     * Filter with an address any more (crafted save data), which then governs nothing at all.
+     */
+    public Optional<String> packageAddress() {
+        if (unit != RuleUnit.PACKAGES)
+            return Optional.empty();
+        return PackageRuleKeys.filterAddress(rule.key());
     }
 }

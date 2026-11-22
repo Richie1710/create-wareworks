@@ -3,6 +3,7 @@ package dev.wareworks.client.ponder.scenes;
 import java.util.List;
 
 import com.simibubi.create.AllBlocks;
+import com.simibubi.create.AllItems;
 import com.simibubi.create.AllDataComponents;
 import com.simibubi.create.content.logistics.box.PackageItem;
 import com.simibubi.create.content.logistics.box.PackageStyles;
@@ -15,6 +16,7 @@ import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
 import dev.wareworks.content.station.RequestFilterBehaviour;
 import dev.wareworks.content.station.TerminalDisplaySide;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
@@ -588,6 +590,219 @@ public final class PackageScenes {
                 .placeNearTarget()
                 .pointAt(util.vector().blockSurface(link, linkSide));
         scene.idle(TEXT_IDLE);
+
+        scene.markAsFinished();
+    }
+
+    /**
+     * A warehouse in <b>package mode</b> (issue #40, M37, ADR-086): the one server setting that makes every warehouse of
+     * a world take and hand out sealed Create packages only. The scene teaches what a player cannot guess from the
+     * blocks, because nothing about them changes: a box goes in and is stored as itself, a loose item waits outside, the
+     * terminal lists one row per address and fetches whole boxes, a door keeps a box's address only when its Packager
+     * has a sign, the crafting side of the terminal is switched off, and a stock rule counts the boxes of an address
+     * with a minimum that only signals.
+     * <p>
+     * <b>The switch is not in the scene</b>: it is a line in the server's config, read at the world load, and has no
+     * block or item. The first caption names it, as the README does.
+     * <p>
+     * The stage is the shared square 9 plate: the input at position 1, the stock keeper at 2, the terminal at 3 and the
+     * signed door (port, Packager behind it, sign beside it) at 5, all on the LEFT plane the camera draws in front, and
+     * the rack the box goes into on the RIGHT plane at position 3. A new scene and no beat added to a shipped one
+     * (ADR-016), so no {@code text_n} key of another scene moves.
+     */
+    public static void packageMode(SceneBuilder builder, SceneBuildingUtil util) {
+        CreateSceneBuilder scene = new CreateSceneBuilder(builder);
+        scene.title("warehouse_package_mode", "A Warehouse in Package Mode");
+
+        PonderAisle aisle = PonderAisle.WIDE;
+        scene.configureBasePlate(0, 0, aisle.plateSize());
+        scene.scaleSceneView(0.9f);
+
+        int inputPosition = 1;
+        int keeperPosition = 2;
+        int terminalPosition = 3;
+        int doorPosition = 5;
+        int rackPosition = 3;
+
+        BlockPos dock = aisle.dock(util);
+        BlockPos input = aisle.rack(util, inputPosition, 0, Side.LEFT);
+        BlockPos funnel = input.above();
+        BlockPos keeper = aisle.rack(util, keeperPosition, 0, Side.LEFT);
+        BlockPos terminal = aisle.rack(util, terminalPosition, 0, Side.LEFT);
+        BlockPos port = aisle.rack(util, doorPosition, 0, Side.LEFT);
+        BlockPos packager = aisle.inventory(util, doorPosition, 0, Side.LEFT);
+        BlockPos sign = packager.relative(PonderAisle.AISLE);
+        BlockPos rack = aisle.rack(util, rackPosition, 0, Side.RIGHT);
+
+        ItemStack box = addressedBox(OUT_ADDRESS, new ItemStack(Items.IRON_INGOT, REQUEST_AMOUNT),
+                new ItemStack(Items.COAL, 8));
+
+        // --- the stage ------------------------------------------------------------------------------------------------
+        aisle.placeAisle(scene, util);
+        aisle.placeStorage(scene, util, rackPosition, 0, Side.RIGHT);
+        aisle.placeInput(scene, util, inputPosition, 0, Side.LEFT);
+        aisle.placeInsertingFunnelAbove(scene, input);
+        aisle.placeStockKeeper(scene, util, keeperPosition, 0, Side.LEFT);
+        aisle.placeTerminal(scene, util, terminalPosition, 0, Side.LEFT, TerminalDisplaySide.BACK);
+        aisle.placeOutput(scene, util, doorPosition, 0, Side.LEFT);
+        scene.world().setBlock(packager, AllBlocks.PACKAGER.getDefaultState()
+                .setValue(PackagerBlock.FACING, PonderAisle.outward(Side.LEFT)), false);
+        scene.world().setBlock(sign, Blocks.OAK_SIGN.defaultBlockState()
+                .setValue(StandingSignBlock.ROTATION, SIGN_FACING), false);
+        writeSign(scene, sign, OUT_ADDRESS);
+        scene.world().setKineticSpeed(util.select().everywhere(), CraneScript.PONDER_RPM);
+
+        Selection aisleLine = util.select().fromTo(aisle.dockX() - 1, PonderAisle.FLOOR_Y, aisle.aisleZ(),
+                aisle.lastRailX(), PonderAisle.FLOOR_Y, aisle.aisleZ());
+        Selection racks = util.select().fromTo(aisle.dockX() + rackPosition, PonderAisle.FLOOR_Y, aisle.aisleZ() + 1,
+                aisle.dockX() + rackPosition, PonderAisle.FLOOR_Y, aisle.aisleZ() + 2);
+
+        scene.showBasePlate();
+        scene.idle(10);
+        scene.world().showSection(aisleLine, Direction.DOWN);
+        scene.world().showSection(racks, Direction.DOWN);
+        scene.idle(FADE_IDLE + 5);
+        scene.world().showSection(util.select().position(input).add(util.select().position(funnel)), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+
+        // --- 1. what the setting does ---------------------------------------------------------------------------------
+        scene.overlay().showText(TEXT_TICKS)
+                .text("With package mode on in the server config, every warehouse of the world takes sealed packages "
+                        + "only")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(input, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 2. a box goes in and is stored as itself -----------------------------------------------------------------
+        CraneScript crane = CraneScript.parkedAt(scene, dock);
+        scene.world().createItemOnBeltLike(input, Direction.UP, box.copy());
+        scene.effects().indicateSuccess(input);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A box is stored as it is: its address and what it holds stay untouched")
+                .attachKeyFrame()
+                .colored(PonderPalette.INPUT)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(input, LEFT_FRONT));
+        crane.moveTo(CranePose.at(inputPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_SOURCE);
+        crane.moveTo(new CranePose(inputPosition, 0, CranePose.EXTENDED, Side.LEFT), CranePhase.EXTEND_SOURCE);
+        crane.hold(box.getItem(), 1);
+        crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
+        crane.moveTo(CranePose.at(inputPosition, 0, Side.LEFT), CranePhase.RETRACT_SOURCE);
+        crane.moveTo(CranePose.at(rackPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_TARGET);
+        crane.moveTo(new CranePose(rackPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_TARGET);
+        crane.dwell(CranePhase.DROP, 10);
+        crane.release();
+        crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        scene.effects().indicateSuccess(rack);
+        crane.moveTo(CranePose.at(rackPosition, 0, Side.RIGHT), CranePhase.RETRACT_TARGET);
+        crane.moveTo(CranePose.at(0, 0, Side.RIGHT), CranePhase.IDLE);
+        scene.idle(10);
+
+        // --- 3. a loose item waits outside ----------------------------------------------------------------------------
+        scene.overlay().showControls(util.vector().topOf(funnel), Pointing.DOWN, CONTROL_TICKS)
+                .withItem(new ItemStack(Items.IRON_INGOT));
+        scene.idle(CLICK_LEAD);
+        scene.overlay().showOutline(PonderPalette.RED, "loose", util.select().position(input), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A loose item is refused and waits on your belt: a Package Filter on a funnel can send it "
+                        + "elsewhere")
+                .attachKeyFrame()
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(input, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 4. the terminal: one row per address ---------------------------------------------------------------------
+        scene.world().showSection(util.select().position(terminal), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showControls(util.vector().blockSurface(terminal, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .withItem(box.copy());
+        scene.idle(CLICK_LEAD);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("The terminal shows one row per address, and its tooltip says what the boxes hold")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        scene.overlay().showOutline(PonderPalette.RED, "crafting", util.select().position(terminal), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("Crafting, list fetches and anything that would be made are off; loose goods from before can "
+                        + "still be taken out")
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 5. a click fetches whole boxes, here or to a door ----------------------------------------------------------
+        scene.world().showSection(door(util, port, packager).add(util.select().position(sign)), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showControls(util.vector().blockSurface(terminal, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .leftClick()
+                .withItem(box.copy());
+        scene.idle(CLICK_LEAD);
+        scene.overlay().showLine(PonderPalette.OUTPUT, util.vector().centerOf(terminal), util.vector().centerOf(port),
+                TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A click on a row fetches whole boxes, never opened, to the terminal or to a door")
+                .attachKeyFrame()
+                .colored(PonderPalette.OUTPUT)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(terminal, LEFT_FRONT));
+        crane.moveTo(CranePose.at(rackPosition, 0, Side.RIGHT), CranePhase.TRAVEL_TO_SOURCE);
+        crane.moveTo(new CranePose(rackPosition, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_SOURCE);
+        crane.hold(box.getItem(), 1);
+        crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
+        crane.moveTo(CranePose.at(rackPosition, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
+        crane.moveTo(CranePose.at(doorPosition, 0, Side.LEFT), CranePhase.TRAVEL_TO_TARGET);
+        crane.moveTo(new CranePose(doorPosition, 0, LocationKind.OUTPUT.armStroke(), Side.LEFT),
+                CranePhase.EXTEND_TARGET);
+        crane.dwell(CranePhase.DROP, 10);
+        crane.release();
+        crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
+        scene.effects().indicateSuccess(port);
+        crane.moveTo(CranePose.at(doorPosition, 0, Side.LEFT), CranePhase.RETRACT_TARGET);
+        crane.moveTo(CranePose.at(0, 0, Side.RIGHT), CranePhase.IDLE);
+        scene.idle(10);
+
+        // --- 6. the sign keeps the address ----------------------------------------------------------------------------
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A door's Packager sends the box on with its sign's address, so a door needs a sign")
+                .attachKeyFrame()
+                .colored(PonderPalette.BLUE)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(sign, LEFT_FRONT));
+        scene.idle(SIGNAL_LEAD);
+        packBox(scene, packager, box);
+        scene.idle(TEXT_IDLE - SIGNAL_LEAD);
+        clearBox(scene, packager);
+        scene.overlay().showOutline(PonderPalette.RED, "signless", door(util, port, packager), TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A Packager door without a sign would wipe the address, so the terminal refuses it")
+                .colored(PonderPalette.RED)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(packager, PORT_FRONT));
+        scene.idle(TEXT_IDLE);
+
+        // --- 7. stock rules count boxes -------------------------------------------------------------------------------
+        scene.world().showSection(util.select().position(keeper), Direction.DOWN);
+        scene.idle(FADE_IDLE);
+        scene.overlay().showControls(util.vector().blockSurface(keeper, LEFT_FRONT), Pointing.DOWN, CONTROL_TICKS)
+                .withItem(AllItems.PACKAGE_FILTER.asStack());
+        scene.idle(CLICK_LEAD);
+        scene.world().cycleBlockProperty(keeper, WarehouseStockKeeperBlock.LIT);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("A stock rule with an addressed Package Filter counts that address's boxes")
+                .attachKeyFrame()
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(keeper, LEFT_FRONT));
+        scene.idle(TEXT_IDLE);
+        scene.overlay().showText(SHORT_IDLE)
+                .text("Its minimum only lights the lamp and drives a comparator: nothing is ever packed or made for it")
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(keeper, LEFT_FRONT));
+        scene.idle(SHORT_IDLE);
 
         scene.markAsFinished();
     }

@@ -18,6 +18,36 @@ class RuleUnitTest {
     }
 
     @Test
+    void packagesHaveTheirOwnSavedNameAndAbsentMeansItems() {
+        assertEquals(RuleUnit.PACKAGES, RuleUnit.byName(RuleUnit.PACKAGES_NAME));
+        assertEquals("packages", RuleUnit.PACKAGES.savedName(), "the name a save writes (issue #40)");
+        assertEquals("fluid", RuleUnit.FLUID.savedName());
+        assertEquals("", RuleUnit.ITEMS.savedName(), "an item rule writes no unit at all");
+        assertEquals(RuleUnit.ITEMS, RuleUnit.byName(""), "an absent unit is still an item rule");
+        assertEquals(RuleUnit.ITEMS, RuleUnit.byName("PACKAGES"), "the saved name is exact");
+        for (RuleUnit unit : RuleUnit.values())
+            assertEquals(unit, RuleUnit.byName(unit.savedName()), "every unit reads back from its saved name");
+    }
+
+    @Test
+    void theWireOrdinalIsBounded() {
+        assertEquals(RuleUnit.ITEMS, RuleUnit.byOrdinal(0));
+        assertEquals(RuleUnit.FLUID, RuleUnit.byOrdinal(1));
+        assertEquals(RuleUnit.PACKAGES, RuleUnit.byOrdinal(2), "appended, so the older ordinals keep their meaning");
+        assertEquals(RuleUnit.ITEMS, RuleUnit.byOrdinal(3), "an unknown ordinal counts items");
+        assertEquals(RuleUnit.ITEMS, RuleUnit.byOrdinal(-1));
+    }
+
+    @Test
+    void itemsAndPackagesAreBothCountedOneByOne() {
+        assertEquals(10L, RuleUnit.ITEMS.convert(10L, RuleUnit.PACKAGES, 1_000L),
+                "a filled container's item row turned into a package row keeps its numbers");
+        assertEquals(10L, RuleUnit.PACKAGES.convert(10L, RuleUnit.ITEMS, 1_000L));
+        assertEquals(10L, RuleUnit.FLUID.convert(10_000L, RuleUnit.PACKAGES, 1_000L), "millibuckets back to a count");
+        assertEquals(10_000L, RuleUnit.PACKAGES.convert(10L, RuleUnit.FLUID, 1_000L));
+    }
+
+    @Test
     void itemsBecomeTheirMillibucketsAndBack() {
         assertEquals(10_000L, RuleUnit.ITEMS.convert(10L, RuleUnit.FLUID, 1_000L), "ten lava buckets");
         assertEquals(10L, RuleUnit.FLUID.convert(10_000L, RuleUnit.ITEMS, 1_000L));

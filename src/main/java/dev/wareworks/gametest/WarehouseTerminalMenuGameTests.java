@@ -767,7 +767,8 @@ public final class WarehouseTerminalMenuGameTests {
         helper.assertValueEqual(unknownScope.readableBytes(), 0, "and the scope is still the last field");
 
         // The answer: the door after the rejection, the two new reasons by ordinal, and the plan refusal still last.
-        for (RequestRejection rejection : List.of(RequestRejection.NOT_A_DOOR, RequestRejection.DOOR_IGNORES_REDSTONE)) {
+        for (RequestRejection rejection : List.of(RequestRejection.NOT_A_DOOR, RequestRejection.DOOR_IGNORES_REDSTONE,
+                RequestRejection.DOOR_STRIPS_ADDRESS)) {
             TerminalResultPayload refused = roundTrip(helper, TerminalResultPayload.of(3, DIAMOND,
                     RequestResult.rejected(rejection), Optional.of(door)), TerminalResultPayload.STREAM_CODEC);
             helper.assertValueEqual(refused.rejection(), Optional.of(rejection), "the reason " + rejection);
@@ -776,8 +777,16 @@ public final class WarehouseTerminalMenuGameTests {
         // The door reasons were appended, so no ordinal moved; M31's NO_EMPTY_CONTAINERS was appended after them.
         helper.assertValueEqual(RequestRejection.DOOR_IGNORES_REDSTONE.ordinal(),
                 RequestRejection.NOT_A_DOOR.ordinal() + 1, "the door reasons were appended, so no ordinal moved");
+        helper.assertValueEqual(RequestRejection.NO_EMPTY_CONTAINERS.ordinal(),
+                RequestRejection.DOOR_IGNORES_REDSTONE.ordinal() + 1, "and M31's reason after them");
+        // Package mode's two reasons (issue #40) were appended after M31's, so again no ordinal moved.
+        helper.assertValueEqual(RequestRejection.PACKAGE_MODE.ordinal(),
+                RequestRejection.NO_EMPTY_CONTAINERS.ordinal() + 1, "package mode's reason after M31's");
+        helper.assertValueEqual(RequestRejection.DOOR_STRIPS_ADDRESS.ordinal(),
+                RequestRejection.PACKAGE_MODE.ordinal() + 1, "and its door reason after it");
+        // The address order's reason (issue #40, slice S4) was appended after those two.
         helper.assertValueEqual(RequestRejection.values()[RequestRejection.values().length - 1],
-                RequestRejection.NO_EMPTY_CONTAINERS, "and M31's reason after them");
+                RequestRejection.PACKAGE_ORDER_ELSEWHERE, "and the address order's reason last");
         helper.assertValueEqual(roundTrip(helper, TerminalResultPayload.of(3, DIAMOND,
                 RequestResult.rejected(RequestRejection.QUEUE_FULL)), TerminalResultPayload.STREAM_CODEC).door(),
                 Optional.empty(), "an answer about here names no door");

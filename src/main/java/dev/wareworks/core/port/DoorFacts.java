@@ -25,11 +25,22 @@ import java.util.Optional;
  *                       {@value BoxWait#REPORT_AFTER_TICKS} ticks, as far as the looks at the door can tell
  *                       ({@link BoxWait}); a working taker can be that slow, so it is a reason to look at the door,
  *                       not proof that nothing takes the box
+ * @param packageMode    package mode is on (issue #40, owner decisions E7 and R-OUT-2): a requesting port <b>without</b>
+ *                       a Packager is a door too, because the stored box leaves it as itself, address and all; and a
+ *                       Packager without a sign is no longer a door to choose, because a Packager always clears the
+ *                       address and writes only its sign's (ADR-065 D3, as corrected). Off, the rule is exactly the
+ *                       one before package mode
  */
 public record DoorFacts(boolean member, boolean requestingPort, boolean packager, boolean linked, boolean addressed,
-                        boolean bufferFull, boolean boxWaiting) {
+                        boolean bufferFull, boolean boxWaiting, boolean packageMode) {
     /** The facts of a position that is no door at all. */
     public static final DoorFacts NONE = new DoorFacts(false, false, false, false, false, false, false);
+
+    /** The facts of a look with package mode off: the door rule before package mode. */
+    public DoorFacts(boolean member, boolean requestingPort, boolean packager, boolean linked, boolean addressed,
+            boolean bufferFull, boolean boxWaiting) {
+        this(member, requestingPort, packager, linked, addressed, bufferFull, boxWaiting, false);
+    }
 
     /**
      * How the door stands, the most actionable cause first; empty when the position is no door. A Stock Link wins over
@@ -37,10 +48,19 @@ public record DoorFacts(boolean member, boolean requestingPort, boolean packager
      * because it is the reason the port is full; a missing sign comes last, because the door still works.
      */
     public Optional<DoorState> state() {
-        if (!member || !requestingPort || !packager)
+        if (!member || !requestingPort)
             return Optional.empty();
+        if (!packager) {
+            // Package mode: a plain port hands the stored box out as it is, address and all.
+            if (!packageMode)
+                return Optional.empty();
+            return Optional.of(bufferFull ? DoorState.PORT_FULL : DoorState.PLAIN_PORT);
+        }
         if (linked)
             return Optional.of(DoorState.IGNORES_REDSTONE);
+        // Package mode: a Packager without a sign would send a stored box out with no address at all.
+        if (packageMode && !addressed)
+            return Optional.of(DoorState.STRIPS_ADDRESS);
         if (boxWaiting)
             return Optional.of(DoorState.BOX_WAITING);
         if (bufferFull)
@@ -52,6 +72,6 @@ public record DoorFacts(boolean member, boolean requestingPort, boolean packager
 
     /** Whether these are the facts of a door, whatever its state. */
     public boolean isDoor() {
-        return member && requestingPort && packager;
+        return member && requestingPort && (packager || packageMode);
     }
 }

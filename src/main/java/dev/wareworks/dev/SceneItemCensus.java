@@ -117,7 +117,39 @@ final class SceneItemCensus {
      * @throws VisualTestException when a position of the box is not loaded ({@link #isFullyLoaded})
      */
     static Map<ItemKey, Long> take(ServerLevel level, AABB box, Player... players) {
-        Map<ItemKey, Long> counts = new HashMap<>();
+        return take(level, box, false, players);
+    }
+
+    /**
+     * {@link #take(ServerLevel, AABB, Player...)} under the <b>package mode rule</b> (issue #40): a sealed Create
+     * package counts as its contents <b>and as itself</b>, by its exact identity (address, contents, style). In a
+     * package-mode warehouse no Packager inside the scene builds or opens a box, so every box is a thing that must be
+     * conserved on its own: a box duplicated, opened, re-addressed or swapped for another of the same contents changes
+     * this census, where the contents-only rule would not see it.
+     */
+    static Map<ItemKey, Long> takeWithBoxes(ServerLevel level, AABB box, Player... players) {
+        return take(level, box, true, players);
+    }
+
+    /**
+     * Only the boxes of {@code box}, each by its exact identity: what {@link #takeWithBoxes} counts on top of
+     * {@link #take(ServerLevel, AABB, Player...)}. For a scene whose standing expectation is the plain rule (the
+     * robustness run) and that wants to follow its boxes as things of their own for a while (issue #40).
+     */
+    static Map<ItemKey, Long> boxes(ServerLevel level, AABB box, Player... players) {
+        Map<ItemKey, Long> withBoxes = take(level, box, true, players);
+        Map<ItemKey, Long> plain = take(level, box, false, players);
+        Map<ItemKey, Long> result = new HashMap<>();
+        withBoxes.forEach((key, count) -> {
+            long difference = count - plain.getOrDefault(key, 0L);
+            if (difference != 0L)
+                result.put(key, difference);
+        });
+        return result;
+    }
+
+    private static Map<ItemKey, Long> take(ServerLevel level, AABB box, boolean boxes, Player... players) {
+        Tally counts = new Tally(new HashMap<>(), boxes);
         BoundingBox bounds = new BoundingBox(Mth.floor(box.minX), Mth.floor(box.minY), Mth.floor(box.minZ),
                 Mth.ceil(box.maxX) - 1, Mth.ceil(box.maxY) - 1, Mth.ceil(box.maxZ) - 1);
         for (BlockPos pos : BlockPos.betweenClosed(bounds.minX(), bounds.minY(), bounds.minZ(), bounds.maxX(),
@@ -159,7 +191,7 @@ final class SceneItemCensus {
             pallet.carriedKey().ifPresent(key -> add(counts, key, pallet.carriedCount()));
         for (Player player : players)
             addPlayer(counts, player);
-        return counts;
+        return counts.counts();
     }
 
     /**
@@ -167,7 +199,7 @@ final class SceneItemCensus {
      * of the menu they have open — and of their own inventory menu as well when that is another one, because a cursor
      * stack belongs to a menu and not to the player.
      */
-    private static void addPlayer(Map<ItemKey, Long> counts, Player player) {
+    private static void addPlayer(Tally counts, Player player) {
         Inventory inventory = player.getInventory();
         for (int slot = 0; slot < inventory.getContainerSize(); slot++)
             add(counts, inventory.getItem(slot));
@@ -210,7 +242,22 @@ final class SceneItemCensus {
      */
     static void assertEquals(ServerLevel level, AABB box, Map<ItemKey, Long> expected, String step,
             Player... players) {
-        Map<ItemKey, Long> actual = take(level, box, players);
+        assertEquals(level, box, false, expected, step, players);
+    }
+
+    /**
+     * {@link #assertEquals(ServerLevel, AABB, Map, String, Player...)} under the package mode rule
+     * ({@link #takeWithBoxes}): {@code expected} must name every box as well as its contents, as
+     * {@link #plusWithBoxes} and {@link #plusAllWithBoxes} build it.
+     */
+    static void assertEqualsWithBoxes(ServerLevel level, AABB box, Map<ItemKey, Long> expected, String step,
+            Player... players) {
+        assertEquals(level, box, true, expected, step, players);
+    }
+
+    private static void assertEquals(ServerLevel level, AABB box, boolean boxes, Map<ItemKey, Long> expected,
+            String step, Player... players) {
+        Map<ItemKey, Long> actual = take(level, box, boxes, players);
         if (actual.equals(expected)) {
             VisualTestHarness.LOGGER.info(VisualTestHarness.PREFIX + "robustness PASS: {} (items {})", step,
                     describe(actual));
@@ -248,9 +295,19 @@ final class SceneItemCensus {
      * contributes its contents, exactly as the census counts it.
      */
     static Map<ItemKey, Long> plus(Map<ItemKey, Long> counts, ItemKey key, long delta) {
-        Map<ItemKey, Long> result = new HashMap<>(counts);
+        Tally result = new Tally(new HashMap<>(counts), false);
         add(result, key, delta);
-        return result;
+        return result.counts();
+    }
+
+    /**
+     * {@link #plus} under the package mode rule ({@link #takeWithBoxes}): a package key contributes its contents
+     * <b>and</b> itself; any other key just itself.
+     */
+    static Map<ItemKey, Long> plusWithBoxes(Map<ItemKey, Long> counts, ItemKey key, long delta) {
+        Tally result = new Tally(new HashMap<>(counts), true);
+        add(result, key, delta);
+        return result.counts();
     }
 
     /**
@@ -281,10 +338,10 @@ final class SceneItemCensus {
             throw new VisualTestException("declared the exchange " + filled + " -> " + empty + ", but emptying "
                     + filled + " really yields " + drained.emptied() + " and " + drained.millibuckets() + " mB of "
                     + drained.fluid());
-        Map<ItemKey, Long> result = new HashMap<>(counts);
+        Tally result = new Tally(new HashMap<>(counts), false);
         add(result, filled, -containers);
         add(result, empty, containers);
-        return result;
+        return result.counts();
     }
 
     /** A copy of {@code counts} with every entry of {@code added} applied. */
@@ -304,20 +361,28 @@ final class SceneItemCensus {
                 .map(FluidContainers.Filled::filled).filter(filled::equals).isEmpty())
             throw new VisualTestException("declared the fill " + empty + " -> " + filled + ", but filling " + empty
                     + " with " + contents.fluid() + " does not give " + filled + " and back");
-        Map<ItemKey, Long> result = new HashMap<>(counts);
+        Tally result = new Tally(new HashMap<>(counts), false);
         add(result, empty, -containers);
         add(result, filled, containers);
-        return result;
+        return result.counts();
     }
 
     static Map<ItemKey, Long> plusAll(Map<ItemKey, Long> counts, List<ItemStack> added) {
-        Map<ItemKey, Long> result = new HashMap<>(counts);
+        Tally result = new Tally(new HashMap<>(counts), false);
         for (ItemStack stack : added)
             add(result, stack);
-        return result;
+        return result.counts();
     }
 
-    private static void add(Map<ItemKey, Long> counts, ItemStack stack) {
+    /** {@link #plusAll} under the package mode rule ({@link #takeWithBoxes}): every box counts as itself too. */
+    static Map<ItemKey, Long> plusAllWithBoxes(Map<ItemKey, Long> counts, List<ItemStack> added) {
+        Tally result = new Tally(new HashMap<>(counts), true);
+        for (ItemStack stack : added)
+            add(result, stack);
+        return result.counts();
+    }
+
+    private static void add(Tally counts, ItemStack stack) {
         add(counts, stack, stack.getCount());
     }
 
@@ -335,7 +400,7 @@ final class SceneItemCensus {
      * A package inside a package is counted the same way. The recursion always terminates: a data component is an
      * immutable value and cannot contain itself, and its depth is bounded by what NBT would accept.
      */
-    private static void add(Map<ItemKey, Long> counts, ItemStack stack, long copies) {
+    private static void add(Tally counts, ItemStack stack, long copies) {
         if (stack.isEmpty() || copies == 0)
             return;
         if (HandTruckItem.isLoaded(stack)) {
@@ -346,6 +411,9 @@ final class SceneItemCensus {
             put(counts, ItemKey.of(stack), copies);
             return;
         }
+        // Package mode's rule (takeWithBoxes): the box is a thing of its own as well as a carrier of its contents.
+        if (counts.boxes())
+            put(counts, ItemKey.of(stack), copies);
         stack.getOrDefault(AllDataComponents.PACKAGE_CONTENTS, ItemContainerContents.EMPTY)
                 .nonEmptyStream()
                 .forEach(held -> add(counts, held, copies * held.getCount()));
@@ -355,7 +423,7 @@ final class SceneItemCensus {
      * A loaded hand truck: the empty truck plus the carried container's contents (class comment), or plus the carried
      * pallet's item times its count (ADR-084), as a {@link PalletEntity} counts.
      */
-    private static void addLoadedTruck(Map<ItemKey, Long> counts, ItemStack truck, long copies) {
+    private static void addLoadedTruck(Tally counts, ItemStack truck, long copies) {
         put(counts, ItemKey.of(HandTruckItem.emptied(truck)), copies);
         HandTruckLoad load = HandTruckItem.load(truck);
         if (load != null)
@@ -368,7 +436,7 @@ final class SceneItemCensus {
     }
 
     /** Counts {@code amount} items of {@code key}, a package or a loaded hand truck again as its contents. */
-    private static void add(Map<ItemKey, Long> counts, ItemKey key, long amount) {
+    private static void add(Tally counts, ItemKey key, long amount) {
         if (key.getItem() instanceof PackageItem || key.getItem() instanceof HandTruckItem) {
             add(counts, key.toStack(), amount);
             return;
@@ -376,11 +444,19 @@ final class SceneItemCensus {
         put(counts, key, amount);
     }
 
-    private static void put(Map<ItemKey, Long> counts, ItemKey key, long amount) {
+    private static void put(Tally tally, ItemKey key, long amount) {
+        Map<ItemKey, Long> counts = tally.counts();
         long value = counts.getOrDefault(key, 0L) + amount;
         if (value == 0)
             counts.remove(key);
         else
             counts.put(key, value);
+    }
+
+    /**
+     * A census being built: the counts and whether a package also counts as itself ({@link #takeWithBoxes}). Every
+     * census before package mode (issue #40) uses the plain rule, {@code boxes = false}.
+     */
+    private record Tally(Map<ItemKey, Long> counts, boolean boxes) {
     }
 }

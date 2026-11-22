@@ -154,6 +154,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * order; the switch fires only after the live time, once the chunk is back;</li>
  * <li>{@code stalecounterrefreshesthechecklistonce} — a player empties the chest mid-run: the requester has Create
  * remake the material list once and orders what is left;</li>
+ * <li>{@code requesterordersnothinginpackagemode} ({@link #PACKAGE_MODE_BATCH}) — package mode on (issue #40): the
+ * cannon waits for stone the racks hold, and nothing is ordered; the red lamp says package mode;</li>
+ * <li>{@code requesterorderopenatloadrunsinpackagemode} ({@link #PACKAGE_MODE_DRAIN_BATCH}) — an order placed before
+ * package mode is still delivered into the buffer, and nothing more is ordered;</li>
  * <li>{@code nopatternmeansoutofstockthenthepatternisused} — without a pattern the stock is ordered, the rest is out
  * of stock and nothing is made, neither through the requester nor through {@code requestForRequester} itself; with the
  * pattern the rest is made within one retry wait, by a root of its own;</li>
@@ -217,6 +221,10 @@ public final class SchematicannonRequesterGameTests {
     static final String MAKING_DEAD_MAN_BATCH = "wareworksrequestermaking";
     /** The test that lets production orders time out after 200 ticks (ADR-081), restored after the batch. */
     static final String PRODUCTION_BATCH = "wareworksrequesterproduction";
+    /** Package mode on from the start (issue #40): alone in its batch, restored after it. */
+    static final String PACKAGE_MODE_BATCH = "wareworksrequesterpackagemode";
+    /** Package mode switched on while an order runs (issue #40): alone in its batch, restored after it. */
+    static final String PACKAGE_MODE_DRAIN_BATCH = "wareworksrequesterpackagemodedrain";
 
     private static final int AISLE_Z = 3;
     private static final int RAILS = 5;
@@ -2668,7 +2676,81 @@ public final class SchematicannonRequesterGameTests {
                 .thenSucceed();
     }
 
+    // --- package mode (issue #40) ------------------------------------------------------------------------------------
+
+    /**
+     * Package mode on (issue #40): the warehouse hands out sealed packages only, so the requester orders nothing new.
+     * The cannon waits for stone the racks hold, and still no request is placed; the red lamp and the status say why.
+     */
+    @GameTest(template = AISLE_16X10X7, batch = PACKAGE_MODE_BATCH, timeoutTicks = TIMEOUT_TICKS)
+    public static void requesterOrdersNothingInPackageMode(GameTestHelper helper) {
+        ConfigOverrides.set(helper, WareworksConfig.SERVER.packageModeEnabled, true);
+        AisleFixture aisle = warehouse(helper, true, STONE.toStack(64));
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.STONE.defaultBlockState(), 5));
+        scene.place(REQUESTER, Direction.EAST);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> assertShows(helper, REQUESTER, RequesterStatus.PACKAGE_MODE))
+                .thenIdle(3 * poll())
+                .thenExecute(() -> {
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "nothing is ordered");
+                    helper.assertTrue(scene.requester(REQUESTER).orders().isEmpty(), "the requester holds no order");
+                    assertShows(helper, REQUESTER, RequesterStatus.PACKAGE_MODE);
+                    scene.assertKept("while package mode refuses the order");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * An order placed <b>before</b> package mode (a world loaded with the mode on, issue #40) runs to its end: the
+     * crane delivers it into the buffer, and nothing more is ordered.
+     */
+    @GameTest(template = AISLE_16X10X7, batch = PACKAGE_MODE_DRAIN_BATCH, timeoutTicks = TIMEOUT_TICKS)
+    public static void requesterOrderOpenAtLoadRunsInPackageMode(GameTestHelper helper) {
+        AisleFixture aisle = warehouse(helper, true, STONE.toStack(64));
+        Scene scene = new Scene(helper, aisle);
+        scene.print(SITE, repeat(Blocks.STONE.defaultBlockState(), 5));
+        scene.place(REQUESTER, Direction.EAST);
+        scene.begin(scene.remoteFor(TERMINAL_RACK));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertWarehouseReady(helper, aisle))
+                .thenExecute(() -> scene.insert(REQUESTER, 0))
+                .thenWaitUntil(() -> helper.assertValueEqual(scene.requests(TERMINAL_RACK).size(), 1,
+                        "an order at the terminal, before the switch"))
+                .thenExecute(() -> ConfigOverrides.set(helper, WareworksConfig.SERVER.packageModeEnabled, true))
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.stationCount(TERMINAL_RACK, STONE), 5L,
+                            "the open order is still delivered into the buffer");
+                    assertShows(helper, REQUESTER, RequesterStatus.IN_BUFFER);
+                })
+                .thenIdle(3 * poll())
+                .thenExecute(() -> {
+                    helper.assertTrue(scene.requests(TERMINAL_RACK).isEmpty(), "nothing more is ordered");
+                    helper.assertValueEqual(onlyOrder(helper, scene.requester(REQUESTER)).phase(),
+                            RequesterOrder.Phase.IN_BUFFER, "the one order waits in the buffer");
+                    scene.assertKept("after the order drained");
+                })
+                .thenSucceed();
+    }
+
     // --- batches ---------------------------------------------------------------------------------------------------
+
+    /** Switches package mode off again even when a package mode test fails. */
+    @AfterBatch(batch = PACKAGE_MODE_BATCH)
+    public static void restorePackageMode(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
+
+    /** Switches package mode off again even when the drain test fails. */
+    @AfterBatch(batch = PACKAGE_MODE_DRAIN_BATCH)
+    public static void restorePackageModeDrain(ServerLevel level) {
+        ConfigOverrides.restoreAll();
+    }
 
     /** Restores the dead-man switch even when the test of {@link #CONFIG_BATCH} fails. */
     @AfterBatch(batch = CONFIG_BATCH)

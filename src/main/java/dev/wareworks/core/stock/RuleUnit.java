@@ -12,30 +12,65 @@ package dev.wareworks.core.stock;
  * <p>
  * A fluid rule counts <b>millibuckets</b> of the container's fluid, and its three numbers act like an item rule's with
  * one difference: the minimum is only shown, because no production pattern makes fluid.
+ * <p>
+ * A <b>package</b> rule (issue #40, package mode) has a Create Package Filter as its ghost and counts the sealed packages
+ * whose address the filter's address matches, Create's wildcards included. Its maximum and reserve act like an item
+ * rule's, its minimum only signals (lamp, comparator, goggles): the warehouse never packs. It is written only while
+ * package mode is on and does nothing while it is off. Its saved name is {@value #PACKAGES_NAME}; a version that does not
+ * know it reads it as {@link #ITEMS}.
  */
 public enum RuleUnit {
     /** The rule counts the row's item in the racks. Every rule before M31. */
     ITEMS,
     /** The rule counts the fluid of the row's filled container in the fluid bays, in millibuckets. */
-    FLUID;
+    FLUID,
+    /**
+     * The rule counts the sealed Create packages whose address matches the address of the row's Package Filter
+     * (issue #40). Appended: the unit travels by ordinal in the keeper's screen state.
+     */
+    PACKAGES;
 
     /** The saved name of {@link #FLUID}; {@link #ITEMS} is never written, so its absence is what reads as items. */
     public static final String FLUID_NAME = "fluid";
+    /** The saved name of {@link #PACKAGES} (issue #40). */
+    public static final String PACKAGES_NAME = "packages";
 
-    /** The unit a save names: {@link #FLUID} for {@value #FLUID_NAME}, {@link #ITEMS} for anything else. */
+    /**
+     * The unit a save names: {@link #FLUID} for {@value #FLUID_NAME}, {@link #PACKAGES} for {@value #PACKAGES_NAME},
+     * {@link #ITEMS} for anything else, an absent name included.
+     */
     public static RuleUnit byName(String name) {
-        return FLUID_NAME.equals(name) ? FLUID : ITEMS;
+        if (FLUID_NAME.equals(name))
+            return FLUID;
+        return PACKAGES_NAME.equals(name) ? PACKAGES : ITEMS;
+    }
+
+    /** The name a save writes for this unit, or empty for {@link #ITEMS}, which is never written. */
+    public String savedName() {
+        return switch (this) {
+            case ITEMS -> "";
+            case FLUID -> FLUID_NAME;
+            case PACKAGES -> PACKAGES_NAME;
+        };
+    }
+
+    /** The unit with this ordinal, {@link #ITEMS} for any other number (a wire value from an older or newer side). */
+    public static RuleUnit byOrdinal(int ordinal) {
+        RuleUnit[] units = values();
+        return ordinal < 0 || ordinal >= units.length ? ITEMS : units[ordinal];
     }
 
     /**
      * {@code value} of a rule number moved from this unit to {@code target}, for a container that holds
-     * {@code capacityMb}: buckets of items become their millibuckets and back, rounded down. {@link StockRule#UNSET}
+     * {@code capacityMb}: buckets of items become their millibuckets and back, rounded down. A move between
+     * {@link #ITEMS} and {@link #PACKAGES} keeps the number (both count one by one). {@link StockRule#UNSET}
      * and every negative number stay {@link StockRule#UNSET}; a non-positive capacity changes nothing.
      */
     public long convert(long value, RuleUnit target, long capacityMb) {
         if (value < 0L)
             return StockRule.UNSET;
-        if (target == this || capacityMb <= 0L)
+        // Only a move into or out of millibuckets scales: items and packages are both counted one by one.
+        if ((target == FLUID) == (this == FLUID) || capacityMb <= 0L)
             return value;
         if (target == FLUID)
             return value > StockRule.MAX_AMOUNT / capacityMb ? StockRule.MAX_AMOUNT : value * capacityMb;

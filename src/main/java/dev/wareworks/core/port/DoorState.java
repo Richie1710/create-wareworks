@@ -34,14 +34,24 @@ public enum DoorState {
     /** The Packager carries a Stock Link, so it ignores redstone and the door never sends. Not selectable. */
     IGNORES_REDSTONE,
     /** The door's chunk is not loaded; the row is remembered from an earlier look. Not selectable. */
-    NOT_LOADED;
+    NOT_LOADED,
+    /**
+     * Package mode (issue #40): a requesting port with no Packager at its back. The stored box leaves it as itself,
+     * address and all, for the player's funnel, belt or Package Frogport to take. Selectable.
+     */
+    PLAIN_PORT,
+    /**
+     * Package mode (issue #40, owner decision E7): the door's Packager has no sign, and a Packager always clears a box's
+     * address and writes only its sign's, so a stored package would leave with no address at all. Not selectable.
+     */
+    STRIPS_ADDRESS;
 
     private static final String LANG_PREFIX = "gui.terminal.door.state.";
     private static final String DETAIL_PREFIX = "gui.terminal.door.detail.";
 
     /** Whether a player may choose a door in this state. */
     public boolean selectable() {
-        return this != IGNORES_REDSTONE && this != NOT_LOADED;
+        return this != IGNORES_REDSTONE && this != NOT_LOADED && this != STRIPS_ADDRESS;
     }
 
     /**

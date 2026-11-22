@@ -1,0 +1,14 @@
+{
+    Buffer: {
+        Items: [
+            {
+                Count: 5,
+                Item: {
+                    id: "minecraft:iron_ingot"
+                },
+                Slot: 0
+            }
+        ],
+        Size: 9
+    }
+}

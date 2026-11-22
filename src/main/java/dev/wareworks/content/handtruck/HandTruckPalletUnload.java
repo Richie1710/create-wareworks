@@ -3,6 +3,7 @@ package dev.wareworks.content.handtruck;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.RackBayBlockEntity;
@@ -103,7 +104,13 @@ final class HandTruckPalletUnload {
         boolean craneBringing = empty && !WarehouseRegistry.observeStorage(level, pos, bay).reservations()
                 .incoming().isEmpty();
         long capacity = bay.capacityFor(key);
-        switch (PalletIntoBay.verdict(empty, craneBringing, bay.storeFilterAllows(key.toStack()), capacity, count)) {
+        // Package mode (issue #40, critique M8): a pallet can come from any broken bay, so loose goods would otherwise
+        // enter package-mode storage whole through a bay.
+        boolean looseRefused = !PackageModeGate.admits(key);
+        switch (PalletIntoBay.verdict(looseRefused, empty, craneBringing, bay.storeFilterAllows(key.toStack()),
+                capacity, count)) {
+            case PACKAGES_ONLY:
+                return refuse(player, WareworksLang.HAND_TRUCK_BAY_PACKAGE_MODE);
             case NOT_EMPTY:
                 return refuse(player, WareworksLang.HAND_TRUCK_BAY_NOT_EMPTY);
             case CRANE_BRINGING:

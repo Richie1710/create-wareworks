@@ -12,8 +12,11 @@ import java.util.TreeMap;
 
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageRuleKeys;
 import dev.wareworks.content.station.KeeperRule;
 import dev.wareworks.core.address.RackPosition;
+import dev.wareworks.core.stock.PackageRules;
+import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.core.stock.StockRule;
 import dev.wareworks.core.stock.StockRules;
 
@@ -53,6 +56,11 @@ import dev.wareworks.core.stock.StockRules;
  * enforced in the parallel {@link #fluidRules()}, keyed by the fluid and counted in millibuckets, with the same "the
  * first rule governs" meaning among the fluid rows and the same cap: a fluid row at or beyond the aisle's rule cap is
  * left out of it, exactly as it is inert in {@link #rules()}.
+ * <p>
+ * <b>Package rules</b> (issue #40, package mode). A {@link RuleUnit#PACKAGES} row likewise keeps its place as an empty
+ * item rule, so it never caps or reserves its Package Filter as an item, and is held in the parallel
+ * {@link #packageRules()} with its filter's address, below the cap only. Whether they act at all is the controller's
+ * question (the world's package-mode switch): this copy only holds them.
  */
 final class AisleStockRules {
     /** Rules per keeper, in the aisle-wide order the flattened set inherits. */
@@ -68,6 +76,8 @@ final class AisleStockRules {
     private StockRules<FluidKey> fluidFlattened = StockRules.empty();
     /** Where each fluid row of {@link #fluidFlattened} stands in {@link #rules()}: aisle index → fluid index. */
     private Map<Integer, Integer> fluidIndexOf = Map.of();
+    /** The package rows below the cap, in aisle order, each with its aisle index (issue #40). */
+    private PackageRules packageFlattened = PackageRules.empty();
 
     /** The aisle's rules, in keeper order and row order. Never {@code null}; empty without keepers. */
     StockRules<ItemKey> rules() {
@@ -86,6 +96,15 @@ final class AisleStockRules {
      */
     StockRules<FluidKey> fluidRules() {
         return fluidFlattened;
+    }
+
+    /**
+     * The aisle's package rules (issue #40): one per {@link KeeperRule#packageAddress() package row} below the rule
+     * cap, in aisle order, each knowing its index in {@link #rules()}. Never {@code null}; empty without package rows,
+     * which is what every aisle outside package mode has.
+     */
+    PackageRules packageRules() {
+        return packageFlattened;
     }
 
     /**
@@ -187,9 +206,11 @@ final class AisleStockRules {
     private boolean rebuild() {
         StockRules<ItemKey> before = flattened;
         StockRules<FluidKey> fluidBefore = fluidFlattened;
+        PackageRules packagesBefore = packageFlattened;
         List<KeeperRule> rows = new ArrayList<>();
         List<StockRule<ItemKey>> all = new ArrayList<>();
         List<StockRule<FluidKey>> fluids = new ArrayList<>();
+        List<PackageRules.Rule> packages = new ArrayList<>();
         Map<Integer, Integer> fluidIndices = new HashMap<>();
         offsets.clear();
         for (Map.Entry<RackPosition, List<KeeperRule>> entry : perKeeper.entrySet()) {
@@ -202,6 +223,15 @@ final class AisleStockRules {
                 if (index >= StockRules.MAX_RULES)
                     break; // what StockRules would drop anyway; kept parallel to it
                 rows.add(row);
+                if (row.unit() == RuleUnit.PACKAGES) {
+                    // Like a fluid row: an empty item rule in its place, enforced as a rule on its address instead
+                    // (issue #40). A package row whose ghost lost its address governs nothing at all.
+                    all.add(StockRule.of(row.key()));
+                    Optional<String> address = row.packageAddress();
+                    if (index < cap && address.isPresent())
+                        packages.add(new PackageRules.Rule(index, address.get(), row.rule().withKey(address.get())));
+                    continue;
+                }
                 Optional<FluidKey> fluid = row.fluid();
                 if (fluid.isEmpty()) {
                     all.add(row.rule());
@@ -220,7 +250,9 @@ final class AisleStockRules {
         flattened = StockRules.of(all, cap);
         fluidFlattened = fluids.isEmpty() ? StockRules.empty() : StockRules.of(fluids);
         fluidIndexOf = Map.copyOf(fluidIndices);
-        return !flattened.equals(before) || !fluidFlattened.equals(fluidBefore);
+        packageFlattened = PackageRules.of(packages, PackageRuleKeys::matches);
+        return !flattened.equals(before) || !fluidFlattened.equals(fluidBefore)
+                || !packageFlattened.equals(packagesBefore);
     }
 
     @Override

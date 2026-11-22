@@ -93,7 +93,27 @@ public enum RequestRejection {
      * buckets into the warehouse, or draw the fluid off through a pipe at the back of a fluid bay, which needs no
      * container at all. Appended at the end: the constant travels by ordinal ({@code TerminalResultPayload}).
      */
-    NO_EMPTY_CONTAINERS;
+    NO_EMPTY_CONTAINERS,
+    /**
+     * Package mode is on (issue #40, a server setting read at world load): the warehouse makes nothing new and hands
+     * out sealed packages only. Given when the item would otherwise have been made, and for what a package-mode
+     * terminal no longer does (a fluid fill). Loose stock from before the switch is still served. Appended at the end:
+     * the constant travels by ordinal.
+     */
+    PACKAGE_MODE,
+    /**
+     * Package mode (issue #40, owner decision E7): a terminal click named a package door whose Packager has <b>no
+     * sign</b>. A Packager always clears a box's address and writes only its sign's (ADR-065 D3, as corrected), so the
+     * stored package would leave with no address at all. Answered, never remembered, like {@link #NOT_A_DOOR}.
+     */
+    DOOR_STRIPS_ADDRESS,
+    /**
+     * Package mode (issue #40, owner decision E11): a click on an address row named another destination than the
+     * terminal's open address order, which has one destination for all its boxes. The player waits for it or cancels
+     * it on its line. Answered, never remembered, and never given to a computer (computers ask for exact boxes).
+     * Appended at the end: the constant travels by ordinal.
+     */
+    PACKAGE_ORDER_ELSEWHERE;
 
     private static final String LANG_PREFIX = "gui.goggles.request_rejection.";
 

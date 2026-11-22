@@ -1,0 +1,13 @@
+{
+    Rules: [
+        {
+            Item: {
+                id: "minecraft:iron_ingot"
+            },
+            Max: 256L,
+            Min: 8L,
+            Reserve: 4L,
+            Row: 0
+        }
+    ]
+}

@@ -2041,6 +2041,84 @@ public final class WareworksLang {
     /** Action bar: a pallet was offered to a fluid bay. */
     public static final String HAND_TRUCK_BAY_WRONG_KIND = "hand_truck.bay_wrong_kind";
 
+    // --- package mode (issue #40) ----------------------------------------------------------------------------------
+
+    /** {@code "Takes only sealed packages"}: a warehouse input in package mode (issue #40). */
+    public static final String GOGGLES_INPUT_PACKAGES_ONLY = "gui.goggles.input_packages_only";
+    /** A Packager behind an input in package mode would open the boxes, so it is refused them (issue #40). */
+    public static final String GOGGLES_INPUT_PACKAGER_IN_PACKAGE_MODE = "gui.goggles.input_packager_in_package_mode";
+    /** {@code "Last loose item refused: %1$s"}: package mode (issue #40), the item an entrance of this input refused. */
+    public static final String GOGGLES_INPUT_LOOSE_REFUSED = "gui.goggles.input_loose_refused";
+    /** {@code "Loose items to take out by hand: %1$s"}: package mode (issue #40), what the backstop keeps here. */
+    public static final String GOGGLES_INPUT_LOOSE_HELD = "gui.goggles.input_loose_held";
+    /** {@code "Boxes over a maximum, to take out by hand: %1$s"}: package mode (issue #40), boxes held in an input. */
+    public static final String GOGGLES_INPUT_BOXES_HELD = "gui.goggles.input_boxes_held";
+    /** Package mode (issue #40): an empty rack bay without a Package Filter takes no box. */
+    public static final String GOGGLES_BAY_PACKAGE_MODE_NEEDS_FILTER = "gui.goggles.bay_package_mode_needs_filter";
+    /** Package mode (issue #40): a rack bay that holds loose goods from before the switch gives them out only. */
+    public static final String GOGGLES_BAY_PACKAGE_MODE_LOOSE = "gui.goggles.bay_package_mode_loose";
+    /** Package mode (issue #40): a collecting port fetches boxes only. */
+    public static final String GOGGLES_PORT_COLLECTS_PACKAGES = "gui.goggles.port_collects_packages";
+    /** {@code "Click for this many boxes, Shift for a buffer's worth, Ctrl for all"}: an address row (issue #40). */
+    public static final String TERMINAL_PACKAGE_GROUP_AMOUNT_HINT = "gui.terminal.package_group.amount_hint";
+    /** {@code "%1$s x%2$s"}: the address order's line when it is for one address (issue #40). */
+    public static final String TERMINAL_PACKAGE_ORDER_ADDRESS = "gui.terminal.package_order_address";
+    /** Action bar: a loose item offered by hand to a rack bay in package mode (issue #40). */
+    public static final String PACKAGE_MODE_HAND_REFUSED = "package_mode.hand_refused";
+    /** {@code "Took %1$s out of the input"}: an empty-hand click took held loose items out of an input (issue #40). */
+    public static final String PACKAGE_MODE_TOOK_OUT = "package_mode.took_out";
+    /** Action bar: a pallet of loose goods offered to a rack bay in package mode (issue #40). */
+    public static final String HAND_TRUCK_BAY_PACKAGE_MODE = "hand_truck.bay_package_mode";
+    /**
+     * {@code "Off in package mode"}: the terminal's crafting panel, Fetch, recipe viewer and clipboard
+     * list are off in package mode (issue #40, owner decision E6).
+     */
+    public static final String TERMINAL_PACKAGE_MODE_REFUSED = "gui.terminal.package_mode.refused";
+    /** {@code "Package mode: no buckets go out"}: the terminal's fluid cells are read-only in package mode (issue #40). */
+    public static final String TERMINAL_PACKAGE_MODE_FLUID = "gui.terminal.package_mode.fluid";
+    /**
+     * {@code "Package mode: nothing new is made here"}: the goggles of a production station, a Crafter Feeder and a
+     * Recipe Selector in package mode (issue #40).
+     */
+    public static final String GOGGLES_PACKAGE_MODE_NO_PRODUCTION = "gui.goggles.package_mode_no_production";
+    /** {@code "Packages → %1$s"}: the name of a package-mode terminal's row of one address (issue #40, E5). */
+    public static final String TERMINAL_PACKAGE_GROUP = "gui.terminal.package_group";
+    /** {@code "Packages without an address"}: the row of the boxes that carry no address (issue #40). */
+    public static final String TERMINAL_PACKAGE_GROUP_NO_ADDRESS = "gui.terminal.package_group_no_address";
+    /** {@code "Inside:"}: the head of an address row's content lines (issue #40). */
+    public static final String TERMINAL_PACKAGE_GROUP_INSIDE = "gui.terminal.package_group.inside";
+    /** {@code "and %1$s more"}: content kinds an address row's tooltip does not list (issue #40). */
+    public static final String TERMINAL_PACKAGE_GROUP_MORE = "gui.terminal.package_group.more";
+    /** {@code "Part of a network order"}: an address row with a box of a stock ticker's order (issue #40). */
+    public static final String TERMINAL_PACKAGE_GROUP_NETWORK_ORDER = "gui.terminal.package_group.network_order";
+    /** {@code "A click fetches sealed boxes of this address"}: an address row's click hint (issue #40, E11). */
+    public static final String TERMINAL_PACKAGE_GROUP_HINT = "gui.terminal.package_group.hint";
+    /** {@code "Loose stock from before package mode: take out only"}: the second section of the list (issue #40). */
+    public static final String TERMINAL_LOOSE_STOCK = "gui.terminal.loose_stock";
+    /** {@code "Packages x%1$s"}: the address order's line in the production section (issue #40, E11). */
+    public static final String TERMINAL_PACKAGE_ORDER = "gui.terminal.package_order";
+    /** {@code "%1$s of %2$s here"}: how far an address order to this terminal has got (issue #40). */
+    public static final String TERMINAL_PACKAGE_ORDER_HERE = "gui.terminal.package_order.here";
+    /** {@code "%1$s of %2$s at the door"}: how far an address order to a package door has got (issue #40). */
+    public static final String TERMINAL_PACKAGE_ORDER_DOOR = "gui.terminal.package_order.door";
+    /** {@code "%1$s taken out meanwhile"}: boxes of an address order somebody else took first (issue #40). */
+    public static final String TERMINAL_PACKAGE_ORDER_GONE = "gui.terminal.package_order.gone";
+    /**
+     * {@code "Boxes for %1$s wait outside: at their maximum"}: an input in package mode refused a box because a package
+     * rule's maximum leaves its address no room (issue #40, S5).
+     */
+    public static final String GOGGLES_INPUT_PACKAGE_AT_MAXIMUM = "gui.goggles.input_package_at_maximum";
+    /** {@code "Packages → %1$s"}: the name of a stock keeper row that counts packages (issue #40, S5). */
+    public static final String KEEPER_PACKAGES_ROW = "gui.keeper.packages_row";
+    /** {@code "Counts sealed packages addressed %1$s"}: the unit line of a package row's tooltip (issue #40). */
+    public static final String KEEPER_UNIT_PACKAGES = "gui.keeper.unit_packages";
+    /** {@code "Minimum is a signal only: the warehouse does not pack"}: a package row's minimum (issue #40). */
+    public static final String KEEPER_PACKAGES_MINIMUM_SIGNAL = "gui.keeper.packages_minimum_signal";
+    /** {@code "Package mode is off: this row does nothing"}: a package row in a world with the switch off (issue #40). */
+    public static final String KEEPER_PACKAGES_MODE_OFF = "gui.keeper.packages_mode_off";
+    /** {@code "Set an address on the Package Filter first"}: a blank Package Filter offered to a row (issue #40). */
+    public static final String KEEPER_PACKAGES_NEED_ADDRESS = "gui.keeper.packages_need_address";
+
     // --- warehouse remote (issue #44, ADR-077) -----------------------------------------------------------------------
 
     /** Action bar: {@code "Linked to the Warehouse Terminal at %1$s, %2$s, %3$s"}. */

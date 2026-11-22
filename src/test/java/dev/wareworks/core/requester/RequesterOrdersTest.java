@@ -259,7 +259,9 @@ class RequesterOrdersTest {
                 RequesterStatus.LINK_OUT_OF_RANGE, RequesterStatus.LINK_NOT_LOADED, RequesterStatus.LINK_GONE,
                 RequesterStatus.LINK_NOT_ALLOWED, RequesterStatus.NO_CONTROLLER, RequesterStatus.CANNON_FULL,
                 RequesterStatus.BUFFER_FULL, RequesterStatus.OUT_OF_STOCK, RequesterStatus.RESERVED,
-                RequesterStatus.CANNOT_MAKE, RequesterStatus.MAKING_STOPPED);
+                RequesterStatus.CANNOT_MAKE, RequesterStatus.MAKING_STOPPED,
+                // Package mode (issue #40): the player has to know why nothing is ordered, so the lamp is red.
+                RequesterStatus.PACKAGE_MODE);
         Set<RequesterStatus> lit = EnumSet.of(RequesterStatus.ORDERED, RequesterStatus.MAKING,
                 RequesterStatus.IN_BUFFER, RequesterStatus.GRACE, RequesterStatus.ORDERS_FULL);
         for (RequesterStatus status : RequesterStatus.values()) {

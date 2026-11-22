@@ -54,8 +54,57 @@ class DoorFactsTest {
             assertEquals(expected.isPresent(), facts.isDoor(), "a door exactly when there is a state: " + facts);
             expected.ifPresent(seen::add);
         }
-        // Every state but the one only memory gives is reachable from the facts.
+        // Every state but the one only memory gives and package mode's two is reachable from the facts of a look with
+        // package mode off: this table is the door rule before package mode, unchanged.
+        assertEquals(EnumSet.complementOf(EnumSet.of(DoorState.NOT_LOADED, DoorState.PLAIN_PORT,
+                DoorState.STRIPS_ADDRESS)), seen);
+    }
+
+    /**
+     * The whole truth table with package mode as the eighth fact (issue #40, owner decision E7, R-OUT-2): off, every
+     * answer is the one before package mode; on, a requesting port without a Packager is a door ({@code PLAIN_PORT},
+     * or {@code PORT_FULL}), and a Packager without a sign is {@code STRIPS_ADDRESS} right after a Stock Link.
+     */
+    @Test
+    void packageModeAddsThePlainPortAndRefusesTheSignlessPackager() {
+        Set<DoorState> seen = EnumSet.noneOf(DoorState.class);
+        for (int bits = 0; bits < 1 << (FACTS + 1); bits++) {
+            boolean member = bit(bits, 0);
+            boolean requestingPort = bit(bits, 1);
+            boolean packager = bit(bits, 2);
+            boolean linked = bit(bits, 3);
+            boolean addressed = bit(bits, 4);
+            boolean bufferFull = bit(bits, 5);
+            boolean boxWaiting = bit(bits, 6);
+            boolean packageMode = bit(bits, 7);
+            DoorFacts facts = new DoorFacts(member, requestingPort, packager, linked, addressed, bufferFull,
+                    boxWaiting, packageMode);
+            DoorFacts before = new DoorFacts(member, requestingPort, packager, linked, addressed, bufferFull,
+                    boxWaiting);
+
+            Optional<DoorState> expected;
+            if (!packageMode)
+                expected = before.state();
+            else if (!member || !requestingPort)
+                expected = Optional.empty();
+            else if (!packager)
+                expected = Optional.of(bufferFull ? DoorState.PORT_FULL : DoorState.PLAIN_PORT);
+            else if (linked)
+                expected = Optional.of(DoorState.IGNORES_REDSTONE);
+            else if (!addressed)
+                expected = Optional.of(DoorState.STRIPS_ADDRESS);
+            else
+                expected = before.state();
+
+            assertEquals(expected, facts.state(), facts.toString());
+            assertEquals(expected.isPresent(), facts.isDoor(), "a door exactly when there is a state: " + facts);
+            if (!packageMode)
+                assertEquals(before, facts, "the seven-fact look is the look with package mode off");
+            expected.ifPresent(seen::add);
+        }
         assertEquals(EnumSet.complementOf(EnumSet.of(DoorState.NOT_LOADED)), seen);
+        assertFalse(DoorState.STRIPS_ADDRESS.selectable(), "a signless Packager cannot be chosen in package mode");
+        assertTrue(DoorState.PLAIN_PORT.selectable(), "a plain port can");
     }
 
     /** Each of the three door facts alone is enough to make a position no door, whatever else holds. */
@@ -83,12 +132,15 @@ class DoorFactsTest {
                 new DoorFacts(true, true, true, false, true, false, false).state(), "and nothing in the way");
     }
 
-    /** Only a door that never sends and a door nobody can check are out of reach of a click. */
+    /**
+     * Only a door that never sends, a door nobody can check and (package mode) a door that would strip a package's
+     * address are out of reach of a click.
+     */
     @Test
-    void onlyAStockLinkAndAnUnloadedDoorAreUnselectable() {
+    void onlyAStockLinkAnUnloadedDoorAndAnAddressStripperAreUnselectable() {
         for (DoorState state : DoorState.values())
-            assertEquals(state != DoorState.IGNORES_REDSTONE && state != DoorState.NOT_LOADED, state.selectable(),
-                    state.name());
+            assertEquals(state != DoorState.IGNORES_REDSTONE && state != DoorState.NOT_LOADED
+                    && state != DoorState.STRIPS_ADDRESS, state.selectable(), state.name());
     }
 
     /** A state travels by name, and a name this build does not know is the safe answer: a row nobody can choose. */

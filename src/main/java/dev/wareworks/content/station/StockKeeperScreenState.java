@@ -112,6 +112,11 @@ public record StockKeeperScreenState(List<RowView> rows, boolean linked, StockRu
             return key.isPresent() && unit == RuleUnit.FLUID;
         }
 
+        /** Whether this row counts sealed packages by the address of its Package Filter (issue #40). */
+        public boolean countsPackages() {
+            return key.isPresent() && unit == RuleUnit.PACKAGES;
+        }
+
         /** Whether the screen offers this row the switch between counting fluid and counting items (M31). */
         public boolean canSwitchUnit() {
             return key.isPresent() && capacityMb > 0;
@@ -155,8 +160,9 @@ public record StockKeeperScreenState(List<RowView> rows, boolean linked, StockRu
             buffer.writeVarInt(restock.ordinal());
             buffer.writeBoolean(missingIngredient.isPresent());
             missingIngredient.ifPresent(value -> ItemKey.STREAM_CODEC.encode(buffer, value));
-            // M31 (network version 18): what the row counts and what its container holds.
-            buffer.writeBoolean(unit == RuleUnit.FLUID);
+            // M31 (network version 18): what the row counts and what its container holds. By ordinal since package mode
+            // added PACKAGES (issue #40, network version 28).
+            buffer.writeVarInt(unit.ordinal());
             buffer.writeVarInt(capacityMb);
         }
 
@@ -182,7 +188,7 @@ public record StockKeeperScreenState(List<RowView> rows, boolean linked, StockRu
                     : outcomes[restockOrdinal];
             Optional<ItemKey> missing = buffer.readBoolean() ? Optional.of(ItemKey.STREAM_CODEC.decode(buffer))
                     : Optional.empty();
-            RuleUnit unit = buffer.readBoolean() ? RuleUnit.FLUID : RuleUnit.ITEMS;
+            RuleUnit unit = RuleUnit.byOrdinal(buffer.readVarInt());
             int capacityMb = buffer.readVarInt();
             return new RowView(row, key, minimum, maximum, reserve, status, stocked, available, heldBack, shortfall,
                     unrecovered, restock, missing, unit, capacityMb);

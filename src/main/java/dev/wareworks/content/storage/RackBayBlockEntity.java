@@ -9,6 +9,7 @@ import com.simibubi.create.api.equipment.goggles.IHaveGoggleInformation;
 import com.simibubi.create.content.kinetics.belt.behaviour.DirectBeltInputBehaviour;
 import com.simibubi.create.content.kinetics.belt.transport.TransportedItemStack;
 import com.simibubi.create.content.logistics.filter.FilterItemStack;
+import com.simibubi.create.content.logistics.filter.PackageFilterItem;
 import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 
@@ -20,6 +21,8 @@ import dev.wareworks.content.controller.StorageMember;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.crane.head.TransferContexts;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageGatedItemHandler;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.core.inventory.InventorySnapshot;
 import dev.wareworks.core.storage.BayTier;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
@@ -155,6 +158,12 @@ public class RackBayBlockEntity extends SmartBlockEntity
      * chunk load and unload) is all the invalidation this block needs.
      */
     private final RackBayHandler handler = new RackBayHandler(new Rules());
+    /**
+     * The outer face in package mode (issue #40): the same handler with loose stacks refused on the way in. Handed out
+     * as the capability only while package mode is on ({@link #registerCapabilities}); the crane always uses
+     * {@link #handler}. Final, so the capability invalidation stays automatic.
+     */
+    private final IItemHandler packageModeView = new PackageGatedItemHandler(handler);
 
     /** The untrimmed filter stack {@link #resolvedFilter} was built from; {@code FilterItemStack.of} trims in place. */
     private ItemStack filterSource = ItemStack.EMPTY;
@@ -212,6 +221,9 @@ public class RackBayBlockEntity extends SmartBlockEntity
      * handler keeps a count-less {@link ItemKey} and hands back a copy.
      */
     private ItemStack insertFromBelt(TransportedItemStack transported, Direction side, boolean simulate) {
+        // Package mode (issue #40): a belt is outside automation like a funnel, so a loose stack stays on it.
+        if (!PackageModeGate.admits(transported.stack))
+            return transported.stack;
         return handler.insertItem(RackBayHandler.SLOT, transported.stack, simulate);
     }
 
@@ -522,6 +534,16 @@ public class RackBayBlockEntity extends SmartBlockEntity
             WareworksLang.translate(WareworksLang.GOGGLES_BAY_ACCEPTS_FIRST).style(ChatFormatting.DARK_GRAY)
                     .forGoggles(tooltip, 1);
         }
+        // Package mode (issue #40, owner decision E3, review fix): an empty bay takes a box only with a Package Filter,
+        // and a bay that still holds loose goods from before the switch gives them out and takes no more.
+        if (PackageModeGate.enabledOnClient()) {
+            if (stored.isPresent() && !PackageModeGate.isPackage(stored.get()))
+                WareworksLang.translate(WareworksLang.GOGGLES_BAY_PACKAGE_MODE_LOOSE).style(ChatFormatting.GOLD)
+                        .forGoggles(tooltip, 1);
+            else if (stored.isEmpty() && !(filter.getItem() instanceof PackageFilterItem))
+                WareworksLang.translate(WareworksLang.GOGGLES_BAY_PACKAGE_MODE_NEEDS_FILTER)
+                        .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
+        }
         int priority = storeFilterBehaviour.priority();
         if (priority != StorageFilterBehaviour.MIN_PRIORITY)
             WareworksLang.countLine(WareworksLang.GOGGLES_STORAGE_PRIORITY, priority).forGoggles(tooltip, 1);
@@ -790,7 +812,10 @@ public class RackBayBlockEntity extends SmartBlockEntity
      * final field, so NeoForge's automatic invalidation is enough.
      */
     public static void registerCapabilities(RegisterCapabilitiesEvent event) {
+        // Package mode (issue #40, design R-IN-5): its outer faces refuse loose stacks. The switch is a world-restart
+        // value, so a capability cached by a funnel or a hopper never outlives a change of it; off, this is the raw
+        // handler exactly as before.
         event.registerBlockEntity(Capabilities.ItemHandler.BLOCK, WareworksBlockEntityTypes.RACK_BAY.get(),
-                (be, side) -> be.handler);
+                (be, side) -> PackageModeGate.enabled() ? be.packageModeView : be.handler);
     }
 }

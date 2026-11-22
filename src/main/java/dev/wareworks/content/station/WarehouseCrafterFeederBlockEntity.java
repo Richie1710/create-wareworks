@@ -14,6 +14,7 @@ import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.kinetics.StaleOverstressCheck;
@@ -824,6 +825,10 @@ public class WarehouseCrafterFeederBlockEntity extends KineticBlockEntity implem
         else
             WareworksLang.translate(shown.status().langKey())
                     .style(shown.status().blocked() ? ChatFormatting.GOLD : ChatFormatting.GRAY)
+                    .forGoggles(tooltip, 1);
+        // Package mode (issue #40): it still lays the orders that were open when the world loaded, and no new one comes.
+        if (PackageModeGate.enabledOnClient())
+            WareworksLang.translate(WareworksLang.GOGGLES_PACKAGE_MODE_NO_PRODUCTION).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
         List<Component> kineticStats = new ArrayList<>();
         if (super.addToGoggleTooltip(kineticStats, isPlayerSneaking)) {

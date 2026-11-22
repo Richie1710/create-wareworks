@@ -64,11 +64,14 @@ final class TerminalCraftTransferHandler
     private final IRecipeTransferError cannotLay;
     /** The greyed-out "+" while the terminal's craft order locks the grid; its sentence is translated when drawn. */
     private final IRecipeTransferError gridLocked;
+    /** The greyed-out "+" in package mode (issue #40, E6): the panel is off, so nothing is laid. */
+    private final IRecipeTransferError packageMode;
 
     TerminalCraftTransferHandler(IRecipeTransferHandlerHelper helper) {
         Objects.requireNonNull(helper, "helper");
         cannotLay = helper.createInternalError();
         gridLocked = helper.createUserErrorWithTooltip(TerminalRecipeLay.gridLockedLine());
+        packageMode = helper.createUserErrorWithTooltip(TerminalRecipeLay.packageModeLine());
     }
 
     /** The terminal's menu, matched by JEI against the exact class of the open menu. */
@@ -101,6 +104,8 @@ final class TerminalCraftTransferHandler
             return cannotLay;
         if (TerminalRecipeLay.gridLocked(container))
             return gridLocked;
+        if (TerminalRecipeLay.packageMode())
+            return packageMode;
         if (!doTransfer)
             return null;
         List<List<ItemKey>> cells = new ArrayList<>(CraftGrid.SIZE);

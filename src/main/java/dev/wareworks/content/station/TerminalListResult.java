@@ -46,7 +46,12 @@ public enum TerminalListResult {
     /** The terminal is misaligned, outside a warehouse, or its controller is not loaded. */
     NO_AISLE,
     /** The player may not use this terminal (too far away, or the block is gone). */
-    OUT_OF_REACH;
+    OUT_OF_REACH,
+    /**
+     * Package mode is on (issue #40): the warehouse hands out sealed packages only, so no new clipboard order starts.
+     * An order that was already open when the world loaded keeps running and can still be answered or given up.
+     */
+    PACKAGE_MODE;
 
     private static final String LANG_PREFIX = "gui.terminal.list.result.";
 

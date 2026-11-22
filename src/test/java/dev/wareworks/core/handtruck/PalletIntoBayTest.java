@@ -33,6 +33,17 @@ class PalletIntoBayTest {
     }
 
     @Test
+    void packageModeRefusesALoosePalletBeforeAnythingElse() {
+        assertEquals(Verdict.PACKAGES_ONLY, PalletIntoBay.verdict(true, true, false, true, WOOD_COBBLESTONE, 1),
+                "a loose pallet into an empty bay that would take it");
+        assertEquals(Verdict.PACKAGES_ONLY, PalletIntoBay.verdict(true, false, true, false, 0, 4_097),
+                "and before every other refusal");
+        assertEquals(Verdict.FITS, PalletIntoBay.verdict(false, true, false, true, WOOD_COBBLESTONE, 1),
+                "a pallet of packages, or any pallet with package mode off, is judged as before");
+        assertEquals(Verdict.NOT_EMPTY, PalletIntoBay.verdict(false, false, false, true, WOOD_COBBLESTONE, 1));
+    }
+
+    @Test
     void theFirstRefusalWins() {
         assertEquals(Verdict.NOT_EMPTY, PalletIntoBay.verdict(false, true, false, 0, 4_097),
                 "a bay that is not empty says so before anything else");

@@ -39,6 +39,8 @@ import dev.wareworks.content.crane.head.InventoryGrabber;
 import dev.wareworks.content.fluid.FluidContainers;
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
+import dev.wareworks.content.packagemode.PackageRuleKeys;
 import dev.wareworks.content.station.HomePointStatus;
 import dev.wareworks.content.station.PackageHandover;
 import dev.wareworks.content.selector.RecipeSlip;
@@ -50,6 +52,7 @@ import dev.wareworks.content.station.TerminalFluidOutcome;
 import dev.wareworks.content.station.TerminalFluids;
 import dev.wareworks.content.station.TerminalRequestOutcome;
 import dev.wareworks.content.station.WarehouseHomePointBlockEntity;
+import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
@@ -97,6 +100,7 @@ import dev.wareworks.core.production.IngredientChoices;
 import dev.wareworks.core.production.NodeLine;
 import dev.wareworks.core.production.PlanBudget;
 import dev.wareworks.core.production.PlanLimits;
+import dev.wareworks.core.production.PackageModeDrain;
 import dev.wareworks.core.production.PlanNode;
 import dev.wareworks.core.production.PlanRefusal;
 import dev.wareworks.core.production.ProduciblePlanner;
@@ -121,7 +125,9 @@ import dev.wareworks.core.stock.RestockLimits;
 import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.RestockPlan;
 import dev.wareworks.core.stock.RestockPlanner;
+import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.content.station.KeeperRule;
+import dev.wareworks.core.stock.PackageRules;
 import dev.wareworks.core.stock.PriorityBreakdown;
 import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.stock.StockAvailability;
@@ -343,6 +349,31 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     private final SnapshotQueue<RackPosition> pendingCollections = new SnapshotQueue<>();
     /** The aisle's stock rules, copied from its warehouse stock keepers (M15, issue #3). <b>Saved</b>, see below. */
     private final AisleStockRules stockRules = new AisleStockRules();
+    /** Package mode's rules (issue #40): the address of each stored box, read once per key. Not saved. */
+    private final PackageRuleKeys.AddressMemo packageAddresses = new PackageRuleKeys.AddressMemo();
+    /** Boxes in the racks per address, as of {@link #packageStoredRevision} of the stock index. Not saved. */
+    private Map<String, Long> packageStoredByAddress = Map.of();
+    private long packageStoredRevision = Long.MIN_VALUE;
+    /**
+     * Boxes waiting in this warehouse's inputs per address, as of {@link #packageWaitingRevision} of
+     * {@code WarehouseInputBlockEntity#bufferRevision()}, and boxes carried in per address as of game tick
+     * {@link #packageInboundTick}: an input asks the package rules' room on every insert attempt (once per slot of a
+     * funnel, every tick for a box refused at a belt's end), and without these each attempt read every input's buffer
+     * and walked the reservation ledger (review fix, 2026-11-22). Not saved.
+     */
+    /** Door deliveries of address orders no loaded terminal claimed yet (review fix). Not saved. */
+    private final PendingDoorCredits pendingDoorCredits = new PendingDoorCredits();
+    private Map<String, Long> packageWaitingByAddress = Map.of();
+    private long packageWaitingRevision = Long.MIN_VALUE;
+    private Map<String, Long> packageInboundByAddress = Map.of();
+    private long packageInboundTick = Long.MIN_VALUE;
+    /**
+     * Package mode's drain ledger (issue #40, owner decision E2, review fix 2026-11-22): what each production order still
+     * lets in loose, booked down by every loose item that left an input. Not saved; empty while package mode is off.
+     */
+    private final PackageModeDrain<ItemKey> packageDrain = new PackageModeDrain<>();
+    /** The empty form of each filled container a production line delivered, read once per key. Not saved. */
+    private final Map<ItemKey, Optional<ItemKey>> packageContainerReturns = new HashMap<>();
     /**
      * The rules the <b>safety stop</b> is holding, by item (M15 part 2, issue #3). At most one rule governs an item,
      * so the item is the rule's identity here, and a pause survives a rule being edited into another keeper row.
@@ -978,6 +1009,23 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * Package mode's empty-bay rule (issue #40, owner decision E3): whether the crane must not put {@code key} into the
+     * storage location at {@code rack}. True only with package mode on, for a <b>package</b>, at an item rack bay that
+     * is <b>empty</b> (per index) and carries no Create Package Filter in its filter slot: a bay holds one item key and
+     * every box is its own key, so it would hold one box. A bay already holding that very box key, a bay with a Package
+     * Filter, a chest behind an interface and every loose key are untouched.
+     * <p>
+     * The planner's {@code storeExcluded}, so it applies to every path that stores into a location: the store plan,
+     * every reroute into storage and the optimizer's relocations. With package mode off it answers false after one
+     * config read, and nothing else is asked.
+     */
+    public boolean packageModeExcludes(RackPosition rack, ItemKey key) {
+        if (!PackageModeGate.enabled() || level == null || !PackageModeGate.isPackage(key))
+            return false;
+        return stock.countsAt(rack).isEmpty() && filters.isBayWithoutPackageFilter(rack, storeSettingsResolver);
+    }
+
+    /**
      * Reads the store settings of {@code rack} straight from its member — filter, priority, the two store rules of M28
      * and the fluid dedication of M30 ({@link AisleFilters#read}) — for the one lookup {@link AisleFilters} does per
      * location that was never read into the cache. All of them in one lookup on purpose: the planner may ask for any of
@@ -1335,6 +1383,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             identity = inventoryIdentity(attached, port.facing());
             ownStorage = sharedInventories.holds(identity);
             snapshot = ownStorage ? InventorySnapshot.empty() : port.collectSnapshot();
+            // Package mode (issue #40): a collecting port is an entrance, so the crane only ever sees the packages
+            // behind it and loose items stay in the player's machine. Off, the snapshot is the one it always was.
+            if (PackageModeGate.enabled())
+                snapshot = snapshot.retaining(PackageModeGate::isPackage);
         } catch (RuntimeException e) {
             if (snapshotFailures.tryLog(level.getGameTime()))
                 Wareworks.LOGGER.warn("Warehouse controller at {} could not read the inventory behind the port {}",
@@ -1761,6 +1813,18 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * ({@link FilterMatchCache#retain}), so the cache keeps exactly the aisle's filters and never evicts one in use.
      */
     public List<AislePattern> aislePatterns() {
+        // Package mode (issue #40, design R-PR-1): the warehouse makes nothing new, so no "make" offer, no makeable cell,
+        // no chain and no restock plan appears anywhere. The patterns stay in the stations, untouched.
+        if (PackageModeGate.enabled())
+            return List.of();
+        return stationPatterns();
+    }
+
+    /**
+     * {@link #aislePatterns()} whatever package mode says: what the stations hold. Only for telling a player why
+     * nothing is made ({@link #packageModeWouldMake}), never for planning.
+     */
+    private List<AislePattern> stationPatterns() {
         if (level == null || level.isClientSide || layout == null)
             return List.of();
         List<AislePattern> found = new ArrayList<>();
@@ -2272,7 +2336,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     private int startProductionPlan(ProductionPlan<ItemKey, RackPosition> plan, @Nullable UUID backingRequest) {
-        if (level == null || layout == null)
+        // Package mode's hard backstop (issue #40, R-PR-1): no production order is created, whoever asks. The patterns
+        // already answer empty, so this is only reached by a plan made from somewhere else.
+        if (level == null || layout == null || PackageModeGate.enabled())
             return 0;
         productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
         long now = level.getGameTime();
@@ -2579,6 +2645,73 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * The planner's hold on an input's items ({@code PlannerInput#storeHeld}): the Recipe Selector's quarantine
+     * ({@link #selectorStoreHeld}, ADR-085) or package mode's backstop ({@link #packageModeHolds}). With package mode
+     * off this is exactly {@link #selectorStoreHeld}.
+     */
+    public boolean storeHeld(RackPosition input, ItemKey key) {
+        return selectorStoreHeld(input, key) || packageModeHolds(key);
+    }
+
+    /**
+     * Package mode's backstop (issue #40, design R-IN-6): whether loose items of {@code key} must stay in whichever
+     * input holds them instead of being stored. True for every loose key that no drain allowance covers
+     * ({@link #packageModeDrainAllowance}); never for a package, and never with package mode off. Whatever slipped
+     * past an entrance's gate, was in a buffer when the world loaded with the mode on, or was rerouted into an input as
+     * a crane's leftover therefore waits there, visible in the goggles, until a player takes it out with an empty hand
+     * ({@code WarehouseInputBlockEntity#takeQuarantined}). It is never stored and never lost.
+     */
+    public boolean packageModeHolds(ItemKey key) {
+        if (!PackageModeGate.enabled() || PackageModeGate.isPackage(key) || level == null || level.isClientSide)
+            return false;
+        // One pass over the orders and no copy of them: the planner asks this for every key of every input it plans.
+        return packageDrainRemaining(key) <= 0L;
+    }
+
+    /**
+     * What the drain rule still lets in and stores of the loose key {@code key} ({@link PackageModeDrain#remaining}):
+     * the results the open and ended orders' machines can still give back, their empty containers and the rests of
+     * forgotten orders, minus everything already let through. Only asked with package mode on.
+     */
+    private long packageDrainRemaining(ItemKey key) {
+        return packageDrain.remaining(productionOrders.view(), key, this::emptyContainerOf);
+    }
+
+    /** The empty form of the filled container {@code key} (a water bucket's bucket), read once per key. */
+    private Optional<ItemKey> emptyContainerOf(ItemKey key) {
+        Optional<ItemKey> known = packageContainerReturns.get(key);
+        if (known != null)
+            return known;
+        Optional<ItemKey> empty = FluidContainers.carriesFluid(key)
+                ? FluidContainers.drained(key).map(FluidContainers.Drained::emptied)
+                : Optional.empty();
+        packageContainerReturns.put(key, empty);
+        return empty;
+    }
+
+    /**
+     * Package mode's cap on storing a loose key (review fix, 2026-11-22): what the drain rule still lets through, minus
+     * what a transport job is already carrying in. {@link Long#MAX_VALUE} with package mode off, on a client and for a
+     * package. The planner keeps whatever is over it in its input, where it waits for the drain or a hand.
+     */
+    private long looseDrainHeadroom(ItemKey key) {
+        if (!PackageModeGate.enabled() || level == null || level.isClientSide || PackageModeGate.isPackage(key))
+            return Long.MAX_VALUE;
+        return Math.max(0L, packageDrainRemaining(key) - inbound(key));
+    }
+
+    /**
+     * Package mode's drain rule ({@link PackageModeDrain}, owner decision E2): the loose results the production orders
+     * of this aisle still let in, per result key. Empty with package mode off or on a client. Read live: an input
+     * keeps its own copy for a few ticks, so a refused funnel asking every tick does not land here.
+     */
+    public Map<ItemKey, Long> packageModeDrainAllowance() {
+        if (!PackageModeGate.enabled() || level == null || level.isClientSide)
+            return Map.of();
+        return Map.copyOf(packageDrain.allowance(productionOrders.view(), this::emptyContainerOf));
+    }
+
+    /**
      * Server: whether the quarantine keeps the items of {@code key} in the Warehouse Input at the world position
      * {@code input} ({@link #selectorStoreHeld}), so a player may take them out of it by hand (ADR-085 I7, design §8:
      * the hold asks the player to). False for any other input or key.
@@ -2834,9 +2967,35 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             onProductionOrderEnded(timedOut);
             changed = true;
         }
-        changed |= productionOrders.prune(now, FINISHED_ORDER_RETENTION_TICKS) > 0;
+        changed |= pruneProductionOrders(now);
         if (changed)
             setChanged();
+    }
+
+    /**
+     * Forgets the finished orders whose retention ran out ({@link ProductionOrders#prune}). With package mode on, what a
+     * forgotten order still lets in stays in the drain ledger until it is used up (review fix: a slow line's late
+     * results are not refused once the order is gone); with it off this is the prune alone.
+     */
+    private boolean pruneProductionOrders(long now) {
+        if (!PackageModeGate.enabled()) {
+            if (!packageDrain.isEmpty())
+                packageDrain.clear();
+            return productionOrders.prune(now, FINISHED_ORDER_RETENTION_TICKS) > 0;
+        }
+        List<ProductionOrder<ItemKey, RackPosition>> finished = new ArrayList<>();
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.view()) {
+            if (!order.isOpen())
+                finished.add(order);
+        }
+        if (productionOrders.prune(now, FINISHED_ORDER_RETENTION_TICKS) <= 0)
+            return false;
+        Set<UUID> live = new HashSet<>();
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.view())
+            live.add(order.id());
+        finished.removeIf(order -> live.contains(order.id()));
+        packageDrain.forget(finished, live, this::emptyContainerOf);
+        return true;
     }
 
     /**
@@ -3355,8 +3514,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         StockLevels levels = stockLevelsOf(key);
         long inStock = levels.available();
         // What this taker may have of that stock: everything for a player, everything above a rule's reserve for the
-        // warehouse's own automation (M15). Without a rule for the key the two are the same number.
-        long claimable = stockRules().availableTo(access, key, inStock);
+        // warehouse's own automation (M15). Without a rule for the key the two are the same number. In package mode a
+        // package rule's reserve over the box's address group bounds automation as well (issue #40); with it off, or
+        // for anything but a box, takerStock is inStock.
+        long takerStock = Math.min(inStock, packageAvailableTo(access, key));
+        long claimable = stockRules().availableTo(access, key, takerStock);
         // One pass over the aisle's patterns for every production question this request asks — what could be made, at
         // which station, and what its ingredients are still worth. Asking each of them separately resolved every
         // production station's block entity again per click (§3.5.2).
@@ -3395,7 +3557,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         long producible = plan == null ? 0L : plan.rootPromise();
         RequestQueue.AddResult<ItemKey, BlockPos> added = requests.add(key, amount, outputPos.immutable(),
                 StockAvailability.forRequest(stockRules(), access,
-                        candidate -> candidate.equals(key) ? inStock : availableStock(candidate), key, producible),
+                        candidate -> candidate.equals(key) ? takerStock : availableStock(candidate), key, producible),
                 maxRemainingPerRequest);
         if (added.request().isEmpty()) {
             return TerminalRequestOutcome.of(switch (added.rejection().orElseThrow()) {
@@ -3500,9 +3662,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             return RequestRejection.PRODUCTION_PAUSED;
         // A reserve is checked next and only for the warehouse's own automation: the items are there, they are just
         // not for it (M15). A player is never held back, so they can never see this reason.
+        if (access == StockAccess.AUTOMATION && availableStock(key) > 0 && availableTo(access, key) == 0)
+            return RequestRejection.RESERVED;
+        // Package mode (issue #40): the item would have been made, but nothing is made in package mode. Said instead of
+        // "not in stock", because the cure is a different one: the server setting, not a missing item.
+        if (packageModeWouldMake(key))
+            return RequestRejection.PACKAGE_MODE;
         if (access == StockAccess.AUTOMATION) {
-            if (availableStock(key) > 0 && availableTo(access, key) == 0)
-                return RequestRejection.RESERVED;
             // The same answer when it is the ingredients that are reserved: without a reserve this aisle could make
             // the item, so "not in stock" would send a player looking for something the warehouse is not missing.
             if (producibleAmount(key, patterns, availabilityLookup()) > 0)
@@ -3521,6 +3687,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 return RequestRejection.PRODUCTION_BUSY;
         }
         return RequestRejection.NOT_IN_STOCK;
+    }
+
+    /**
+     * Whether package mode is what keeps {@code key} from being made: the mode is on and a pattern of this aisle's
+     * stations makes it. Read only when a request is refused, so the walk over the stations costs nothing while the
+     * warehouse can serve.
+     */
+    public boolean packageModeWouldMake(ItemKey key) {
+        if (!PackageModeGate.enabled())
+            return false;
+        for (AislePattern candidate : stationPatterns()) {
+            if (candidate.pattern().produces(key))
+                return true;
+        }
+        return false;
     }
 
     /**
@@ -3632,6 +3813,20 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public long heldCount(ItemKey key) {
         Objects.requireNonNull(key, "key");
         return stock.count(key) + dispatch.relocationsByKey().getOrDefault(key, RelocationStock.Moving.NONE).carried();
+    }
+
+    /**
+     * The storage priority a retrieval of {@code key} reads first (issue #47, ADR-078): the lowest priority among the
+     * locations that hold it, {@link AisleFilters#NO_PRIORITY} for a key the index does not hold. A package-mode
+     * terminal picks the boxes of an address in this order (issue #40, {@code core.terminal.PackagePick}); one lookup
+     * per location of the key.
+     */
+    public int retrievalPriority(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        int lowest = Integer.MAX_VALUE;
+        for (LocationCount<RackPosition> at : stock.locationsOf(key))
+            lowest = Math.min(lowest, storePriorityAt(at.location()));
+        return lowest == Integer.MAX_VALUE ? AisleFilters.NO_PRIORITY : lowest;
     }
 
     /**
@@ -4676,6 +4871,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             evaluated = List.copyOf(overlaid);
         }
         evaluated = withFluidEvaluations(evaluated);
+        evaluated = withPackageEvaluations(evaluated);
         ruleEvaluations = evaluated;
         ruleEvaluationTick = now;
         ruleEvaluationOf = rules;
@@ -5258,7 +5454,9 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             clearRestockOutcomes();
             return;
         }
-        RestockLimits limits = WareworksConfig.restockLimits();
+        // Package mode (issue #40): automatic restocking is off, which every surface reports with package mode as the
+        // reason (RestockOutcome.PACKAGE_MODE, review fix); the rules keep counting, capping and holding back.
+        RestockLimits limits = PackageModeGate.enabled() ? RestockLimits.OFF : WareworksConfig.restockLimits();
         // Resolved once for the whole pass, and only when an order could actually come of it.
         List<AislePattern> patterns = anyShort && limits.enabled() ? aislePatterns() : List.of();
         Map<ItemKey, List<ProductionPattern<ItemKey>>> byResult = patternsByResult(patterns);
@@ -5279,7 +5477,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // The order pays its filter cells as the decision measured them: without the kinds another rule calls for.
         IngredientChoices<ItemKey> payWith = choices.excluding(RestockPlanner.calledFor(inputs));
         plan.order().ifPresent(decision -> startRestockOrder(decision, patterns, available, payWith));
-        applyRestockOutcomes(plan);
+        applyRestockOutcomes(plan, limits == RestockLimits.OFF && PackageModeGate.enabled());
     }
 
     /** The patterns of {@code patterns} grouped by the item they make, in aisle order. */
@@ -5303,7 +5501,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private boolean startRestockOrder(RestockDecision<ItemKey> decision, List<AislePattern> patterns,
             ToLongFunction<ItemKey> available, IngredientChoices<ItemKey> choices) {
-        if (level == null || layout == null || decision.pattern().isEmpty())
+        if (level == null || layout == null || decision.pattern().isEmpty() || PackageModeGate.enabled())
             return false;
         ProductionPattern<ItemKey> chosen = decision.pattern().get();
         RackPosition station = null;
@@ -5385,12 +5583,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * rules are all met holds an empty map, and the map instance is only replaced when something really changed —
      * which is what keeps the per-tick evaluation cache valid.
      */
-    private void applyRestockOutcomes(RestockPlan<ItemKey> plan) {
+    private void applyRestockOutcomes(RestockPlan<ItemKey> plan, boolean packageMode) {
         Map<ItemKey, RestockOutcome> next = new LinkedHashMap<>();
         Map<ItemKey, ItemKey> missing = new LinkedHashMap<>();
         for (RestockDecision<ItemKey> decision : plan.decisions()) {
-            if (decision.outcome() != RestockOutcome.NOT_GOVERNING && decision.outcome() != RestockOutcome.SATISFIED)
-                next.put(decision.key(), decision.outcome());
+            RestockOutcome outcome = packageMode && decision.outcome() == RestockOutcome.DISABLED
+                    ? RestockOutcome.PACKAGE_MODE : decision.outcome();
+            if (outcome != RestockOutcome.NOT_GOVERNING && outcome != RestockOutcome.SATISFIED)
+                next.put(decision.key(), outcome);
             decision.missingIngredient().ifPresent(item -> missing.put(decision.key(), item));
         }
         if (!next.equals(restockOutcomes))
@@ -5678,7 +5878,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     public long availableTo(StockAccess access, ItemKey key) {
         Objects.requireNonNull(access, "access");
         Objects.requireNonNull(key, "key");
-        return stockRules().availableTo(access, key, availableStock(key));
+        // Package mode (issue #40): a package rule's reserve holds boxes of its address group back from automation too.
+        return Math.min(stockRules().availableTo(access, key, availableStock(key)), packageAvailableTo(access, key));
     }
 
     /**
@@ -5695,10 +5896,195 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public long storeHeadroom(ItemKey key) {
         Objects.requireNonNull(key, "key");
+        // Package mode (issue #40): a box is also held to the maximum of every package rule its address matches. A single
+        // config read and nothing else with the switch off.
+        long packages = Math.min(packageHeadroom(key, false), looseDrainHeadroom(key));
         Optional<StockRule<ItemKey>> rule = stockRules().ruleFor(key);
         if (rule.isEmpty())
+            return packages;
+        return Math.min(packages,
+                rule.get().headroom(stock.count(key), inbound(key), productionOrders.outstandingResult(key)));
+    }
+
+    // --- package rules (issue #40, package mode, design §7) ---------------------------------------------------------
+
+    /**
+     * The package rules that act right now: the aisle's {@link RuleUnit#PACKAGES} rows while the world's package-mode
+     * switch is on, none while it is off (the rows are kept, and do nothing). Server only.
+     */
+    private PackageRules activePackageRules() {
+        if (!PackageModeGate.enabled() || level == null || level.isClientSide)
+            return PackageRules.empty();
+        return stockRules.packageRules();
+    }
+
+    /**
+     * How many more boxes like {@code key} may come in under the package rules' maxima: the least headroom of every
+     * matching rule, each measured over its whole address group as {@code maximum - stored - inbound}, and with
+     * {@code countInputs} also minus the boxes of the group that already wait in this warehouse's inputs.
+     * {@link Long#MAX_VALUE} for anything but a package, without a matching rule with a maximum, and with package mode
+     * off.
+     * <p>
+     * What a transport job is carrying in is counted (design critique m4), so several cranes or inputs cannot overshoot a
+     * cap by a box each. A box that a job has reserved room for but not picked up yet is counted twice at the input gate
+     * (inbound and waiting), which only ever refuses a box a moment early: it waits outside and is offered again.
+     */
+    private long packageHeadroom(ItemKey key, boolean countInputs) {
+        PackageRules rules = activePackageRules();
+        if (rules.isEmpty() || !PackageModeGate.isPackage(key))
             return Long.MAX_VALUE;
-        return rule.get().headroom(stock.count(key), inbound(key), productionOrders.outstandingResult(key));
+        String address = packageAddresses.of(key);
+        if (!rules.capsAny(address))
+            return Long.MAX_VALUE;
+        long[] waiting = countInputs ? rules.perRule(packagesWaitingInInputs()) : null;
+        return rules.headroom(address, rules.perRule(packagesStoredByAddress()), rules.perRule(packagesInbound()),
+                waiting);
+    }
+
+    /**
+     * Package mode's maximum at a warehouse input's entrance (issue #40, design critique M5): how many boxes like
+     * {@code key} the input may still take in, {@link Long#MAX_VALUE} when no package rule caps them. A box over the
+     * cap is refused at the entrance and waits with its sender (belt, funnel, Frogport), where a Package Filter can route
+     * it elsewhere, instead of taking one of the input's few slots and blocking every other address behind it.
+     */
+    public long packageAdmitRoom(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        return packageHeadroom(key, true);
+    }
+
+    /**
+     * How many boxes like {@code key} the given taker may still be promised under the package rules' reserves:
+     * {@link Long#MAX_VALUE} for a player, for anything but a package, without a matching reserve and with package mode
+     * off; otherwise the least that every matching rule leaves above its reserve of its group's available boxes.
+     */
+    private long packageAvailableTo(StockAccess access, ItemKey key) {
+        if (access == StockAccess.PLAYER)
+            return Long.MAX_VALUE;
+        PackageRules rules = activePackageRules();
+        if (rules.isEmpty() || !PackageModeGate.isPackage(key))
+            return Long.MAX_VALUE;
+        String address = packageAddresses.of(key);
+        if (!rules.reservesAny(address))
+            return Long.MAX_VALUE;
+        return rules.availableTo(access, address, rules.perRule(packagesAvailableByAddress(itemPromisedByKey())));
+    }
+
+    /** Boxes in the racks per address; rebuilt only when the stock index changed (one pass over its totals). */
+    private Map<String, Long> packagesStoredByAddress() {
+        long revision = stock.revision();
+        if (revision == packageStoredRevision)
+            return packageStoredByAddress;
+        Map<String, Long> byAddress = new HashMap<>();
+        for (Map.Entry<ItemKey, Long> entry : stock.totals().entrySet()) {
+            if (PackageModeGate.isPackage(entry.getKey()))
+                byAddress.merge(packageAddresses.of(entry.getKey()), entry.getValue(), Long::sum);
+        }
+        packageStoredByAddress = Map.copyOf(byAddress);
+        packageStoredRevision = revision;
+        return packageStoredByAddress;
+    }
+
+    /**
+     * Boxes a transport job is carrying in per address: the room reserved for each box key ({@link #inbound}), from one
+     * walk over the reservation ledger.
+     */
+    private Map<String, Long> packagesInbound() {
+        long now = level == null ? Long.MIN_VALUE : level.getGameTime();
+        if (level != null && now == packageInboundTick)
+            return packageInboundByAddress;
+        packageInboundByAddress = readPackagesInbound();
+        packageInboundTick = now;
+        return packageInboundByAddress;
+    }
+
+    /** {@link #packagesInbound}, read now: one walk over the reservation ledger. */
+    private Map<String, Long> readPackagesInbound() {
+        Set<ItemKey> boxes = new HashSet<>();
+        for (Reservation<ItemKey, RackPosition> reservation : dispatch.reservations().reservations()) {
+            if (reservation.kind() == Reservation.Kind.CAPACITY && PackageModeGate.isPackage(reservation.key()))
+                boxes.add(reservation.key());
+        }
+        if (boxes.isEmpty())
+            return Map.of();
+        Map<String, Long> byAddress = new HashMap<>();
+        for (ItemKey box : boxes)
+            byAddress.merge(packageAddresses.of(box), inbound(box), Long::sum);
+        return byAddress;
+    }
+
+    /**
+     * Boxes waiting in this warehouse's loaded inputs per address. Read from their buffers only when an input's buffer
+     * changed, loaded or went away since the last read ({@link WarehouseInputBlockEntity#bufferRevision()}); a refused
+     * funnel that asks again reads the kept answer.
+     */
+    private Map<String, Long> packagesWaitingInInputs() {
+        if (level == null || layout == null)
+            return Map.of();
+        long revision = WarehouseInputBlockEntity.bufferRevision();
+        if (revision == packageWaitingRevision)
+            return packageWaitingByAddress;
+        packageWaitingByAddress = readPackagesWaitingInInputs();
+        packageWaitingRevision = revision;
+        return packageWaitingByAddress;
+    }
+
+    /** {@link #packagesWaitingInInputs}, read now from every loaded input's buffer. */
+    private Map<String, Long> readPackagesWaitingInInputs() {
+        Map<String, Long> byAddress = new HashMap<>();
+        for (LocationRecord record : inputStations()) {
+            BlockPos pos = layout.rackPos(record.position());
+            if (!level.isLoaded(pos) || !(level.getBlockEntity(pos) instanceof WarehouseInputBlockEntity input))
+                continue;
+            for (Map.Entry<ItemKey, Long> entry : input.bufferedItems().totals().entrySet()) {
+                if (PackageModeGate.isPackage(entry.getKey()))
+                    byAddress.merge(packageAddresses.of(entry.getKey()), entry.getValue(), Long::sum);
+            }
+        }
+        return byAddress;
+    }
+
+    /**
+     * Boxes a new request could still be promised per address: per stored box key what {@link #availableStock} would
+     * answer, with what the open requests owe ({@code promised}) collected once for the whole pass.
+     */
+    private Map<String, Long> packagesAvailableByAddress(Map<ItemKey, Long> promised) {
+        Map<String, Long> byAddress = new HashMap<>();
+        for (Map.Entry<ItemKey, Long> entry : stock.totals().entrySet()) {
+            ItemKey box = entry.getKey();
+            if (!PackageModeGate.isPackage(box))
+                continue;
+            long available = stockLevelsOf(box, promised.getOrDefault(box, 0L)).available();
+            if (available > 0L)
+                byAddress.merge(packageAddresses.of(box), available, Long::sum);
+        }
+        return byAddress;
+    }
+
+    /**
+     * {@code evaluated} with every <b>package row</b> judged as the package rule it is (issue #40): like a fluid row
+     * ({@link #withFluidEvaluations}), the item set holds it as an empty placeholder, which reads "no limit set"; here
+     * it is replaced at the same aisle index by its status over its address group, in boxes. Its minimum is a signal
+     * only: nothing is ever restocked for it. With package mode off nothing is replaced, so a package row stays the
+     * inert placeholder.
+     */
+    private List<StockRuleEvaluation<ItemKey>> withPackageEvaluations(List<StockRuleEvaluation<ItemKey>> evaluated) {
+        PackageRules rules = activePackageRules();
+        if (rules.isEmpty())
+            return evaluated;
+        long[] stocked = rules.perRule(packagesStoredByAddress());
+        long[] inbound = rules.perRule(packagesInbound());
+        long[] available = rules.perRule(packagesAvailableByAddress(itemPromisedByKey()));
+        List<StockRuleEvaluation<ItemKey>> merged = new ArrayList<>(evaluated);
+        for (int position = 0; position < rules.size(); position++) {
+            int index = rules.rule(position).index();
+            Optional<KeeperRule> row = stockRules.configuredAt(index);
+            if (row.isEmpty() || index >= merged.size())
+                continue;
+            StockLevels levels = rules.levelsOf(position, stocked, inbound, available);
+            merged.set(index, new StockRuleEvaluation<>(index, row.get().rule(), rules.statusOf(position, levels),
+                    levels));
+        }
+        return List.copyOf(merged);
     }
 
     /**
@@ -5973,6 +6359,48 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         }
     }
 
+    /**
+     * A delivery into a <b>package door</b> (issue #40, owner decision E11): the address order of a package-mode
+     * terminal that sent boxes there learns that they arrived, which its own buffer never sees. The terminals that run
+     * an order are the known list terminals, so this is at most {@value #MAX_LIST_TERMINALS} block entity lookups, and
+     * none at all while no terminal of this warehouse has an order. A terminal that is not loaded misses the credit: its
+     * order then finds the request gone and the box no longer in stock at its next pass, and counts it as taken.
+     */
+    private void creditPackageDoorDelivery(UUID requestId, int counted) {
+        if (listTerminalsDirty && PackageModeGate.enabled()) {
+            listTerminalsDirty = false;
+            refreshListTerminals(layout);
+        }
+        boolean unloadedTerminal = false;
+        for (BlockPos pos : listTerminals) {
+            if (!level.isLoaded(pos)) {
+                unloadedTerminal = true;
+                continue;
+            }
+            if (level.getBlockEntity(pos) instanceof WarehouseTerminalBlockEntity terminal
+                    && terminal.creditPackageDoorDelivery(requestId, counted, level.getGameTime())) {
+                listTerminalsDirty = true;
+                return;
+            }
+        }
+        // Review fix (2026-11-22): the order this delivery belongs to may sit in a terminal whose chunk is not loaded.
+        // Its pass forgets a request that is no longer open and would ask for the box again, so the credit is kept
+        // here until that terminal claims it at its next pass (claimPendingDoorCredits). Only in package mode and only
+        // while a terminal of the aisle is unloaded; bounded in count and age, never saved.
+        if (unloadedTerminal && PackageModeGate.enabled())
+            pendingDoorCredits.remember(requestId, counted, level.getGameTime());
+    }
+
+    /**
+     * Server, a terminal's address-order pass (issue #40): hands {@code claim} every door delivery that no loaded
+     * terminal claimed when it arrived ({@link #creditPackageDoorDelivery}); a credit {@code claim} accepts is
+     * forgotten, one it does not stays for another terminal until it is too old.
+     */
+    public void claimPendingDoorCredits(PendingDoorCredits.Claim claim) {
+        if (level != null && !level.isClientSide)
+            pendingDoorCredits.claim(claim, level.getGameTime());
+    }
+
     // --- crane reports (M3) --------------------------------------------------------------------------------------
 
     /** Reports are accepted from the linked dock and from every other crane of this warehouse (issue #14). */
@@ -6030,9 +6458,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 // The one moment a clipboard order learns that items really arrived, which is also what ticks the
                 // entry off and makes the next portion due (M23, issue #19): the physical drop into this terminal's
                 // buffer. A delivery no list order was waiting for is claimed as nothing (ListOrder#credit).
-                if (counted > 0 && level.getBlockEntity(targetPos) instanceof WarehouseTerminalBlockEntity terminal
-                        && terminal.creditListDelivery(requestId.get(), counted, level.getGameTime()))
-                    listTerminalsDirty = true;
+                if (counted > 0 && level.getBlockEntity(targetPos) instanceof WarehouseTerminalBlockEntity terminal) {
+                    if (terminal.creditListDelivery(requestId.get(), counted, level.getGameTime()))
+                        listTerminalsDirty = true;
+                } else if (counted > 0)
+                    creditPackageDoorDelivery(requestId.get(), counted);
             }
         }
         // A supply job carries the ingredient line of a production order instead of a request (§3.5, ADR-024): this is
@@ -6054,6 +6484,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // collects them out of the crafter's output chest has to see its product arrive, or it times out and the safety
         // stop fires for no reason. This single line is what makes "collecting closes the production loop" true rather
         // than decorative.
+        // Package mode's drain (issue #40, review fix): a loose item that left an input is booked against what the drain
+        // rule still lets through, before an order is credited with the same arrival (PackageModeDrain#consume).
+        if (job.type().bringsItemsIn() && delivered > 0 && (job.targetKind() == LocationKind.STORAGE
+                || job.targetKind() == LocationKind.OUTPUT) && PackageModeGate.enabled()
+                && !PackageModeGate.isPackage(job.key()))
+            packageDrain.consume(productionOrders.view(), job.key(), delivered, this::emptyContainerOf);
         if (job.type().bringsItemsIn() && job.targetKind() == LocationKind.STORAGE && delivered > 0)
             // A Recipe Selector order counts only what came out of its own return input (ADR-085, design §3.5), so the
             // store job says where from; a collected arrival never completes one.

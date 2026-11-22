@@ -8,7 +8,9 @@ import java.util.Optional;
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.TerminalFluids;
+import dev.wareworks.core.inventory.KeyCount;
 import dev.wareworks.core.stock.StockRuleStatus;
+import dev.wareworks.core.terminal.PackageGroupSummary;
 import dev.wareworks.core.terminal.StockCount;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -28,6 +30,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * ({@link TerminalFluids}) whenever they changed, and nothing — one zero byte — when they did not. A warehouse has few
  * fluids, so a diff would cost more than it saves; the menu compares the half by value and the screen replaces its
  * own copy with every one it is sent. Only the first page of a split push carries it.
+ * <p>
+ * <b>Package groups</b> (issue #40, {@code WareworksNetwork.VERSION} {@code "28"}): every entry ends with one flag, and
+ * the row of an address of a package-mode warehouse carries its {@link PackageGroupSummary} behind it: the box count,
+ * the number of content kinds, the network-order flag and at most {@value PackageGroupSummary#MAX_CONTENTS} content
+ * lines. Every other entry costs that one zero byte more.
  *
  * @param containerId the menu the payload belongs to; the screen ignores a payload for another menu
  * @param reset       whether the client must drop its list before applying these entries
@@ -77,13 +84,17 @@ public record TerminalStockPayload(int containerId, boolean reset, List<StockCou
             // the part of the available amount its reserve holds back from automation. An unruled item — every item
             // of a warehouse without stock keepers — costs the two zero bytes a varint and a varlong take.
             buffer.writeVarInt(entry.rule().map(status -> status.ordinal() + 1).orElse(0));
-            if (entry.rule().isEmpty())
-                continue; // an unruled item — every item of a warehouse without keepers — costs one zero byte
-            buffer.writeVarLong(entry.ruleReserved());
-            // The storage cap the screen needs to warn, before a click, that an order would bring in more than the
-            // warehouse wants to hold (M15 part 2). Written as "cap + 1", so "no cap" is a single zero byte rather
-            // than the ten a negative varlong takes.
-            buffer.writeVarLong(entry.ruleMaximum() + 1L);
+            if (entry.rule().isPresent()) {
+                // An unruled item — every item of a warehouse without keepers — costs the one zero byte above.
+                buffer.writeVarLong(entry.ruleReserved());
+                // The storage cap the screen needs to warn, before a click, that an order would bring in more than the
+                // warehouse wants to hold (M15 part 2). Written as "cap + 1", so "no cap" is a single zero byte rather
+                // than the ten a negative varlong takes.
+                buffer.writeVarLong(entry.ruleMaximum() + 1L);
+            }
+            // The package group of an address row (issue #40); one zero byte for every other row.
+            buffer.writeBoolean(entry.group().isPresent());
+            entry.group().ifPresent(group -> writeGroup(buffer, group));
         }
         // Last, so every field before it reads as it did before M31: a push without fluid news is one zero byte.
         buffer.writeBoolean(fluids.isPresent());
@@ -103,18 +114,52 @@ public record TerminalStockPayload(int containerId, boolean reset, List<StockCou
             // the second is a tag plus the two numbers the writer emitted after it. Branching on the tag rather than on
             // the decoded status is what keeps an unknown ordinal from shifting every following entry (M15 review fix).
             int tag = buffer.readVarInt();
-            if (tag == 0) {
-                entries.add(new StockCount<>(key, total, available, producible, producibleAmount));
-                continue;
+            long ruleReserved = 0L;
+            long ruleMaximum = -1L;
+            Optional<StockRuleStatus> rule = Optional.empty();
+            if (tag != 0) {
+                ruleReserved = buffer.readVarLong();
+                ruleMaximum = buffer.readVarLong() - 1L;
+                rule = readRule(tag);
             }
-            long ruleReserved = buffer.readVarLong();
-            long ruleMaximum = buffer.readVarLong() - 1L;
-            Optional<StockRuleStatus> rule = readRule(tag);
-            entries.add(rule.isEmpty() ? new StockCount<>(key, total, available, producible, producibleAmount)
+            Optional<PackageGroupSummary<ItemKey>> group = buffer.readBoolean() ? Optional.of(readGroup(buffer))
+                    : Optional.empty();
+            entries.add(rule.isEmpty()
+                    ? new StockCount<>(key, total, available, producible, producibleAmount, Optional.empty(), 0L,
+                            -1L, group)
                     : new StockCount<>(key, total, available, producible, producibleAmount, rule, ruleReserved,
-                            ruleMaximum));
+                            ruleMaximum, group));
         }
         return entries;
+    }
+
+    /** One package group: box count, kinds, the order flag and the bounded content lines (issue #40). */
+    private static void writeGroup(RegistryFriendlyByteBuf buffer, PackageGroupSummary<ItemKey> group) {
+        buffer.writeVarLong(group.boxes());
+        buffer.writeVarInt(group.kinds());
+        buffer.writeBoolean(group.networkOrder());
+        buffer.writeVarInt(group.contents().size());
+        for (KeyCount<ItemKey> content : group.contents()) {
+            ItemKey.STREAM_CODEC.encode(buffer, content.key());
+            buffer.writeVarLong(content.count());
+        }
+    }
+
+    /**
+     * Reads what {@link #writeGroup} wrote. Bounded: however many content lines the prefix claims, at most
+     * {@value PackageGroupSummary#MAX_CONTENTS} are decoded, which is all a writer ever sends.
+     */
+    private static PackageGroupSummary<ItemKey> readGroup(RegistryFriendlyByteBuf buffer) {
+        long boxes = buffer.readVarLong();
+        int kinds = buffer.readVarInt();
+        boolean networkOrder = buffer.readBoolean();
+        int count = Math.min(Math.max(0, buffer.readVarInt()), PackageGroupSummary.MAX_CONTENTS);
+        List<KeyCount<ItemKey>> contents = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            ItemKey key = ItemKey.STREAM_CODEC.decode(buffer);
+            contents.add(new KeyCount<>(key, Math.max(0L, buffer.readVarLong())));
+        }
+        return new PackageGroupSummary<>(boxes, contents, kinds, networkOrder);
     }
 
     /**

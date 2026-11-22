@@ -22,6 +22,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.controller.RequestResult;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
@@ -568,6 +569,10 @@ public class SchematicannonRequesterBlockEntity extends SmartBlockEntity
         Optional<RequesterStatus> locked = orders.lock(missingKey, strict, buffered);
         if (locked.isPresent())
             return locked.get();
+        // Package mode (issue #40): no new order. The open ones were advanced by the poll and run to their end, and one
+        // whose items are on their way still says so (the lock above).
+        if (PackageModeGate.enabled())
+            return RequesterStatus.PACKAGE_MODE;
 
         ItemKey key = strict ? missingKey : variant(controller, item);
         ItemKey sized = key == null ? missingKey : key;

@@ -45,6 +45,13 @@ public enum RestockOutcome {
     /** Automatic restocking is switched off by configuration ({@code maxRestockOrders} or {@code maxRestockOrdersPerRule} is 0). */
     DISABLED,
     /**
+     * The world is in package mode (issue #40, review fix 2026-11-22): nothing new is made, so no rule orders, whatever
+     * {@code maxRestockOrders} says. Told apart from {@link #DISABLED} so an operator whose restocking is on looks at the
+     * right switch. Never reported with package mode off; the planner itself never answers it (the controller turns
+     * the planner's {@link #DISABLED} into it).
+     */
+    PACKAGE_MODE,
+    /**
      * This rule already has as many automatic orders open as it may ({@code maxRestockOrdersPerRule}, 1 by default).
      * The warehouse is already making the item and simply waits; this is what stops one hungry rule from ordering the
      * same thing twice while the first run is still in the machine.
@@ -108,8 +115,8 @@ public enum RestockOutcome {
      * orders in a moment.
      */
     public boolean isBlocked() {
-        return this == PAUSED || this == DISABLED || this == ORDERS_BUSY || this == NO_PATTERN || this == NO_ROOM
-                || this == WAITING_FOR_INGREDIENTS;
+        return this == PAUSED || this == DISABLED || this == PACKAGE_MODE || this == ORDERS_BUSY || this == NO_PATTERN
+                || this == NO_ROOM || this == WAITING_FOR_INGREDIENTS;
     }
 
     /**

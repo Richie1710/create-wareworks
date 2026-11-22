@@ -542,6 +542,10 @@ dev.wareworks
 │   │                          door tables), ComputerItemSelector (the item argument and its stable SHA-1 fingerprint),
 │   │                          ComputerReplies (the reply words: lowercase enum names) and ComputerArgumentException
 │   │                          (a Lua error's message)
+│   ├── packagemode            package mode (issue #40, ADR-086): PackageModeGate (the one switch and what a package
+│   │                          is), PackageGatedItemHandler (a rack bay's loose-refusing view), PackageGroupKey (the
+│   │                          terminal's synthetic row per address), PackageKeyInfos, PackageRuleKeys (a Package
+│   │                          Filter's address and Create's matchAddress)
 │   ├── selector               the Recipe Selector (ADR-085): RecipeSelectorBlock / BlockEntity / BlockItem (both
 │   │                          tiers), SelectorMachine (the saw or basin and its filter), LocalSelectorLink,
 │   │                          SelectorLink, SelectorRecipeCheck (the pattern check), RecipeSlip (the slip on a box),
@@ -6238,6 +6242,13 @@ that teaches the whole of it. With this milestone issue #18 is done: M26 built t
   *(Amended by ADR-085, M36: a production station in slip mode writes its own recipe slip into `custom_data` of a
   box Create has just packed, and the Ender Recipe Selector may refuse a box; both exceptions are pinned to one file
   each by `PackageOrderBoundaryTest`, and everything else in this rule stands.)*
+  *(Corrected for issue #40, package mode: "only re-addressed" undersold it. A Packager **always** clears the box's
+  address (`PackageItem.clearAddress`) and then writes only its sign's (`PackagerBlockEntity`, where `createdBox` is
+  built: `extractedPackageItem.copy()`, `clearAddress`, then `addAddress(signBasedAddress)` only when the sign is not
+  blank). So a stored package retrieved to a door **without a sign** leaves with **no address at all**. Outside package
+  mode that stays a warning (D7: "no address"); in package mode such a door is a `STRIPS_ADDRESS` row nobody can
+  choose and a click to it is refused with `DOOR_STRIPS_ADDRESS`, and a requesting port with no Packager is a door of
+  its own (`PLAIN_PORT`), from which the box leaves as itself, address and all.)*
 * **D4. Two layers of validation, and the controller's comes first (G-dest).** `WarehouseControllerBlockEntity` asks
   `isRequestDestination` (until now `isOutputStation`), which adds one rule to the same single block entity lookup: a
   member that is a `WarehouseOutputBlockEntity` must request. So
@@ -9041,6 +9052,82 @@ there is one). Network version 27 (`ProductionSelectorPayload`, the selector vie
 rows' wait). Tests: JUnit `SelectorGateTest`, `ProductionOrdersTest`, the boundary tests; GameTests
 `RecipeSelectorGameTests`, `RecipeSelectorBlockGameTests`, `RecipeSlipGameTests`,
 `WarehouseNetworkGameTests#networkremapkeepsselectorstate`; visual scenarios `selector` and `selector-remote`.
+
+### ADR-086 — Package mode: one server switch per world; the entrances take only sealed packages, the terminal groups them by address, rules count them, nothing is made, packed or unpacked (amends ADR-040, ADR-065, ADR-073 and ADR-078) ([issue #40](https://github.com/Richie1710/create-wareworks/issues/40))
+
+*Context:* issue #40 (from #28) asks for a warehouse of sealed Create packages: boxes go in and come out unopened,
+listed and requested by address, with stock rules for addresses, for post-office and cold-storage builds. The owner's
+decisions of 2026-11-22 are binding: **one** server switch for the whole world, set only in the config file (no
+per-warehouse flag, no in-game gesture, no saved mode state), and work that is open when a world loads with the mode on
+must drain safely instead of the switch being refused.
+
+*Decision:*
+
+* **D1 One switch.** `[packageMode] enabled`, default `false`, `worldRestart()`, per world in `<world>/serverconfig/`.
+  Read only through `WareworksConfig.packageModeEnabled()` / `PackageModeGate`; NeoForge syncs it to clients. Nothing
+  about the mode is saved anywhere. **Off means unchanged:** behaviour and saved NBT are byte-identical to 0.23.0-beta,
+  pinned by golden SNBT written by that version (`PackageModeGoldenGameTests`).
+* **D2 Entrances refuse loose items, the crane never stores one.** The input's capability view and belt side, the
+  in-door Packager, the collecting port's snapshot and every rack bay (automation, hand, hand-truck pallet) refuse
+  loose stacks; they wait where they are. Backstop: `storeHeld` holds a loose key without a drain allowance in the input
+  (goggles, empty-hand click). A package is `PackageItem.isPackage`; an empty box counts (E10).
+* **D3 Drain, not refusal.** No new production order, crafting or list fetch, JEI lay, fluid fill, selector selection or
+  Requester order starts (`RequestRejection.PACKAGE_MODE` and its kin; a keeper row reports
+  `RestockOutcome.PACKAGE_MODE`). Orders open at load run on. The drain ledger (`core.production.PackageModeDrain`, held
+  by the controller, not saved) lets loose items of a key in and stored only up to what the orders' machines can still
+  give back: per order, what the ingredients the crane really dropped there make (`makeable`, 0 before any delivery)
+  minus the larger of what the order counted and what the ledger booked against it, plus one empty container per
+  delivered filled container; an order the controller forgets keeps its rest in the ledger until it is used up. Every
+  loose item that leaves an input is booked before any order is credited with it, so an order that ended, a restock
+  order or a step that is never credited still stops letting items in. The input admits only that much
+  (`drainRoom`), and the planner stores only that much minus what is already carried in (`storeHeadroom` of a loose
+  key); the rest waits in its input for a hand. A Packager behind an input opens a box only when every stack in it is
+  such a result (**amends ADR-040** for package mode). Not closed, documented: a crane job already under way when the
+  world was saved finishes after the load (at most one load per crane), and after a restart the ledger starts over, so
+  an ended order still kept by the controller may let its shortfall in once more.
+* **D4 Storage.** Every box is its own key (style, address and contents are components), so one crane trip carries one
+  box. The planner never puts a package into an **empty** item rack bay without a Package Filter when it stores or
+  relocates (`PlannerInput.storeExcluded` in `JobPlanner#collectStorage`, E3); the run that finds only such bays says
+  so (`NoJobReason.PACKAGE_BAY_NEEDS_FILTER`), and so do the bay's goggles. A reroute that puts back items which
+  already left the warehouse (retrieve, fill, supply, relocation leftovers) ranks such a bay last instead of dropping it,
+  like a rejecting filter (§8), so a box can always go back into the plain bay it came from and the crane never holds
+  it for ever (review fix). A box an input holds over a package rule's maximum comes out with an empty hand.
+* **D5 Terminal by address.** The screen's list folds package keys into one synthetic row per address
+  (`PackageGroupKey`, name only, no address component and no `custom_data`, so ADR-065 D3 holds) with a contents
+  summary, before the 512-row cut; loose rows trail greyed and stay clickable (E5, E6). A computer keeps the per-key
+  list. A click on a row picks concrete boxes at the click, lowest storage priority first (**amends ADR-078**), and
+  starts the terminal's address order (third order field, saved only while open, credited at a door through the
+  controller's delivery hook, E11). A door delivery made while the order's terminal is not loaded is kept by the
+  controller (`PendingDoorCredits`, bounded, not saved) and claimed at that terminal's next pass, so the pass does not
+  ask for the box again. A client's screens and goggles read the switch the server sends at login
+  (`PackageModeSwitchPayload`, `PackageModeGate#enabledOnClient`), not the synced config file, which an operator may
+  have edited on a running server.
+* **D6 Doors.** **Corrects ADR-065 D3:** a Packager always clears a box's address and writes only its sign's
+  (`PackagerBlockEntity` around `createdBox`), so without a sign a stored box would leave unaddressed. In package mode
+  a Packager door without a sign is `DoorState.STRIPS_ADDRESS`, unselectable and refused (`DOOR_STRIPS_ADDRESS`, E7); a
+  requesting port without a Packager is a door (`PLAIN_PORT`) that hands the box on unchanged.
+* **D7 Package rules.** `RuleUnit.PACKAGES` (saved as `"packages"`, absent means items; **amends ADR-073**): a keeper
+  row whose item is an addressed Package Filter counts the boxes whose address matches it (Create's `matchAddress`,
+  wildcards included). Over several matching rows the strictest maximum and reserve apply; the maximum is enforced at
+  the input (boxes already waiting count, critic M5), the reserve binds automation only, and the minimum only signals,
+  because the warehouse never packs. While the switch is off such a row is kept and saved and does nothing.
+* **D8 Not in this version** (E8, E9): a jam alarm on the input and a Package Filter on ports (a reject port by
+  address).
+
+*Consequences:* `content.packagemode` (`PackageModeGate`, `PackageGatedItemHandler`, `PackageGroupKey`,
+`PackageKeyInfos`, `PackageRuleKeys`), `core.production.PackageModeDrain`, `core.stock.PackageRules`,
+`core.terminal.PackageGroupFold`, `PackageGroupSummary`, `PackagePick`, `content.station.TerminalPackageOrder` and its
+state and payload are new. Network version 28 (new rejection and status values, the stock entry's group summary, the
+address order payload). Persistence: only the terminal's `PackageOrder` while an address order is open and a keeper
+row's `Unit: "packages"`; a version without package mode reads such a row as an item row for Package Filters. Known
+loopholes, documented rather than closed: a chest filled by hand or set down by a hand truck behind an interface, and an
+empty box at a Packager behind an input (Create destroys it before any handler runs). Tests: JUnit
+`PackageModeDrainTest`, `PackageRulesTest`, `PackageGroupFoldTest`, `PackagePickTest`, `JobPlannerStoreExcludedTest`,
+`PackageModeTextWidthTest`; GameTests `PackageModeGoldenGameTests`, `PackageModeGameTests`,
+`PackageModeLockoutGameTests`, `PackageModeTerminalGameTests`, `PackageRuleGameTests`; the visual scenario
+`packagemode` (its own world, the switch in that world's `serverconfig`, a census that counts every box as itself as
+well as its contents, `SceneItemCensus#takeWithBoxes`); the robustness run's package-mode phase; the Ponder scene
+`warehouse/package_mode`.
 
 ## Persistence & sync
 

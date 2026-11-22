@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Package mode** (#40), off by default: `[packageMode] enabled = true` in `wareworks-server.toml` (per world in
+  `<world>/serverconfig/`, takes effect at the next world load) puts every warehouse of that world in package mode, in
+  which it stores only sealed Create packages and makes nothing new. The README says how to switch it on, also in single
+  player, and a Ponder scene on the Warehouse Input and the Warehouse Terminal shows it. With the switch off nothing
+  changes.
+- **Package mode: entrances.** A Warehouse Input refuses loose items from funnels, chutes, hoppers, belts and Mechanical
+  Arms (they stay where they are), a Packager behind an input is refused the box instead of opening it, a collecting
+  port fetches only the packages out of its machine's chest, and a rack bay takes no loose items from automation, by
+  hand or off a hand truck pallet. Loose stock already stored stays retrievable. Loose items that end up in an input
+  anyway (or were there when the world loaded) are never stored: the goggles show them and an empty-hand click takes
+  them out. The crane puts no package into an empty rack bay unless the bay carries a Package Filter (a bay holds one
+  item type, and every box is its own) when it stores or relocates; the bay's goggles and the controller's planning line
+  say so. Only a box that left the warehouse and has nowhere else to go goes back into such a bay.
+- **Package mode: work open at load drains.** Production orders that were already open when the world loaded still get
+  their loose results back through an input, but only as many as the ingredients the crane really delivered to their
+  machine make, and the empty containers of filled ones (a bucket per water bucket); an order still waiting for its
+  ingredients lets nothing in. Orders, Crafter Feeder runs and Recipe Selector selections that were already open run to
+  their end, and a selector's hold stays releasable by sneak-click.
+- **Package mode: nothing new is made.** No production order starts, whether from the terminal, a computer, a
+  Schematicannon Requester or a Stock Keeper's minimum (whose row says package mode is the reason). The terminal's
+  crafting panel, Fetch, a recipe viewer's "+", clipboard lists and fluid fills are off with a reason, while loose stock
+  from before can still be clicked out. The Schematicannon Requester orders nothing new and says so.
+- **Package mode: the terminal and doors.** The terminal lists one row per address ("Packages → Base North") with what
+  is inside its boxes in the tooltip, and the search finds an address by its contents too; the loose stock from before
+  follows in its own greyed section. A click on an address row picks that many boxes and fetches them sealed into the
+  terminal or to a package door, a few at a time, with a line in the production section that names the address, shows
+  how many arrived and cancels the order; further clicks for the same place join it. A computer still sees and requests
+  every box on its own. A requesting port without a Packager is offered as a door, the box leaving it with its address,
+  and a Packager door without a sign is refused, because it would remove the address.
+- **Package mode: stock rules for addresses.** A Stock Keeper row whose item is a Package Filter with an address counts
+  the packages of that address, Create's wildcards included ("Base*" counts "Base North" and "Base South", a box
+  addressed "*" counts everywhere): its maximum keeps a box over the cap out of the input, so it waits with its sender
+  and the input's goggles say so (a box over the cap that got into an input anyway comes out with an empty hand); its
+  reserve holds boxes back from redstone requests and computers; its minimum only lights the lamp and drives the
+  comparator, because the warehouse never packs. Where several rows match a box, the strictest applies. With the switch
+  off such a row rests until the switch is on again; a version without package mode reads it as a row for Package
+  Filter items.
+
+### Changed
+
+- **Server and players have to update together.** A client with this version cannot join a server with an older one,
+  and the other way round, because of package mode's terminal rows, address orders and refusal reasons. Worlds load
+  unchanged.
+
 ## [0.23.0-beta] - 2026-11-11
 
 ### Added

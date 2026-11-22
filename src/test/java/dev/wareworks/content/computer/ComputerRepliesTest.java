@@ -20,7 +20,8 @@ class ComputerRepliesTest {
     void refusalReasonsAreTheDocumentedWords() {
         assertEquals(List.of("no_controller", "no_filter", "not_in_stock", "queue_full", "output_full", "out_of_reach",
                 "invalid_amount", "request_full", "production_busy", "reserved", "production_paused", "not_a_door",
-                "door_ignores_redstone", "no_empty_containers"),
+                "door_ignores_redstone", "no_empty_containers", "package_mode", "door_strips_address",
+                "package_order_elsewhere"),
                 Arrays.stream(RequestRejection.values()).map(ComputerReplies::rejection).toList());
     }
 
@@ -34,7 +35,8 @@ class ComputerRepliesTest {
 
     @Test
     void doorStatesAreTheDocumentedWords() {
-        assertEquals(List.of("ready", "no_address", "port_full", "box_waiting", "ignores_redstone", "not_loaded"),
+        assertEquals(List.of("ready", "no_address", "port_full", "box_waiting", "ignores_redstone", "not_loaded",
+                "plain_port", "strips_address"),
                 Arrays.stream(DoorState.values()).map(ComputerReplies::doorState).toList());
     }
 }

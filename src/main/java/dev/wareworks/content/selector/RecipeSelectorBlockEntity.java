@@ -18,6 +18,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
@@ -677,6 +678,11 @@ public class RecipeSelectorBlockEntity extends SmartBlockEntity
         WareworksLang.builder().add(shown.statusText()).style(statusStyle).forGoggles(tooltip, 1);
         shown.warning().ifPresent(found -> WareworksLang.translate(found.langKey()).style(ChatFormatting.GOLD)
                 .forGoggles(tooltip, 1));
+        // Package mode (issue #40): it still serves the orders that were open when the world loaded, and selects nothing
+        // new; a hold stays releasable by hand.
+        if (PackageModeGate.enabledOnClient())
+            WareworksLang.translate(WareworksLang.GOGGLES_PACKAGE_MODE_NO_PRODUCTION).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 1);
         shown.station().ifPresent(label -> WareworksLang.translate(shown.ender() ? WareworksLang.GOGGLES_SELECTOR_LATCH
                 : WareworksLang.GOGGLES_SELECTOR_STATION, label).style(ChatFormatting.GRAY).forGoggles(tooltip, 1));
         shown.machine().ifPresent(pos -> WareworksLang.translate(WareworksLang.GOGGLES_SELECTOR_MACHINE,

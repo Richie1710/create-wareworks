@@ -20,6 +20,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 import com.simibubi.create.foundation.utility.IInteractionChecker;
 
 import dev.wareworks.config.WareworksConfig;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.ExtractOnlyItemHandler;
@@ -1396,6 +1397,11 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                     .forGoggles(tooltip, 1);
         else
             WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_NO_PATTERNS).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 1);
+        // Package mode (issue #40): the patterns stay, but no new order is made from them; the client reads the switch the
+        // server told it at login, so no data of the station changes.
+        if (PackageModeGate.enabledOnClient())
+            WareworksLang.translate(WareworksLang.GOGGLES_PACKAGE_MODE_NO_PRODUCTION).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
         // A Crafter Feeder at the back (issue #34, ADR-067) changes what the patterns are: the ones that are no
         // crafting recipe are skipped, and that count is what tells a player why an item vanished from the terminal.

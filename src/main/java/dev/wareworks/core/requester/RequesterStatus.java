@@ -39,6 +39,11 @@ public enum RequesterStatus {
     LINK_NOT_ALLOWED(Lamp.REFUSED),
     /** The terminal belongs to no warehouse whose controller is loaded. */
     NO_CONTROLLER(Lamp.REFUSED),
+    /**
+     * Package mode is on (issue #40): the warehouse hands out sealed packages only, so the requester orders nothing new.
+     * Orders that were open when the world loaded still run to their end.
+     */
+    PACKAGE_MODE(Lamp.REFUSED),
     /** The cannon is not printing: stopped, idle, finished, or without a loaded schematic. */
     NOT_PRINTING(Lamp.DARK),
     /** The cannon paused for something else than a missing item (gunpowder, an unloaded target, ...). */

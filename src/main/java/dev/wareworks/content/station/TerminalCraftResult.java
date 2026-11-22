@@ -107,7 +107,16 @@ public enum TerminalCraftResult {
      * of this server (a recipe the viewer draws with items of its own, or one only the client knows). Nothing changed;
      * the grid on screen stays what it was.
      */
-    NOT_LAID;
+    NOT_LAID,
+
+    // --- package mode (issue #40) ----------------------------------------------------------------------------------
+
+    /**
+     * Package mode is on: the warehouse hands out sealed packages only, so a Fetch, which brings loose ingredients into
+     * the buffer, and a recipe laid from a recipe viewer are refused. Nothing moved and nothing was requested. A craft
+     * order that was already open when the world loaded keeps running and can still be answered, resumed or given up.
+     */
+    PACKAGE_MODE;
 
     private static final String LANG_PREFIX = "gui.terminal.craft.result.";
 
@@ -133,7 +142,7 @@ public enum TerminalCraftResult {
         return switch (this) {
             case CRAFTED, NO_RECIPE, NOT_IN_BUFFER, NO_ROOM, LOCKED, OUT_OF_REACH, GRID_EMPTY, LAID, NOT_LAID -> false;
             case STARTED, ASKING, CHANGED, NOTHING_TO_FETCH, NOT_ENOUGH, NO_ROOM_FOR_ONE, ALREADY_RUNNING, NO_AISLE,
-                    ANSWERED, DECLINED, RESUMED, CANCELLED, NOT_RUNNING -> true;
+                    ANSWERED, DECLINED, RESUMED, CANCELLED, NOT_RUNNING, PACKAGE_MODE -> true;
         };
     }
 

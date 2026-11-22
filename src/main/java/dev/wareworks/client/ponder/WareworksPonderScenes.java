@@ -48,12 +48,12 @@ import net.minecraft.resources.ResourceLocation;
  *       warehouse/junction, warehouse/two_cranes</td></tr>
  *   <tr><td>warehouse_interface</td><td>warehouse/interface, warehouse/filters, warehouse/storing</td></tr>
  *   <tr><td>warehouse_controller</td><td>warehouse/storing, warehouse/retrieving</td></tr>
- *   <tr><td>warehouse_input</td><td>warehouse/storing, warehouse/packages_at_the_door</td></tr>
+ *   <tr><td>warehouse_input</td><td>warehouse/storing, warehouse/packages_at_the_door, warehouse/package_mode</td></tr>
  *   <tr><td>warehouse_output</td><td>warehouse/retrieving, warehouse/port_requesting, warehouse/port_accepting,
  *       warehouse/port_collecting, warehouse/packages_at_the_door, warehouse/ordering_to_a_door</td></tr>
  *   <tr><td>warehouse_terminal</td><td>warehouse/terminal, warehouse/requesting,
  *       warehouse/production_chain, warehouse/fluid_bay, warehouse/ordering_to_a_door,
- *       warehouse/fluid_request</td></tr>
+ *       warehouse/fluid_request, warehouse/package_mode</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
  *       warehouse/production_chain, warehouse/crafter_feeder, warehouse/recipe_selector,
  *       warehouse/ender_recipe_selector</td></tr>
@@ -255,6 +255,13 @@ public final class WareworksPonderScenes {
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.KINETIC_APPLIANCES);
         scenes.forComponents(WareworksBlocks.ENDER_RECIPE_SELECTOR, WareworksBlocks.WAREHOUSE_PRODUCTION)
                 .addStoryBoard("warehouse/ender_recipe_selector", RecipeSelectorScenes::ender,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // Package mode (issue #40, ADR-086), registered last so no scene of any other block moves (ADR-016). It belongs
+        // to the input, where a box comes in and a loose item is refused, and to the terminal, which lists and hands out
+        // boxes by address; the switch itself is a server setting and has no block.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_INPUT, WareworksBlocks.WAREHOUSE_TERMINAL)
+                .addStoryBoard("warehouse/package_mode", PackageScenes::packageMode,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
     }
 }

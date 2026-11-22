@@ -225,8 +225,21 @@ public final class WareworksNetwork {
      * → server) switches a station's selector off. New blocks ({@code recipe_selector}, {@code ender_recipe_selector}),
      * the {@code selector_link} item component, and the goggle data of the production station and of the two selectors
      * grew; a box's recipe slip is vanilla {@code custom_data} and needs no version.
+     * <p>
+     * <b>{@code "28"} is package mode</b> (issue #40): {@code RequestRejection} grew {@code PACKAGE_MODE} and
+     * {@code DOOR_STRIPS_ADDRESS} at its end, and {@code TerminalResultPayload} carries a reason by ordinal, so an older
+     * client would read them as nothing it knows. The craft and list results, the requester status and the door states
+     * that grew travel by name. Package mode's terminal (issue #40, slice S4) belongs to the same version: every
+     * {@link TerminalStockPayload} entry ends with a package-group flag and, for the row of an address, its content
+     * summary; the new {@link TerminalPackageOrderPayload} (server → client) carries the address order's line; and
+     * {@code RequestRejection} grew {@code PACKAGE_ORDER_ELSEWHERE} after the two above. The cancel mark of that line
+     * goes through the unchanged {@link ProductionCancelPayload}, whose id the server now also resolves against the
+     * terminal's address order. Package mode's stock rules (slice S5) too: a stock keeper row's unit
+     * ({@code RuleUnit}, which grew {@code PACKAGES}) travels in {@code StockKeeperScreenState} by ordinal instead of the
+     * old fluid flag, and an input's goggle data may carry the address of a box refused at a rule's maximum. The
+     * server also tells each player at login whether package mode is on ({@link PackageModeSwitchPayload}).
      */
-    public static final String VERSION = "27";
+    public static final String VERSION = "28";
 
     private WareworksNetwork() {
     }
@@ -274,6 +287,10 @@ public final class WareworksNetwork {
                 WareworksNetwork::onTerminalCraftOrderState);
         registrar.playToServer(TerminalCraftLayPayload.TYPE, TerminalCraftLayPayload.STREAM_CODEC,
                 WareworksNetwork::onTerminalCraftLay);
+        registrar.playToClient(TerminalPackageOrderPayload.TYPE, TerminalPackageOrderPayload.STREAM_CODEC,
+                WareworksNetwork::onTerminalPackageOrder);
+        registrar.playToClient(PackageModeSwitchPayload.TYPE, PackageModeSwitchPayload.STREAM_CODEC,
+                WareworksNetwork::onPackageModeSwitch);
         registrar.playToClient(ProductionScreenPayload.TYPE, ProductionScreenPayload.STREAM_CODEC,
                 WareworksNetwork::onProductionScreen);
         registrar.playToServer(ProductionPatternPayload.TYPE, ProductionPatternPayload.STREAM_CODEC,
@@ -577,6 +594,23 @@ public final class WareworksNetwork {
     private static void onTerminalCraftOrderState(TerminalCraftOrderStatePayload payload, IPayloadContext context) {
         if (FMLEnvironment.dist.isClient())
             dev.wareworks.client.gui.TerminalScreenUpdates.onCraftOrder(payload);
+    }
+
+    /** The switch as the server holds it (issue #40): a client's screens and goggles read this, not the config. */
+    private static void onPackageModeSwitch(PackageModeSwitchPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.content.packagemode.PackageModeGate.setClientView(payload.enabled());
+    }
+
+    /** Server: tells a player who joins whether this world's warehouses are in package mode (issue #40). */
+    public static void sendPackageModeSwitch(ServerPlayer player) {
+        PacketDistributor.sendToPlayer(player,
+                new PackageModeSwitchPayload(dev.wareworks.content.packagemode.PackageModeGate.enabled()));
+    }
+
+    private static void onTerminalPackageOrder(TerminalPackageOrderPayload payload, IPayloadContext context) {
+        if (FMLEnvironment.dist.isClient())
+            dev.wareworks.client.gui.TerminalScreenUpdates.onPackageOrder(payload);
     }
 
     private static void onProductionScreen(ProductionScreenPayload payload, IPayloadContext context) {

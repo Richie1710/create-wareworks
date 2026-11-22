@@ -783,9 +783,10 @@ final class ControllerPersistence {
                     ruleTag.putLong(MINIMUM, rule.minimum());
                     ruleTag.putLong(MAXIMUM, rule.maximum());
                     ruleTag.putLong(RESERVE, rule.reserve());
-                    // Only a fluid rule says so (M31): an item rule saves exactly what it saved before.
-                    if (row.unit() == RuleUnit.FLUID)
-                        ruleTag.putString(UNIT, RuleUnit.FLUID_NAME);
+                    // Only a fluid rule (M31) or a package rule (issue #40) says so: an item rule saves exactly what it
+                    // saved before.
+                    if (row.unit() != RuleUnit.ITEMS)
+                        ruleTag.putString(UNIT, row.unit().savedName());
                     rules.add(ruleTag);
                 }
                 if (rules.isEmpty())
@@ -805,7 +806,7 @@ final class ControllerPersistence {
      * item cannot be read is skipped, and every number is clamped by {@link StockRule} itself. Bounded by
      * {@value #MAX_SAVED_KEEPERS} keepers and {@code StockRules.MAX_RULES} rules per keeper, so crafted save data
      * cannot make the copy unbounded. A rule without a {@code Unit} is an item rule, which is what every rule written
-     * before M31 is — a lava bucket rule included.
+     * before M31 is — a lava bucket rule included; {@code "packages"} is a package rule (issue #40).
      */
     static Map<RackPosition, List<KeeperRule>> readStockRules(CompoundTag tag, HolderLookup.Provider registries) {
         Map<RackPosition, List<KeeperRule>> perKeeper = new LinkedHashMap<>();
