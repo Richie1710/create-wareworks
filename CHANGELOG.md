@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0-beta] - 2026-11-22
+
 ### Added
 
 - **Package mode** (#40), off by default: `[packageMode] enabled = true` in `wareworks-server.toml` (per world in
@@ -1696,7 +1698,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.23.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.24.0-beta...HEAD
+[0.24.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.23.0-beta...v0.24.0-beta
 [0.23.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.22.0-beta...v0.23.0-beta
 [0.22.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.21.0-beta...v0.22.0-beta
 [0.21.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.20.0-beta...v0.21.0-beta
