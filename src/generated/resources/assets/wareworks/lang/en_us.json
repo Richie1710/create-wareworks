@@ -1279,7 +1279,7 @@
   "wareworks.ponder.warehouse_package_mode.text_4": "The terminal shows one row per address, and its tooltip says what the boxes hold",
   "wareworks.ponder.warehouse_package_mode.text_5": "Crafting, list fetches and anything that would be made are off; loose goods from before can still be taken out",
   "wareworks.ponder.warehouse_package_mode.text_6": "A click on a row fetches whole boxes, never opened, to the terminal or to a door",
-  "wareworks.ponder.warehouse_package_mode.text_7": "A door's Packager sends the box on with its sign's address, so a door needs a sign",
+  "wareworks.ponder.warehouse_package_mode.text_7": "A door's Packager sends the box on with its sign's address, so a Packager door needs a sign",
   "wareworks.ponder.warehouse_package_mode.text_8": "A Packager door without a sign would wipe the address, so the terminal refuses it",
   "wareworks.ponder.warehouse_package_mode.text_9": "A stock rule with an addressed Package Filter counts that address's boxes",
   "wareworks.ponder.warehouse_packages_at_the_door.header": "Packages at a Warehouse Door",

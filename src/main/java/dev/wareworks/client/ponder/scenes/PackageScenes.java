@@ -768,7 +768,7 @@ public final class PackageScenes {
 
         // --- 6. the sign keeps the address ----------------------------------------------------------------------------
         scene.overlay().showText(TEXT_TICKS)
-                .text("A door's Packager sends the box on with its sign's address, so a door needs a sign")
+                .text("A door's Packager sends the box on with its sign's address, so a Packager door needs a sign")
                 .attachKeyFrame()
                 .colored(PonderPalette.BLUE)
                 .placeNearTarget()

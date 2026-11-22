@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   player, and a Ponder scene on the Warehouse Input and the Warehouse Terminal shows it. With the switch off nothing
   changes.
 - **Package mode: entrances.** A Warehouse Input refuses loose items from funnels, chutes, hoppers, belts and Mechanical
-  Arms (they stay where they are), a Packager behind an input is refused the box instead of opening it, a collecting
-  port fetches only the packages out of its machine's chest, and a rack bay takes no loose items from automation, by
-  hand or off a hand truck pallet. Loose stock already stored stays retrievable. Loose items that end up in an input
+  Arms (they stay where they are), a Packager behind an input is refused the box instead of opening it (unless
+  everything in it is a result an order from before the switch may still let in, see below), a collecting port fetches
+  only the packages out of its machine's chest, and a rack bay takes no loose items from automation, by hand or off a
+  hand truck pallet. Loose stock already stored stays retrievable. Loose items that end up in an input
   anyway (or were there when the world loaded) are never stored: the goggles show them and an empty-hand click takes
   them out. The crane puts no package into an empty rack bay unless the bay carries a Package Filter (a bay holds one
   item type, and every box is its own) when it stores or relocates; the bay's goggles and the controller's planning line
@@ -35,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is inside its boxes in the tooltip, and the search finds an address by its contents too; the loose stock from before
   follows in its own greyed section. A click on an address row picks that many boxes and fetches them sealed into the
   terminal or to a package door, a few at a time, with a line in the production section that names the address, shows
-  how many arrived and cancels the order; further clicks for the same place join it. A computer still sees and requests
+  how many arrived and cancels the order; further clicks for the same place join it, and a click for another place is
+  refused until that order ends or is cancelled. A computer still sees and requests
   every box on its own. A requesting port without a Packager is offered as a door, the box leaving it with its address,
   and a Packager door without a sign is refused, because it would remove the address.
 - **Package mode: stock rules for addresses.** A Stock Keeper row whose item is a Package Filter with an address counts

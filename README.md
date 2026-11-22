@@ -930,20 +930,25 @@ again (and reloading) gives you ordinary warehouses back with every box still st
 * **Inputs take sealed packages only.** A loose item from a funnel, chute, hopper, belt or Mechanical Arm is refused
   and waits where it is — on your belt, in your funnel. Route it elsewhere with a Package Filter on the funnel or
   tunnel. The input's goggles name the last item it refused. A Packager behind an input is refused the box instead of
-  opening it, and a rack bay takes no loose items from automation, by hand or off a hand truck pallet.
-* **Boxes are stored as themselves.** Address and contents are never touched; the warehouse never packs or unpacks. A
+  opening it (unless everything in it is a result an order from before the switch may still let in, see below), and a
+  rack bay takes no loose items from automation, by hand or off a hand truck pallet.
+* **Boxes are stored as themselves.** Address and contents are never touched; the warehouse never packs, and unpacks
+  only the returns of orders from before the switch. A
   crane carries one box per trip (every box is its own item), and it puts no box into an **empty** rack bay unless the
   bay has a Package Filter, so a rack wall does not fill up with one box per bay. Chests and barrels behind interfaces
   are the usual storage. The bay's goggles say when it needs a Package Filter, and the controller's planning line says
   "boxes need a rack bay with a Package Filter or a chest" when that is all that stops a box. The one exception is a
   box that already left the warehouse and has nowhere else to go, for example an address order given up while the crane
-  carries the box: it goes back into the bay it came from rather than staying in the crane.
+  carries the box: it may then go into an empty bay without a Package Filter (such as the one it came from) rather than
+  staying in the crane.
 * **The terminal lists one row per address** ("Packages → Base North") with what the boxes hold in the tooltip; the
   search finds an address by its contents. A click on a row fetches that many boxes, sealed, to the terminal or to a
-  package door (Shift asks for a buffer's worth). The loose stock from before the switch follows in its own greyed
+  package door (Shift asks for a buffer's worth, Ctrl for all). A terminal runs one such order at a time: further
+  clicks for the same place join it, a click for another place is refused until it ends or is cancelled. The loose stock from before the switch follows in its own greyed
   section and can still be clicked out, so a warehouse can be emptied.
-* **Nothing is made.** The crafting panel, Fetch, a recipe viewer's "+", clipboard lists and fluid fills are greyed out
-  with the reason ("Off in package mode"); no production order starts from the terminal, a computer, a Schematicannon
+* **Nothing is made.** The crafting panel, Fetch, a recipe viewer's "+" and clipboard lists are greyed out with the
+  reason ("Off in package mode"), and fluid cells hand out no buckets ("Package mode: no buckets go out"; a pipe at the
+  bay's back still drains it); no production order starts from the terminal, a computer, a Schematicannon
   Requester or a Stock Keeper's minimum (its row says "Package mode: nothing is made"). Orders that were already
   running when the world loaded still finish: their loose results are let back in through an input, but only as many as
   the ingredients the crane really delivered to the machine make (none while an order still waits for its
