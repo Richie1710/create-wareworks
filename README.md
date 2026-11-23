@@ -692,8 +692,8 @@ nothing ever goes into a fluid bay. An order ends when nothing more fits anywher
 `optimizer.tripsPerRequest` trips (32 by default); press again later to move what fits then. The red mark on the status
 line stops it, and a trip under way is finished. When an item has nothing to move, its row's dot turns gold and its
 tooltip says why: *All places have the same priority*, *No place with a higher priority*, *No free room at a higher
-priority*, *Higher places' filters do not fit*, or that all of it is requested or reserved, each with what to do about
-it. *Nothing to move* is left for an item the warehouse holds none of.
+priority*, *Higher places' filters do not fit*, *Its places cannot be reached now*, or that all of it is requested or
+reserved, each with what to do about it. *Nothing to move* is left for an item the warehouse holds none of.
 
 ## Production
 
@@ -1002,8 +1002,8 @@ again. A wall of forty bays holds forty item types, however much room is left in
 sixteen of carpet take 32 bays before anything else arrives. The next new type then has no free bay and waits in the
 input. Nothing is lost, and the input's goggles say *Not stored: no free place for this item type*. Add bays, or put a
 chest behind a Warehouse Interface for the long tail of types you own only a few of. The other reasons the input shows
-are a full warehouse, a storage filter that takes the item nowhere, a stock rule at its maximum, or in package mode a box
-that needs a bay with a Package Filter.
+are a full warehouse, a full accepting port that was the only place left, a storage filter that takes the item nowhere, a
+stock rule at its maximum, or in package mode a box that needs a bay with a Package Filter.
 
 ## Compatibility
 

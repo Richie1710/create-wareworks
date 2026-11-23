@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A FAQ in the README**: why the same item can sit in several bays, what the Warehouse Optimizer does and does not
+  do, and why items can wait in the input.
+
 ### Changed
 
 - **The Warehouse Optimizer says why an item does not move** ([#53](https://github.com/Richie1710/create-wareworks/issues/53)).
   An item with no better place used to end as "Nothing to move", even next to the stock it holds. Its row's dot now
   turns gold and its tooltip names the reason, decided by the warehouse itself: "All places have the same priority"
-  (every bay is at the default 0), "No place with a higher priority", "No free room at a higher priority", "Higher
+  (for example every place at the default 0), "No place with a higher priority", "No free room at a higher priority", "Higher
   places' filters do not fit", that all of it is requested or reserved, or that its places cannot be reached now, each
   with what to do about it. "Nothing to move" stays for an item the warehouse holds none of. The optimizer still only
   moves items up in priority and does not merge an item kept in two places.
@@ -23,11 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cure: each rack bay holds one item type, so add bays or a chest. Where a filter really refuses the item, the old
   reason stays.
 - **Server and players have to update together** again: the optimizer's screen data changed.
-
-### Added
-
-- **A FAQ in the README**: why the same item can sit in several bays, what the Warehouse Optimizer does and does not
-  do, and why items can wait in the input.
 
 ### Fixed
 
