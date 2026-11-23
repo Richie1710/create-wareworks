@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An empty Rack Bay now shows its filter** ([#49](https://github.com/Richie1710/create-wareworks/issues/49)). A bay
+  of any tier with a store filter but nothing stored drew nothing, so the filter only became visible once the first
+  item was stored. It now shows the filter item where the stored item would stand, so a rack wall that is set up but
+  not yet filled reads as "this bay is for X"; a List, Attribute or Package Filter is shown as that filter item. A bay
+  with stock keeps showing its stock, and an empty bay without a filter still shows nothing.
+
 ## [0.24.0-beta] - 2026-11-22
 
 ### Added

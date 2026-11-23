@@ -4136,3 +4136,13 @@ you get tired of waiting, and put it back before judging check 160.
 515. **An operator edits the file on a running server.** Change `[packageMode] enabled` in the world's server config
      while the server runs and let a second player join: both players still see the mode the server runs in (the switch
      takes effect at the next start), never the edited value.
+
+## BX. An empty rack bay shows its filter ([issue #49](https://github.com/Richie1710/create-wareworks/issues/49))
+
+516. **Does a filtered but empty bay say what it is for?** Place a wooden, an andesite and a brass rack bay and click an
+    item (say an iron ingot) into each filter slot without storing anything: each bay shows that item at the front,
+    where the stored item stands once it is filled. Then store a different stack in a bay with a List Filter that lets
+    it in: the bay shows the stored item, not the filter. Clear a filter on an empty bay: it shows nothing. Repeat with
+    a List, an Attribute and a Package Filter as the filter: the bay shows the filter item itself. Leave the world and
+    rejoin, and walk more than a few chunks away and back: the filter items are still there. **Does the filter in front
+    of an empty bay ever get mistaken for stock?**
