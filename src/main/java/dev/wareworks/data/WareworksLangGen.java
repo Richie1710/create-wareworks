@@ -15,6 +15,7 @@ import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
@@ -666,6 +667,10 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_OWN_STORAGE),
                 "This inventory is already a storage location");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_REFUSED), "Not fetched: %1$s");
+        // The input's own answer to "why do my items wait here" (issue #53), with the same reason texts.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_NOT_STORED), "Not stored:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_ONE_TYPE_HINT),
+                "Each rack bay holds one item type: add bays or a chest");
         // Packages at the out door (M26, issue #18). "Packager" and "logistics network" are Create's own names for
         // the blocks a player holds, so these lines speak of them exactly as the game does.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGE_HANDOVER), "Hands over as a package");
@@ -742,6 +747,7 @@ public final class WareworksLangGen {
                 // warehouse input, and a collect-only aisle need not contain an input at all.
                 case WAREHOUSE_FULL -> "no storage location accepts these items";
                 case NO_MATCHING_FILTER -> "no storage location takes these items, whatever room it has";
+                case NO_LOCATION_FOR_TYPE -> "no free place for this item type";
                 case PACKAGE_BAY_NEEDS_FILTER -> "boxes need a rack bay with a Package Filter or a chest";
                 case PORT_FULL -> "an accepting port was the only place left for these items and it is full";
                 case AT_MAXIMUM -> "a stock rule for these items is at its maximum";
@@ -1748,6 +1754,26 @@ public final class WareworksLangGen {
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PIP_HINT), "Click to optimise this item alone");
+        // Why a row has nothing to move (issue #53), decided on the server. NONE_IN_STOCK keeps "Nothing to move".
+        for (RelocationReason reason : RelocationReason.values()) {
+            if (reason == RelocationReason.NONE_IN_STOCK)
+                continue;
+            lang.accept(WareworksLang.key(OptimizerScreenState.reasonKey(reason)), switch (reason) {
+                case NONE_IN_STOCK -> throw new IllegalStateException("NONE_IN_STOCK reads as the pip's own text");
+                case SPOKEN_FOR -> "All of it is requested or reserved";
+                case NOT_REACHABLE -> "Its places cannot be reached now";
+                case SAME_PRIORITY -> "All places have the same priority";
+                case NO_HIGHER_PRIORITY -> "No place with a higher priority";
+                case FILTER_DOES_NOT_FIT -> "Higher places' filters do not fit";
+                case NO_ROOM_HIGHER -> "No free room at a higher priority";
+            });
+        }
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_PRIORITY),
+                "Give better places a higher priority");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_FILTER),
+                "A higher place needs a fitting filter");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_ROOM), "Make more room at a higher priority");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_REACH), "Load the chunk or mend the rails");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST), "Clipboard");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST_HINT),
                 "Click a clipboard here to add its items");

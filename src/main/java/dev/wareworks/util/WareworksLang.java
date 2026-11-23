@@ -908,6 +908,19 @@ public final class WareworksLang {
     public static final String OPTIMIZER_PIP_PREFIX = "gui.optimizer.pip.";
     /** How a single row is optimised (status pip tooltip). */
     public static final String OPTIMIZER_PIP_HINT = "gui.optimizer.pip_hint";
+    /**
+     * Prefix of why a row's item has nothing to move, {@code gui.optimizer.reason.<reason>} (issue #53,
+     * {@code OptimizerScreenState#reasonKey}); {@code NONE_IN_STOCK} has no key of its own and reads "Nothing to move".
+     */
+    public static final String OPTIMIZER_REASON_PREFIX = "gui.optimizer.reason.";
+    /** What a player can do when every place has the same priority or none is higher (issue #53). */
+    public static final String OPTIMIZER_REASON_HINT_PRIORITY = "gui.optimizer.reason_hint.priority";
+    /** What a player can do when the filters of the higher places do not fit (issue #53). */
+    public static final String OPTIMIZER_REASON_HINT_FILTER = "gui.optimizer.reason_hint.filter";
+    /** What a player can do when the higher places have no room (issue #53). */
+    public static final String OPTIMIZER_REASON_HINT_ROOM = "gui.optimizer.reason_hint.room";
+    /** What a player can do when the item lies only where the crane cannot reach it (issue #53). */
+    public static final String OPTIMIZER_REASON_HINT_REACH = "gui.optimizer.reason_hint.reach";
     /** Tooltip title of the list cell, which takes a clipboard's items. */
     public static final String OPTIMIZER_LIST = "gui.optimizer.list";
     /** How the list cell is used. */
@@ -2053,6 +2066,14 @@ public final class WareworksLang {
     public static final String GOGGLES_INPUT_LOOSE_REFUSED = "gui.goggles.input_loose_refused";
     /** {@code "Loose items to take out by hand: %1$s"}: package mode (issue #40), what the backstop keeps here. */
     public static final String GOGGLES_INPUT_LOOSE_HELD = "gui.goggles.input_loose_held";
+    /**
+     * {@code "Not stored:"}: the head of why the items of this input waited in the last planning run that looked at it
+     * (issue #53); the {@code gui.goggles.no_job_reason.*} text follows as a row of its own, so no row grows wider than
+     * the reason itself.
+     */
+    public static final String GOGGLES_INPUT_NOT_STORED = "gui.goggles.input_not_stored";
+    /** The cure for {@code NO_LOCATION_FOR_TYPE} on an input's goggles: one item type per bay (issue #53). */
+    public static final String GOGGLES_INPUT_ONE_TYPE_HINT = "gui.goggles.input_one_type_hint";
     /** {@code "Boxes over a maximum, to take out by hand: %1$s"}: package mode (issue #40), boxes held in an input. */
     public static final String GOGGLES_INPUT_BOXES_HELD = "gui.goggles.input_boxes_held";
     /** Package mode (issue #40): an empty rack bay without a Package Filter takes no box. */

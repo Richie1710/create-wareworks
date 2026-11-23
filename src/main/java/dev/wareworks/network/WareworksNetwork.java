@@ -238,8 +238,14 @@ public final class WareworksNetwork {
      * ({@code RuleUnit}, which grew {@code PACKAGES}) travels in {@code StockKeeperScreenState} by ordinal instead of the
      * old fluid flag, and an input's goggle data may carry the address of a box refused at a rule's maximum. The
      * server also tells each player at login whether package mode is on ({@link PackageModeSwitchPayload}).
+     * <p>
+     * <b>{@code "29"} is the unreleased version after 0.24.0-beta</b>, raised once for it: {@link OptimizerScreenPayload}'s
+     * {@code OptimizerScreenState} carries the {@code misaligned} flag after {@code linked} (issue #52) and every row a
+     * reason after its pip (issue #53, {@code RelocationReason} by ordinal + 1); a reader of the old shape would misread
+     * the rows. A Warehouse Input's goggle data may carry why its items wait ({@code NotStored}, by name), and the store
+     * reason {@code NO_LOCATION_FOR_TYPE} is new; both travel by name.
      */
-    public static final String VERSION = "28";
+    public static final String VERSION = "29";
 
     private WareworksNetwork() {
     }

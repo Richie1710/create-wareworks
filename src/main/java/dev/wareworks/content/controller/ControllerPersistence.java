@@ -24,6 +24,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.StockView;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
@@ -140,6 +141,8 @@ final class ControllerPersistence {
     private static final String TRIPS = "Trips";
     private static final String MOVED = "Moved";
     private static final String ENTRIES = "Entries";
+    /** Why an ended optimizer entry moved nothing (more), by name (issue #53); absent while it has none. */
+    private static final String END_REASON = "EndReason";
     private static final String IN_FLIGHT = "InFlight";
     private static final String TRIP_JOB = "Job";
     private static final String TRIP_ENTRY = "Entry";
@@ -1013,6 +1016,7 @@ final class ControllerPersistence {
                     entryTag.put(ITEM, keyTag);
                     entryTag.putString(STATE, entry.state().name());
                     entryTag.putLong(MOVED, entry.moved());
+                    entry.endReason().ifPresent(reason -> entryTag.putString(END_REASON, reason.name()));
                     entries.add(entryTag);
                 }
                 if (entries.isEmpty())
@@ -1077,8 +1081,10 @@ final class ControllerPersistence {
                     OptimizerOrder.EntryState.byName(entryTag.getString(STATE));
             if (!entryTag.hasUUID(ID) || key.isEmpty() || entryState.isEmpty())
                 continue;
+            // A reason this build does not know, or none (saved before issue #53), reads as none.
+            RelocationReason reason = RelocationReason.byName(entryTag.getString(END_REASON)).orElse(null);
             entries.add(new OptimizerOrder.Entry<>(entryTag.getUUID(ID), key.get(), entryState.get(),
-                    entryTag.getLong(MOVED)));
+                    entryTag.getLong(MOVED), reason));
         }
         if (entries.isEmpty())
             return Optional.empty();

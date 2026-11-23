@@ -5,6 +5,8 @@ import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -327,6 +329,8 @@ public final class JobPlanner<K, L> {
          * not for ever" true, also next to an input station that plans a job on every single run.
          */
         int cappedCursor = -1;
+        // Why each input station this run surveyed got no job, for that station's own goggles (issue #53).
+        Map<L, NoJobReason> storeReasons = new LinkedHashMap<>();
 
         for (PlannerInput.OpenRequest<K, L> request : input.requests()) {
             long need = request.remaining() - Math.max(0L, input.reservations().committedToRequest(request.id()));
@@ -440,29 +444,31 @@ public final class JobPlanner<K, L> {
                             ? TransportJob.store(newId(), station, target, key, selection.get().amount())
                             : TransportJob.storeToPort(newId(), station, target, key, selection.get().amount());
                     return new PlanResult<>(Optional.of(new PlannedJob<>(job, tripTicks(input, job))),
-                            reasons, next);
+                            reasons, next, Map.of(), storeReasons);
                 }
                 if (budget.exhausted) {
                     reasons.add(NoJobReason.BUDGET_EXHAUSTED);
-                    return new PlanResult<>(Optional.empty(), reasons, next);
+                    return new PlanResult<>(Optional.empty(), reasons, next, Map.of(), storeReasons);
                 }
             }
-            reasons.add(survey.reason());
+            NoJobReason stationReason = survey.reason();
+            reasons.add(stationReason);
+            storeReasons.put(station, stationReason);
         }
         int cursor = cappedCursor < 0 ? start : cappedCursor;
         // Relocations last (issue #46, ADR-079): every stage above returns as soon as it has a job and as soon as the
         // budget is spent, so a crane is only ever sent to tidy up when nobody waits for it and nothing arrived. The
         // cursor is the one the empty return hands back, so a relocation never moves the arrival round robin, and it
         // adds no reason: an optimizer that finds nothing must not change what the goggles say about storing.
-        Set<UUID> exhausted = new LinkedHashSet<>();
+        Map<UUID, RelocationReason> exhausted = new LinkedHashMap<>();
         if (!input.relocations().isEmpty()) {
             Optional<PlannedJob<K, L>> relocation = planRelocations(input, budget, exhausted);
             if (relocation.isPresent())
-                return new PlanResult<>(relocation, reasons, cursor, exhausted);
+                return new PlanResult<>(relocation, reasons, cursor, exhausted, storeReasons);
         }
         if (!work)
             reasons.add(NoJobReason.NO_WORK);
-        return new PlanResult<>(Optional.empty(), reasons, cursor, exhausted);
+        return new PlanResult<>(Optional.empty(), reasons, cursor, exhausted, storeReasons);
     }
 
     /**
@@ -908,17 +914,19 @@ public final class JobPlanner<K, L> {
     /**
      * The relocation stage: the needs in order, each searched by {@link #planRelocation}, until one produces a job or the
      * budget is spent. A need whose search ended with nothing found while the budget still had calls left is added to
-     * {@code exhausted}: nothing more of its key fits anywhere better now. A need the budget cut short is not, so the
-     * next run searches it again.
+     * {@code exhausted} with why ({@link RelocationReason}, issue #53): nothing more of its key fits anywhere better
+     * now. A need the budget cut short is not, so the next run searches it again.
      */
-    private Optional<PlannedJob<K, L>> planRelocations(PlannerInput<K, L> input, Budget budget, Set<UUID> exhausted) {
+    private Optional<PlannedJob<K, L>> planRelocations(PlannerInput<K, L> input, Budget budget,
+            Map<UUID, RelocationReason> exhausted) {
         for (PlannerInput.RelocateNeed<K> need : input.relocations()) {
-            Optional<PlannedJob<K, L>> job = planRelocation(input, need, budget);
+            RelocationReason[] why = {RelocationReason.NO_ROOM_HIGHER};
+            Optional<PlannedJob<K, L>> job = planRelocation(input, need, budget, why);
             if (job.isPresent())
                 return job;
             if (budget.exhausted)
                 return Optional.empty();
-            exhausted.add(need.id());
+            exhausted.put(need.id(), why[0]);
         }
         return Optional.empty();
     }
@@ -941,19 +949,25 @@ public final class JobPlanner<K, L> {
      * </ol>
      */
     private Optional<PlannedJob<K, L>> planRelocation(PlannerInput<K, L> input, PlannerInput.RelocateNeed<K> need,
-            Budget budget) {
+            Budget budget, RelocationReason[] why) {
         K key = need.key();
         int limit = limit(need.movable(), input.carryLimit().applyAsInt(key));
-        if (limit < 1)
+        if (limit < 1) {
+            why[0] = RelocationReason.SPOKEN_FOR;
             return Optional.empty();
+        }
         List<Candidate<L>> sources = new ArrayList<>();
         Map<L, Long> unreserved = new HashMap<>();
         int order = 0;
+        boolean anyHeld = false;
+        boolean anyReachable = false;
         for (LocationCount<L> entry : input.stock().locationsOf(key)) {
             int rank = order++;
             L location = entry.location();
+            anyHeld |= entry.count() > 0;
             if (!input.available().test(location) || input.extractRefused().test(location, key))
                 continue;
+            anyReachable = true;
             long free = entry.count() - input.reservations().reservedStock(location, key);
             if (free <= 0)
                 continue;
@@ -981,16 +995,21 @@ public final class JobPlanner<K, L> {
             held -= kept;
         }
         sources.removeIf(source -> unreserved.get(source.location()) - keep.getOrDefault(source.location(), 0L) <= 0);
-        if (sources.isEmpty())
+        if (sources.isEmpty()) {
+            why[0] = !anyHeld ? RelocationReason.NONE_IN_STOCK
+                    : anyReachable ? RelocationReason.SPOKEN_FOR : RelocationReason.NOT_REACHABLE;
             return Optional.empty();
+        }
         Candidate<L> first = sources.getFirst();
         RackPosition firstPos = position(first.location());
         List<Candidate<L>> targets = new ArrayList<>();
         collectStorage(input, targets, key, limit, null, firstPos.branch(), firstPos.x(), firstPos.y(),
                 first.travelTicks(), false, null, first.priority());
         targets.removeIf(candidate -> !input.relocateTarget().test(candidate.location(), key));
-        if (targets.isEmpty())
+        if (targets.isEmpty()) {
+            why[0] = whyNothingBetter(input, key, sources);
             return Optional.empty();
+        }
         // The highest target priority among the targets no worse a match than each filter rank: a source at or above it
         // has nothing better to go to, so it costs one comparison instead of a walk over every target.
         int[] bestPriority = new int[FilterMatch.REJECTED.storeRank() + 1];
@@ -1036,7 +1055,69 @@ public final class JobPlanner<K, L> {
             if (budget.exhausted)
                 return Optional.empty();
         }
+        // Searched to the end with calls to spare: the reason is decided from the sources it searched (issue #53).
+        why[0] = whyNothingBetter(input, key, sources);
         return Optional.empty();
+    }
+
+    /**
+     * Why no storage location is a better place for {@code key} than any of {@code sources} (issue #53, ADR-087), asked
+     * once a relocation search has ended with nothing found. It reads the same facts the search ranked by — priority,
+     * store filter, package mode's {@link PlannerInput#storeExcluded()}, the targets {@link PlannerInput#relocateTarget()}
+     * keeps out — over every storage location, and makes no live call and spends no budget; it runs only for a search that ended empty, as one more walk of the
+     * size of the {@link #collectStorage} walk that search already made (while another crane is busy such a need may be
+     * searched again at the next dispatch, and so may this).
+     * <ul>
+     * <li>No available location above the lowest source priority, but an unavailable one (unloaded chunk, broken rail):
+     * {@link RelocationReason#NOT_REACHABLE} (review fix).</li>
+     * <li>No location above it at all: {@link RelocationReason#SAME_PRIORITY} when every location has that one priority
+     * (the default, 0 everywhere), {@link RelocationReason#NO_HIGHER_PRIORITY} otherwise.</li>
+     * <li>Higher available locations exist and one of them would be better for some source by {@link RelocationRule} —
+     * or would be but for holding another item type ({@link FilterMatch#TAKEN_BY_OTHER_TYPE}, ranked as the plain
+     * {@link FilterMatch#ALLOWED} it would be when empty, review fix): {@link RelocationReason#NO_ROOM_HIGHER}, since only
+     * room was missing.</li>
+     * <li>Otherwise every higher available location's filter rejects the key or fits it worse, or package mode keeps the
+     * key out of it: {@link RelocationReason#FILTER_DOES_NOT_FIT}.</li>
+     * </ul>
+     */
+    private RelocationReason whyNothingBetter(PlannerInput<K, L> input, K key, List<Candidate<L>> sources) {
+        int lowest = Integer.MAX_VALUE;
+        for (Candidate<L> source : sources)
+            lowest = Math.min(lowest, source.priority());
+        boolean higher = false;
+        boolean higherUnavailable = false;
+        boolean differing = false;
+        Set<L> available = new HashSet<>(input.available().available(input.storageLocations()).locations());
+        for (L location : input.storageLocations()) {
+            if (!input.relocateTarget().test(location, key))
+                continue;
+            int priority = input.storePriority().applyAsInt(location);
+            differing |= priority != lowest;
+            if (priority <= lowest)
+                continue;
+            if (!available.contains(location)) {
+                higherUnavailable = true;
+                continue;
+            }
+            higher = true;
+            // Package mode: a place this key may never go to is higher but no fit (review fix).
+            if (input.storeExcluded().test(location, key))
+                continue;
+            FilterMatch filter = Objects.requireNonNull(input.storeFilter().apply(location, key), "storeFilter result");
+            // A one-type place holding another item would take the key as a plain place once empty: better only if
+            // that plain rank beats a source's (a dedicated source is never better off there, review fix).
+            int rank = filter == FilterMatch.TAKEN_BY_OTHER_TYPE ? FilterMatch.ALLOWED.storeRank() : filter.storeRank();
+            if (filter != FilterMatch.TAKEN_BY_OTHER_TYPE && !filter.allowsStoring())
+                continue;
+            for (Candidate<L> source : sources) {
+                if (RelocationRule.isBetter(source.priority(), source.filterRank(), priority, rank))
+                    return RelocationReason.NO_ROOM_HIGHER;
+            }
+        }
+        if (!higher)
+            return higherUnavailable ? RelocationReason.NOT_REACHABLE
+                    : differing ? RelocationReason.NO_HIGHER_PRIORITY : RelocationReason.SAME_PRIORITY;
+        return RelocationReason.FILTER_DOES_NOT_FIT;
     }
 
     // --- target selection ----------------------------------------------------------------------------------------
@@ -1186,7 +1267,10 @@ public final class JobPlanner<K, L> {
             FilterMatch filter = packageExcluded ? FilterMatch.REJECTED
                     : Objects.requireNonNull(input.storeFilter().apply(location, key), "storeFilter result");
             if (!filter.allowsStoring() && !allowRejected) {
-                note(survey, true);
+                if (filter == FilterMatch.TAKEN_BY_OTHER_TYPE)
+                    noteTypeTaken(survey);
+                else
+                    note(survey, true);
                 continue;
             }
             // A pre-filter, never a verdict: the estimate is an upper bound and answers UNKNOWN_CAPACITY when the
@@ -1298,6 +1382,12 @@ public final class JobPlanner<K, L> {
     private static void noteExcluded(@Nullable StoreSurvey survey) {
         if (survey != null)
             survey.packageExcluded = true;
+    }
+
+    /** A location skipped only because another item type holds it (issue #53, {@link FilterMatch#TAKEN_BY_OTHER_TYPE}). */
+    private static void noteTypeTaken(@Nullable StoreSurvey survey) {
+        if (survey != null)
+            survey.typeTaken = true;
     }
 
     private static void note(@Nullable StoreSurvey survey, boolean filterRejected) {
@@ -1457,6 +1547,11 @@ public final class JobPlanner<K, L> {
         /** At least one location was skipped because its store filter rejects the key. */
         private boolean filterRejected;
         /**
+         * At least one location was skipped only because it takes one item type at a time and holds, or awaits, another
+         * one, while its filter would allow the key ({@link FilterMatch#TAKEN_BY_OTHER_TYPE}, issue #53).
+         */
+        private boolean typeTaken;
+        /**
          * At least one item type was skipped because a stock rule left no headroom for it (M15). Set at the skip site
          * in {@link #plan}, not through {@link #note}: such a key contributes no storage candidate at all, so an input
          * holding only a capped item would otherwise report {@link NoJobReason#WAREHOUSE_FULL} while eleven empty
@@ -1498,6 +1593,10 @@ public final class JobPlanner<K, L> {
                 return NoJobReason.PORT_FULL;
             if (atMaximum)
                 return NoJobReason.AT_MAXIMUM;
+            // A place of the right kind was there but taken by another item type (issue #53): a free place, not another
+            // filter, is what was missing, so this wins over a filter mismatch elsewhere.
+            if (typeTaken)
+                return NoJobReason.NO_LOCATION_FOR_TYPE;
             return filterRejected ? NoJobReason.NO_MATCHING_FILTER : NoJobReason.WAREHOUSE_FULL;
         }
 
@@ -1522,6 +1621,8 @@ public final class JobPlanner<K, L> {
                 return NoJobReason.WAREHOUSE_FULL;
             if (atMaximum)
                 return NoJobReason.AT_MAXIMUM;
+            if (typeTaken)
+                return NoJobReason.NO_LOCATION_FOR_TYPE;
             if (filterRejected)
                 return NoJobReason.NO_MATCHING_FILTER;
             return NoJobReason.COLLECT_SOURCE_EMPTY;

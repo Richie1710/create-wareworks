@@ -80,6 +80,7 @@ import dev.wareworks.core.job.JobPlanner;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.PlannerInput;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RequestQueue;
 import dev.wareworks.core.job.RerouteTarget;
@@ -1137,6 +1138,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     /** Why the last planning run created no job; empty after a planned job or before the first run. */
     public Optional<NoJobReason> lastPlanReason() {
         return dispatch.lastReason();
+    }
+
+    /**
+     * Why the items waiting at the Warehouse Input at {@code inputPos} were not stored in the last planning run that
+     * surveyed that input (issue #53): one of the store answers ({@link NoJobReason#refusesStoring()}), the line its own
+     * goggles show while it holds items. Empty when that run stored from it, never reached it, or this position is no
+     * station of the aisle. One map lookup, no inventory read.
+     */
+    public Optional<NoJobReason> storeRefusalAt(BlockPos inputPos) {
+        Objects.requireNonNull(inputPos, "inputPos");
+        if (layout == null)
+            return Optional.empty();
+        return rackAt(inputPos).flatMap(dispatch::storeReasonAt).filter(NoJobReason::refusesStoring);
     }
 
     /** Whether the controller backs off planning after "warehouse full" at game time {@code now}. */
@@ -4086,8 +4100,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         boolean changed = false;
         for (OptimizerOrders.OpenEntry<ItemKey> entry : optimizerOrders.openEntries()) {
             long movable = optimizerMovable(entry.key());
+            // Nothing of it may move at all, which the controller knows before the planner is asked (issue #53): none
+            // in stock is the one case a row still reads "Nothing to move"; otherwise all of it is spoken for.
             if (movable <= 0)
-                changed |= optimizerOrders.endKey(entry.key());
+                changed |= optimizerOrders.endKey(entry.key(), stock.count(entry.key()) <= 0
+                        ? RelocationReason.NONE_IN_STOCK : RelocationReason.SPOKEN_FOR);
             else
                 needs.add(new PlannerInput.RelocateNeed<>(entry.id(), entry.key(), movable,
                         optimizerHeldBack(entry.key(), movable)));
@@ -4102,7 +4119,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * (a busy crane blocks the reach of the others, so "nothing found" would not mean "nothing fits" then): the items end
      * in every order that lists them.
      */
-    void onRelocationsExhausted(Set<UUID> entries) {
+    void onRelocationsExhausted(Map<UUID, RelocationReason> entries) {
         if (optimizerOrders.endExhausted(entries))
             setChanged();
     }

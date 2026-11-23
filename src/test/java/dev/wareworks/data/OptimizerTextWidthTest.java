@@ -85,7 +85,13 @@ class OptimizerTextWidthTest {
             "gui.optimizer.pip.running", "gui.optimizer.pip.done", "gui.optimizer.pip.nothing_to_move",
             "gui.optimizer.pip_hint", "gui.optimizer.list", "gui.optimizer.list_hint", "gui.optimizer.optimise",
             "gui.optimizer.optimise_hint", "gui.optimizer.optimise_now", "gui.optimizer.cancel",
-            "gui.optimizer.cancel_hint");
+            "gui.optimizer.cancel_hint",
+            // Why a row has nothing to move, and what to do about it (issue #53).
+            "gui.optimizer.reason.spoken_for", "gui.optimizer.reason.not_reachable",
+            "gui.optimizer.reason.same_priority", "gui.optimizer.reason.no_higher_priority",
+            "gui.optimizer.reason.filter_does_not_fit", "gui.optimizer.reason.no_room_higher",
+            "gui.optimizer.reason_hint.priority", "gui.optimizer.reason_hint.filter",
+            "gui.optimizer.reason_hint.room", "gui.optimizer.reason_hint.reach");
     private static final String PRIORITY = "gui.optimizer.priority";
     private static final String UNLOADED = "gui.optimizer.unloaded";
     private static final String MOVABLE_NOW = "gui.optimizer.movable_now";

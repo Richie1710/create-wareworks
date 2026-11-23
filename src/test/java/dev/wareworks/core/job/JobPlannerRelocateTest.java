@@ -57,6 +57,8 @@ class JobPlannerRelocateTest {
     /** Locations whose store filter selects exactly the listed keys. */
     private final Map<RackPosition, Set<String>> dedicated = new HashMap<>();
     private final Set<RackPosition> bays = new HashSet<>();
+    /** One-type places that hold another item type (issue #53). */
+    private final Set<RackPosition> takenByOtherType = new HashSet<>();
 
     private static Supplier<UUID> sequentialIds() {
         long[] next = {1000};
@@ -77,6 +79,8 @@ class JobPlannerRelocateTest {
     }
 
     private FilterMatch filterMatch(RackPosition location, String key) {
+        if (takenByOtherType.contains(location))
+            return FilterMatch.TAKEN_BY_OTHER_TYPE;
         Set<String> listed = dedicated.get(location);
         if (listed == null)
             return FilterMatch.UNFILTERED;
@@ -436,6 +440,127 @@ class JobPlannerRelocateTest {
         assertEquals(Set.of(NoJobReason.NO_WORK), result.reasons());
         assertEquals(List.of(), extractCalls);
         assertEquals(List.of(), insertCalls);
+    }
+
+    // --- why nothing moves (issue #53) ---------------------------------------------------------------------------
+
+    /** The default warehouse: priority 0 everywhere. The row says so instead of "Nothing to move". */
+    @Test
+    void anEntryAtEqualPrioritiesEndsWithSamePriority() {
+        holds(OVERFLOW, IRON, 30);
+        insertable.put(RACK, STACK);
+
+        PlanResult<String, RackPosition> result = planner.plan(input(need(1, IRON, 30)).build());
+        assertFalse(result.hasJob());
+        assertEquals(Map.of(id(1), RelocationReason.SAME_PRIORITY), result.relocationReasons());
+    }
+
+    @Test
+    void anEntryAtTheHighestPriorityEndsWithNoHigherPriority() {
+        holds(RACK, IRON, 30);
+        priorities.put(RACK, 5);
+        insertable.put(OVERFLOW, STACK);
+
+        assertEquals(Map.of(id(1), RelocationReason.NO_HIGHER_PRIORITY),
+                planner.plan(input(need(1, IRON, 30)).build()).relocationReasons());
+    }
+
+    @Test
+    void aDedicatedSourceBelowAGeneralRackEndsWithFilterDoesNotFit() {
+        holds(OVERFLOW, IRON, 30);
+        dedicated.put(OVERFLOW, Set.of(IRON));
+        priorities.put(RACK, 5);
+        insertable.put(RACK, STACK);
+
+        assertEquals(Map.of(id(1), RelocationReason.FILTER_DOES_NOT_FIT),
+                planner.plan(input(need(1, IRON, 30)).build()).relocationReasons(),
+                "a higher place fits it worse than its dedicated chest");
+
+        dedicated.remove(OVERFLOW);
+        dedicated.put(RACK, Set.of(GOLD));
+        assertEquals(Map.of(id(1), RelocationReason.FILTER_DOES_NOT_FIT),
+                planner.plan(input(need(1, IRON, 30)).build()).relocationReasons(),
+                "and so does one whose filter rejects it");
+    }
+
+    @Test
+    void aFullOrTakenHigherPlaceEndsWithNoRoomHigher() {
+        holds(OVERFLOW, IRON, 30);
+        priorities.put(RACK, 5);
+        insertable.put(RACK, 0);
+
+        assertEquals(Map.of(id(1), RelocationReason.NO_ROOM_HIGHER),
+                planner.plan(input(need(1, IRON, 30)).build()).relocationReasons(), "the rack refuses it live");
+
+        takenByOtherType.add(RACK);
+        insertable.put(RACK, STACK);
+        insertCalls.clear();
+        assertEquals(Map.of(id(1), RelocationReason.NO_ROOM_HIGHER),
+                planner.plan(input(need(1, IRON, 30)).build()).relocationReasons(),
+                "a one-type bay of another item has no room for it either");
+        assertEquals(List.of(), insertCalls, "and costs no live call");
+    }
+
+    @Test
+    void anUnreachableHigherPlaceEndsWithNotReachable() {
+        holds(OVERFLOW, IRON, 30);
+        priorities.put(RACK, 5);
+        insertable.put(RACK, STACK);
+
+        assertEquals(Map.of(id(1), RelocationReason.NOT_REACHABLE),
+                planner.plan(input(need(1, IRON, 30)).available(location -> !location.equals(RACK)).build())
+                        .relocationReasons(), "the only higher place is behind a broken rail: no priority problem");
+    }
+
+    @Test
+    void aHigherPlacePackageModeKeepsOutEndsWithFilterDoesNotFit() {
+        holds(OVERFLOW, IRON, 30);
+        priorities.put(RACK, 5);
+        insertable.put(RACK, STACK);
+
+        assertEquals(Map.of(id(1), RelocationReason.FILTER_DOES_NOT_FIT),
+                planner.plan(input(need(1, IRON, 30)).storeExcluded((location, key) -> location.equals(RACK)).build())
+                        .relocationReasons(), "an empty plain bay a box may not enter is no lack of room");
+    }
+
+    @Test
+    void aDedicatedSourceBelowABayOfAnotherTypeEndsWithFilterDoesNotFit() {
+        holds(OVERFLOW, IRON, 30);
+        dedicated.put(OVERFLOW, Set.of(IRON));
+        priorities.put(RACK, 5);
+        takenByOtherType.add(RACK);
+        insertable.put(RACK, STACK);
+
+        assertEquals(Map.of(id(1), RelocationReason.FILTER_DOES_NOT_FIT),
+                planner.plan(input(need(1, IRON, 30)).build()).relocationReasons(),
+                "a plain bay is no better than a dedicated chest, even once empty");
+    }
+
+    @Test
+    void anEntryWithNoSourceSaysWhy() {
+        assertEquals(Map.of(id(1), RelocationReason.NONE_IN_STOCK),
+                planner.plan(input(need(1, IRON, 30)).build()).relocationReasons(), "none in stock");
+
+        holds(OVERFLOW, IRON, 30);
+        priorities.put(RACK, 5);
+        insertable.put(RACK, STACK);
+        assertEquals(Map.of(id(1), RelocationReason.SPOKEN_FOR),
+                planner.plan(input(new PlannerInput.RelocateNeed<>(id(1), IRON, 30, 30)).build())
+                        .relocationReasons(), "everything is held back for requests");
+        assertEquals(Map.of(id(1), RelocationReason.NOT_REACHABLE),
+                planner.plan(input(need(1, IRON, 30)).available(location -> !location.equals(OVERFLOW)).build())
+                        .relocationReasons(), "it lies only where the crane cannot go");
+    }
+
+    @Test
+    void aMoveSetsNoReason() {
+        holds(OVERFLOW, IRON, 30);
+        priorities.put(RACK, 5);
+        insertable.put(RACK, STACK);
+
+        PlanResult<String, RackPosition> result = planner.plan(input(need(1, IRON, 30)).build());
+        assertTrue(result.hasJob());
+        assertEquals(Map.of(), result.relocationReasons());
     }
 
     // --- reroute -------------------------------------------------------------------------------------------------

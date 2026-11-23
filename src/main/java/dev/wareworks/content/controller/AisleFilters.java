@@ -329,7 +329,10 @@ final class AisleFilters {
      * {@linkplain StorageMember#holdsOneTypeOnly() holds one item type only} refuses every key it is not already
      * committed to. Both are cheaper than walking a filter's rules and both are stricter, so the order costs nothing and
      * saves the filter evaluation. For every location that answers neither — every warehouse interface — this is two
-     * field reads on an entry that was looked up anyway.
+     * field reads on an entry that was looked up anyway. A one-type location taken by another key still asks its own
+     * filter (issue #53), only to tell {@link FilterMatch#TAKEN_BY_OTHER_TYPE} (the filter would allow the key: "no free
+     * place for this item type") from {@link FilterMatch#REJECTED} (the filter is the reason); a bay without a filter,
+     * the common case, answers that with one field read.
      * <p>
      * A location that takes <b>filled containers</b> (a fluid bay, M30 step 9, D6) decides directly after them and
      * <b>returns</b>: a container of its fluid is {@link FilterMatch#DEDICATED}, so a bay outranks every shelf for it,
@@ -355,8 +358,18 @@ final class AisleFilters {
             return unread.contains(rack) ? FilterMatch.REJECTED : FilterMatch.UNFILTERED;
         if (!entry.acceptsStoring())
             return FilterMatch.REJECTED;
-        if (entry.holdsOneTypeOnly() && !committedTo.test(rack, key))
-            return FilterMatch.REJECTED;
+        if (entry.holdsOneTypeOnly() && !committedTo.test(rack, key)) {
+            // Taken by another item type (issue #53). Still refused before any estimate or live call; the filter is
+            // asked only to name the cause: if it rejects the key too, the filter is the reason, otherwise the place is
+            // simply someone else's. A plain bay has no filter, so this costs it nothing.
+            FilterMatch behind = matchSettings(level, rack, key, entry);
+            return behind.allowsStoring() ? FilterMatch.TAKEN_BY_OTHER_TYPE : behind;
+        }
+        return matchSettings(level, rack, key, entry);
+    }
+
+    /** {@link #match} for a resolved entry, after its two store rules: the fluid dedication, then the Create filter. */
+    private FilterMatch matchSettings(Level level, RackPosition rack, ItemKey key, Entry entry) {
         FluidDedication acceptsFluid = entry.acceptsFluid();
         if (acceptsFluid != null) {
             FluidKey arriving = carried(key).orElse(null);

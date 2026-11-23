@@ -42,6 +42,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.optimizer.OptimizerOrder;
 import dev.wareworks.core.stock.PriorityBreakdown;
@@ -94,8 +95,9 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * the iron already listed is left out ({@code optimizer-imported}). Gold cannot move, copper can;</li>
  * <li>Optimise: the world is frozen in the very server tick the crane carries the first {@value #FIRST_TRIP} iron to
  * the better chest. The screen shows the running order, its aqua and grey pips and the red cancel mark
- * ({@code optimizer-running}); then the screen is closed and the carry is shot across and along the aisle
- * ({@code carry-across}, {@code carry-along});</li>
+ * ({@code optimizer-running}); the gold row's gold pip says why the gold stays, the reason the server decided
+ * (issue #53): "No place with a higher priority" and what to do about it ({@code optimizer-reason}); then the screen
+ * is closed and the carry is shot across and along the aisle ({@code carry-across}, {@code carry-along});</li>
  * <li>frozen again while the second trip carries the remaining {@value #SECOND_TRIP}: the cancel mark's tooltip
  * ({@code optimizer-cancel-tooltip}) and a real click on it. The order stops at once, the trip under way is finished and
  * counted, and the copper stays where it lies ({@code optimizer-cancelled});</li>
@@ -515,6 +517,7 @@ public final class OptimizerVisualScenario implements VisualScenario {
                     ScreenInput.optimizerCancelMark(screen);
                 });
         parkAndShoot(script, "optimizer-running" + suffix);
+        rowReason(script, tag, suffix);
         closeScreen(script, tag);
         fly(script);
         script.shotFrom(ACROSS, "carry" + suffix)
@@ -603,6 +606,56 @@ public final class OptimizerVisualScenario implements VisualScenario {
         // 7. Issue #52: turned away from the aisle, the optimizer is not a member. Its screen says so, and Optimise
         // answers with that reason and starts nothing.
         misaligned(script, suffix);
+    }
+
+    /**
+     * Issue #53: the gold lies at priority {@value #HIGH_PRIORITY}, the highest there is, so its entry ended with
+     * nothing to move at the order's first planning run, and the server said why. The row carries that reason, its pip
+     * is gold, and the pip's tooltip says "No place with a higher priority" and what to do about it instead of a bare
+     * "Nothing to move". Checked on the server (the order's entry) and on the client (the row pushed, the tooltip, every
+     * line within the window) before the shot; the world is still frozen at the first trip.
+     */
+    private void rowReason(VisualScript script, String tag, String suffix) {
+        RelocationReason reason = RelocationReason.NO_HIGHER_PRIORITY;
+        script.server(tag + "CHECK the gold's entry says why it stays", (server, context) -> {
+                    OptimizerOrder.Entry<ItemKey> gold = order(server, context).entryFor(GOLD).orElseThrow();
+                    if (gold.state() != OptimizerOrder.EntryState.NOTHING_TO_MOVE
+                            || !gold.endReason().equals(Optional.of(reason)))
+                        throw new VisualTestException("the gold's entry is " + gold);
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the server ended the gold with {}", reason);
+                })
+                .client(tag + "rest the mouse on the gold row's pip", context -> ScreenInput.hover(
+                        context.minecraft(), ScreenInput.optimizerPip(screen(context), GOLD_ROW)))
+                .waitTicks(SETTLE_TICKS)
+                .client(tag + "CHECK the gold row's reason and its tooltip", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    Optional<RelocationReason> shown = screen.state().row(GOLD_ROW)
+                            .flatMap(OptimizerScreenState.RowView::reason);
+                    if (!shown.equals(Optional.of(reason)))
+                        throw new VisualTestException("the gold row carries the reason " + shown);
+                    List<String> tooltip = strings(ScreenInput.optimizerTooltip(screen,
+                            ScreenInput.optimizerPip(screen, GOLD_ROW)));
+                    List<String> wanted = List.of(
+                            WareworksLang.translateDirect(OptimizerScreenState.reasonKey(reason)).getString(),
+                            WareworksLang.translateDirect(OptimizerScreenState.reasonHintKey(reason).orElseThrow())
+                                    .getString(),
+                            WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PIP_HINT).getString());
+                    if (!tooltip.equals(wanted))
+                        throw new VisualTestException("the gold pip's tooltip is " + tooltip + ", expected " + wanted);
+                    String nothing = WareworksLang.translateDirect(OptimizerScreenState.Pip.NOTHING_TO_MOVE.langKey())
+                            .getString();
+                    if (tooltip.contains(nothing))
+                        throw new VisualTestException("the gold pip still says " + nothing);
+                    int room = OptimizerMenuLayout.WIDTH - 2 * OptimizerMenuLayout.MARGIN;
+                    for (String line : tooltip) {
+                        int width = context.minecraft().font.width(line);
+                        if (width > room)
+                            throw new VisualTestException("the tooltip line '" + line + "' is " + width
+                                    + " px wide, the window has " + room);
+                    }
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the gold row says why: {}", tooltip);
+                })
+                .shot("optimizer-reason" + suffix);
     }
 
     /**

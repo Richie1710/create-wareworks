@@ -2,6 +2,7 @@ package dev.wareworks.core.job;
 
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -18,15 +19,19 @@ import java.util.UUID;
  *                        by the collecting warehouse ports, walked as one virtual list from one cursor (M18, issue #13),
  *                        so within one full walk every input and every gated-open collecting port gets its turn and
  *                        neither starves the other
- * @param relocationsExhausted the relocation needs ({@link PlannerInput.RelocateNeed#id()}) whose search ended with
- *                        nothing found while the live simulation budget still had calls left (issue #46): nothing more
- *                        of that key fits anywhere better right now. A need the budget cut short is never in it; empty
- *                        whenever an earlier stage planned the job, because the relocation stage then never ran
+ * @param relocationReasons the relocation needs ({@link PlannerInput.RelocateNeed#id()}) whose search ended with
+ *                        nothing found while the live simulation budget still had calls left (issue #46), each with why
+ *                        (issue #53): nothing more of that key fits anywhere better right now. A need the budget cut short
+ *                        is never in it; empty whenever an earlier stage planned the job, because the relocation stage
+ *                        then never ran
+ * @param storeReasons    why each input station this run surveyed got no job for what it holds (issue #53), the
+ *                        answer its own goggles show: one {@link NoJobReason} per station, the one {@link #reasons()}
+ *                        got from it. A station whose items were stored, or that the run never reached, is not in it
  * @param <K>             item key type
  * @param <L>             location type
  */
 public record PlanResult<K, L>(Optional<PlannedJob<K, L>> job, Set<NoJobReason> reasons, int nextArrivalCursor,
-        Set<UUID> relocationsExhausted) {
+        Map<UUID, RelocationReason> relocationReasons, Map<L, NoJobReason> storeReasons) {
     public PlanResult {
         Objects.requireNonNull(job, "job");
         Objects.requireNonNull(reasons, "reasons");
@@ -34,12 +39,18 @@ public record PlanResult<K, L>(Optional<PlannedJob<K, L>> job, Set<NoJobReason> 
                 : EnumSet.copyOf(reasons));
         if (nextArrivalCursor < 0)
             throw new IllegalArgumentException("nextArrivalCursor must not be negative: " + nextArrivalCursor);
-        relocationsExhausted = Set.copyOf(Objects.requireNonNull(relocationsExhausted, "relocationsExhausted"));
+        relocationReasons = Map.copyOf(Objects.requireNonNull(relocationReasons, "relocationReasons"));
+        storeReasons = Map.copyOf(Objects.requireNonNull(storeReasons, "storeReasons"));
     }
 
     /** A result of a run in which no relocation search ended empty: every result before issue #46. */
     public PlanResult(Optional<PlannedJob<K, L>> job, Set<NoJobReason> reasons, int nextArrivalCursor) {
-        this(job, reasons, nextArrivalCursor, Set.of());
+        this(job, reasons, nextArrivalCursor, Map.of(), Map.of());
+    }
+
+    /** The relocation needs whose search ended with nothing found ({@link #relocationReasons()}'s keys). */
+    public Set<UUID> relocationsExhausted() {
+        return relocationReasons.keySet();
     }
 
     public boolean hasJob() {

@@ -18,6 +18,16 @@ public enum NoJobReason {
      */
     NO_MATCHING_FILTER,
     /**
+     * An input station holds items that would fit a storage location's filter, and every such location takes one item
+     * type at a time and holds, or awaits, another one (issue #53, {@code docs/warehouse-system.md} §7): a wall of rack
+     * bays whose every bay is already some other item's. Told apart from {@link #NO_MATCHING_FILTER} because no filter is
+     * at fault, so another filter would not help: the cure is a free bay, or a chest behind a Warehouse Interface for the
+     * long tail of item types. Wins over {@link #NO_MATCHING_FILTER} when both applied, because a free place of the
+     * right kind is what was missing. Arms the back-off like {@link #NO_MATCHING_FILTER}: it is reached after the same
+     * candidate walk.
+     */
+    NO_LOCATION_FOR_TYPE,
+    /**
      * Package mode (issue #40, owner decision E3, review fix 2026-11-22): an input station holds a box, and the only
      * storage locations with room for it were <b>empty rack bays without a Create Package Filter</b>, which package
      * mode keeps boxes out of (a bay holds one item key and every box is its own key). Told apart from
@@ -115,13 +125,24 @@ public enum NoJobReason {
 
     /**
      * Whether this reason is one a <b>collecting</b> port's own goggles may show as "the warehouse did not take these
-     * items" (M18, issue #13): the three answers a collect plan really produces about the warehouse, and none of the ones
+     * items" (M18, issue #13): the answers a collect plan really produces about the warehouse, and none of the ones
      * that are about a request, an output or an accepting port.
      * <p>
      * {@link #COLLECT_SOURCE_EMPTY} is deliberately not one of them: it says the machine has nothing ready, which the
      * port's own "Ready: 0" already says better.
      */
     public boolean refusesCollecting() {
-        return this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER || this == AT_MAXIMUM;
+        return this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER || this == NO_LOCATION_FOR_TYPE
+                || this == AT_MAXIMUM;
+    }
+
+    /**
+     * Whether this reason is an answer about the items an <b>input station</b> holds (issue #53): one of the reasons a
+     * store plan gives when an input's items fit nowhere, which that input's own goggles may show as why its items
+     * wait. Every other reason is about a request, an output, a machine or the run as a whole.
+     */
+    public boolean refusesStoring() {
+        return this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER || this == NO_LOCATION_FOR_TYPE
+                || this == PACKAGE_BAY_NEEDS_FILTER || this == PORT_FULL || this == AT_MAXIMUM;
     }
 }

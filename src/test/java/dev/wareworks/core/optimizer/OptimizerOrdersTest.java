@@ -7,11 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
+
+import dev.wareworks.core.job.RelocationReason;
 
 /**
  * The Warehouse Optimizer orders of one warehouse (issue #46, ADR-079): one order per optimizer, a trip cap, entries
@@ -105,22 +108,28 @@ class OptimizerOrdersTest {
         assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(1), IRON), new OptimizerOrders.OpenEntry<>(id(2), GOLD)),
                 orders.openEntries(), "one need per item, the oldest order's entry");
 
-        assertTrue(orders.endExhausted(Set.of(id(1))));
+        assertTrue(orders.endExhausted(Map.of(id(1), RelocationReason.SAME_PRIORITY)));
         assertEquals(OptimizerOrder.EntryState.NOTHING_TO_MOVE, order(NORTH).entryFor(IRON).orElseThrow().state());
+        assertEquals(Optional.of(RelocationReason.SAME_PRIORITY), order(NORTH).entryFor(IRON).orElseThrow().endReason(),
+                "the entry keeps why it ended (issue #53)");
+        assertEquals(Optional.of(RelocationReason.SAME_PRIORITY), order(SOUTH).entryFor(IRON).orElseThrow().endReason(),
+                "in every order that lists the item");
         assertEquals(OptimizerOrder.State.RUNNING, order(NORTH).state(), "gold is still open");
         assertEquals(OptimizerOrder.State.FINISHED, order(SOUTH).state(), "nothing more fits for south's iron either");
         assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(2), GOLD)), orders.openEntries());
 
-        assertTrue(orders.endKey(GOLD));
+        assertTrue(orders.endKey(GOLD, RelocationReason.NONE_IN_STOCK));
         assertFalse(orders.hasPending());
-        assertFalse(orders.endKey(GOLD), "an ended item ends once");
+        assertFalse(orders.endKey(GOLD, RelocationReason.SPOKEN_FOR), "an ended item ends once");
+        assertEquals(Optional.of(RelocationReason.NONE_IN_STOCK), order(NORTH).entryFor(GOLD).orElseThrow().endReason(),
+                "and keeps the first reason");
     }
 
     @Test
     void anEntryWithATripIsDone() {
         orders.start(NORTH, List.of(IRON, GOLD), 32);
         orders.onAssigned(id(100), IRON);
-        orders.endKey(IRON);
+        orders.endKey(IRON, RelocationReason.NO_ROOM_HIGHER);
         assertEquals(OptimizerOrder.EntryState.DONE, order(NORTH).entryFor(IRON).orElseThrow().state(),
                 "its trip is still on its way, so something moved");
     }

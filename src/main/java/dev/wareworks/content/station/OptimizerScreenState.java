@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.optimizer.OptimizerLimits;
 import dev.wareworks.core.optimizer.OptimizerOrder;
 import dev.wareworks.core.stock.PriorityBreakdown;
@@ -68,6 +69,17 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
             return WareworksLang.OPTIMIZER_PIP_PREFIX + name().toLowerCase(Locale.ROOT);
         }
 
+        /**
+         * Why {@code key} has nothing to move in {@code order} (issue #53): the reason the warehouse gave when its entry
+         * ended with {@link #NOTHING_TO_MOVE}, empty for every other mark and for an entry saved without one.
+         */
+        public static Optional<RelocationReason> reasonOf(Optional<? extends OptimizerOrder<ItemKey, ?>> order,
+                ItemKey key) {
+            if (order.isEmpty() || key == null || of(order, key) != NOTHING_TO_MOVE)
+                return Optional.empty();
+            return order.get().entryFor(key).flatMap(OptimizerOrder.Entry::endReason);
+        }
+
         /** The mark of {@code key} in {@code order}, {@link #IDLE} when the order does not list it. */
         public static Pip of(Optional<? extends OptimizerOrder<ItemKey, ?>> order, ItemKey key) {
             if (order.isEmpty() || key == null)
@@ -79,6 +91,30 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
                 case STOPPED -> IDLE;
             }).orElse(IDLE);
         }
+    }
+
+    /**
+     * Relative lang key of the sentence a row shows for {@code reason} instead of "Nothing to move" (issue #53), e.g.
+     * {@code gui.optimizer.reason.same_priority}; {@link RelocationReason#NONE_IN_STOCK} reads as the pip's own
+     * "Nothing to move" and so has the pip's key.
+     */
+    public static String reasonKey(RelocationReason reason) {
+        Objects.requireNonNull(reason, "reason");
+        return reason == RelocationReason.NONE_IN_STOCK ? Pip.NOTHING_TO_MOVE.langKey()
+                : WareworksLang.OPTIMIZER_REASON_PREFIX + reason.name().toLowerCase(Locale.ROOT);
+    }
+
+    /** Relative lang key of what a player can do about {@code reason}, or empty when there is nothing to add. */
+    public static Optional<String> reasonHintKey(RelocationReason reason) {
+        Objects.requireNonNull(reason, "reason");
+        return Optional.ofNullable(switch (reason) {
+            case NONE_IN_STOCK -> null;
+            case SPOKEN_FOR -> WareworksLang.OPTIMIZER_MOVABLE_RESERVED;
+            case NOT_REACHABLE -> WareworksLang.OPTIMIZER_REASON_HINT_REACH;
+            case SAME_PRIORITY, NO_HIGHER_PRIORITY -> WareworksLang.OPTIMIZER_REASON_HINT_PRIORITY;
+            case FILTER_DOES_NOT_FIT -> WareworksLang.OPTIMIZER_REASON_HINT_FILTER;
+            case NO_ROOM_HIGHER -> WareworksLang.OPTIMIZER_REASON_HINT_ROOM;
+        });
     }
 
     /** Where the optimizer's order is, as the status line says it. */
@@ -184,8 +220,11 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
      * @param breakdown what the warehouse holds of it by priority and what could move, {@link PriorityBreakdown#NONE}
      *                  for an empty row
      * @param pip       what the optimizer's order is doing with it
+     * @param reason    why it has nothing to move (issue #53), decided on the server ({@link Pip#reasonOf}); present only
+     *                  with {@link Pip#NOTHING_TO_MOVE}
      */
-    public record RowView(int row, Optional<ItemKey> key, PriorityBreakdown breakdown, Pip pip) {
+    public record RowView(int row, Optional<ItemKey> key, PriorityBreakdown breakdown, Pip pip,
+                          Optional<RelocationReason> reason) {
         public RowView {
             row = Math.max(0, row);
             if (key == null)
@@ -194,11 +233,26 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
                 breakdown = PriorityBreakdown.NONE;
             if (pip == null)
                 pip = Pip.IDLE;
+            if (reason == null || pip != Pip.NOTHING_TO_MOVE)
+                reason = Optional.empty();
+        }
+
+        /** A row without a reason. */
+        public RowView(int row, Optional<ItemKey> key, PriorityBreakdown breakdown, Pip pip) {
+            this(row, key, breakdown, pip, Optional.empty());
         }
 
         /** An empty row. */
         public static RowView empty(int row) {
             return new RowView(row, Optional.empty(), PriorityBreakdown.NONE, Pip.IDLE);
+        }
+
+        /**
+         * The lang key of what the row's mark says: the reason's sentence for an item with nothing to move (issue #53),
+         * the mark's own sentence otherwise.
+         */
+        public String statusKey() {
+            return reason.map(OptimizerScreenState::reasonKey).orElse(pip.langKey());
         }
 
         public void write(RegistryFriendlyByteBuf buffer) {
@@ -207,15 +261,24 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
             key.ifPresent(value -> ItemKey.STREAM_CODEC.encode(buffer, value));
             writeBreakdown(buffer, breakdown);
             buffer.writeVarInt(pip.ordinal());
+            // 0 for none, the reason's ordinal + 1 otherwise (issue #53).
+            buffer.writeVarInt(reason.map(value -> value.ordinal() + 1).orElse(0));
         }
 
-        /** Reads a row written by {@link #write}; an unknown pip ordinal falls back to {@link Pip#IDLE}. */
+        /**
+         * Reads a row written by {@link #write}; an unknown pip ordinal falls back to {@link Pip#IDLE}, an unknown reason
+         * to none.
+         */
         public static RowView read(RegistryFriendlyByteBuf buffer) {
             int row = buffer.readVarInt();
             Optional<ItemKey> key = buffer.readBoolean() ? Optional.of(ItemKey.STREAM_CODEC.decode(buffer))
                     : Optional.empty();
             PriorityBreakdown breakdown = readBreakdown(buffer);
-            return new RowView(row, key, breakdown, byOrdinal(Pip.values(), buffer.readVarInt()));
+            Pip pip = byOrdinal(Pip.values(), buffer.readVarInt());
+            int reason = buffer.readVarInt() - 1;
+            RelocationReason[] reasons = RelocationReason.values();
+            return new RowView(row, key, breakdown, pip, reason < 0 || reason >= reasons.length ? Optional.empty()
+                    : Optional.of(reasons[reason]));
         }
     }
 

@@ -13,6 +13,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
+import dev.wareworks.core.job.RelocationReason;
+
 /**
  * The Warehouse Optimizer orders of one warehouse (issue #46, ADR-079), oldest first, at most one per optimizer and
  * {@value OptimizerLimits#MAX_ORDERS} in all. The controller owns one and saves it; it plans nothing and moves nothing.
@@ -183,12 +185,14 @@ public final class OptimizerOrders<K, P> {
     /**
      * Ends {@code key} in every running order that lists it: nothing more of it fits anywhere better, or nothing of it
      * may move. An entry with a trip that set off is {@link OptimizerOrder.EntryState#DONE}, one without is
-     * {@link OptimizerOrder.EntryState#NOTHING_TO_MOVE}; an order left without an open entry is finished.
+     * {@link OptimizerOrder.EntryState#NOTHING_TO_MOVE}; an order left without an open entry is finished. Each ended entry
+     * keeps {@code reason}, why nothing (more) of it moves (issue #53), which its row shows.
      *
      * @return whether an entry ended
      */
-    public boolean endKey(K key) {
+    public boolean endKey(K key, RelocationReason reason) {
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(reason, "reason");
         boolean changed = false;
         for (Map.Entry<P, OptimizerOrder<K, P>> slot : orders.entrySet()) {
             OptimizerOrder<K, P> order = slot.getValue();
@@ -201,7 +205,7 @@ public final class OptimizerOrders<K, P> {
                     boolean tripped = entry.moved() > 0 || order.inFlight().containsValue(entry.id());
                     next.add(new OptimizerOrder.Entry<>(entry.id(), entry.key(), tripped
                             ? OptimizerOrder.EntryState.DONE : OptimizerOrder.EntryState.NOTHING_TO_MOVE,
-                            entry.moved()));
+                            entry.moved(), reason));
                     ended = true;
                 } else {
                     next.add(entry);
@@ -216,25 +220,26 @@ public final class OptimizerOrders<K, P> {
     }
 
     /**
-     * Ends the items of the entries the planner reported exhausted ({@code PlanResult#relocationsExhausted}), each in
-     * every running order that lists it ({@link #endKey}).
+     * Ends the items of the entries the planner reported exhausted ({@code PlanResult#relocationReasons}), each in
+     * every running order that lists it ({@link #endKey}) and with the reason the planner gave for its entry.
      *
      * @return whether an entry ended
      */
-    public boolean endExhausted(Collection<UUID> entryIds) {
-        Objects.requireNonNull(entryIds, "entryIds");
-        if (entryIds.isEmpty())
+    public boolean endExhausted(Map<UUID, RelocationReason> exhausted) {
+        Objects.requireNonNull(exhausted, "exhausted");
+        if (exhausted.isEmpty())
             return false;
-        Set<K> keys = new LinkedHashSet<>();
+        Map<K, RelocationReason> keys = new LinkedHashMap<>();
         for (OptimizerOrder<K, P> order : orders.values()) {
             for (OptimizerOrder.Entry<K> entry : order.entries()) {
-                if (entryIds.contains(entry.id()))
-                    keys.add(entry.key());
+                RelocationReason reason = exhausted.get(entry.id());
+                if (reason != null)
+                    keys.putIfAbsent(entry.key(), reason);
             }
         }
         boolean changed = false;
-        for (K key : keys)
-            changed |= endKey(key);
+        for (Map.Entry<K, RelocationReason> key : keys.entrySet())
+            changed |= endKey(key.getKey(), key.getValue());
         return changed;
     }
 

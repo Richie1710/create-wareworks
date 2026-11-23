@@ -690,7 +690,10 @@ what a request, a production order or a stock rule's reserve needs stays where i
 priority and a filter that fits the item no worse, so nothing leaves a chest dedicated to it for a general rack, and
 nothing ever goes into a fluid bay. An order ends when nothing more fits anywhere better or after
 `optimizer.tripsPerRequest` trips (32 by default); press again later to move what fits then. The red mark on the status
-line stops it, and a trip under way is finished.
+line stops it, and a trip under way is finished. When an item has nothing to move, its row's dot turns gold and its
+tooltip says why: *All places have the same priority*, *No place with a higher priority*, *No free room at a higher
+priority*, *Higher places' filters do not fit*, or that all of it is requested or reserved, each with what to do about
+it. *Nothing to move* is left for an item the warehouse holds none of.
 
 ## Production
 
@@ -975,6 +978,32 @@ down by a hand truck behind one. An empty box fed to a Packager behind an input 
 warehouse sees it. A crane that was already carrying loose items out of an input when the world was saved (with the
 switch off) finishes that one trip after the reload and stores them, at most one load per crane; likewise a box it was
 already carrying may still land in an empty bay. The `[packageMode]` section and the network version are part of every install, used or not.
+
+## FAQ
+
+**Why is the same item in several rack bays?** The crane stores an item into the bay that already holds it, and opens
+a second bay only when that one cannot take it. That happens when:
+
+* **the first bay is full** (64 stacks for a wooden bay, 256 for andesite, 1,024 for brass);
+* **items were put in without the crane**: a click on a bay, a funnel, a hopper, a chute or a Mechanical Arm puts them
+  into exactly the bay they face, and an empty bay takes any item type;
+* **the items are not quite the same**: a renamed item, an enchanted one or one with other data components is a type of
+  its own, so it gets a bay of its own;
+* the bay that holds it **could not be reached** when the item was stored (an unloaded chunk, a broken rail).
+
+**What does the Warehouse Optimizer do, and what not?** It moves the items you list **up in priority**: from a storage
+location to one with a **higher** priority whose filter fits the item no worse. That is all it does. It does **not**
+merge an item that lies in two places of the same priority, it does not sort, and with every bay at the default
+priority 0 it has nothing to do. Give the places you want filled first a higher priority, then press Optimise. When a
+row moves nothing, its gold dot tells you why.
+
+**Why do items wait in the Warehouse Input?** Mostly because **each rack bay holds one item type** until it is empty
+again. A wall of forty bays holds forty item types, however much room is left in them: sixteen colours of wool and
+sixteen of carpet take 32 bays before anything else arrives. The next new type then has no free bay and waits in the
+input. Nothing is lost, and the input's goggles say *Not stored: no free place for this item type*. Add bays, or put a
+chest behind a Warehouse Interface for the long tail of types you own only a few of. The other reasons the input shows
+are a full warehouse, a storage filter that takes the item nowhere, a stock rule at its maximum, or in package mode a box
+that needs a bay with a Package Filter.
 
 ## Compatibility
 

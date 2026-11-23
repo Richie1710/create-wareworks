@@ -1048,7 +1048,7 @@ settings, **read** the result and **believe** what the warehouse did.
     changes with the direction ("Angeforderter Gegenstand" / "Aufgenommener Gegenstand"), the port's goggle lines
     ("Anschluss: Überlauf (-1)", "Nimmt auf: Jeden Gegenstand", "Abgegeben: 24", "Aktiv", "Wartet auf ein Signal"), the
     controller's "Aufnehmende Anschlüsse: 2", the aisle display's "Anschlüsse: 2 aufnehmend", the crane's "Gibt ab", the
-    planning reason "ein aufnehmender Anschluss war der letzte mögliche Platz ..." and the output's Shift tooltip, which
+    planning reason "ein aufnehmender Anschluss war der einzige mögliche Platz ..." and the output's Shift tooltip, which
     names the overflow in its one sentence (since issue #22; the direction box is the Ponder scene's job). Nothing may show a raw key, run out of its box
     or be cut off — German is the longer language and the screenshot runs only ever render English, so this is the only
     place clipping shows up. The longest lines to watch are the new tooltip paragraphs and the planning reason.
@@ -4146,3 +4146,18 @@ you get tired of waiting, and put it back before judging check 160.
     a List, an Attribute and a Package Filter as the filter: the bay shows the filter item itself. Leave the world and
     rejoin, and walk more than a few chunks away and back: the filter items are still there. **Does the filter in front
     of an empty bay ever get mistaken for stock?**
+
+## BY. Saying why nothing happens ([issue #53](https://github.com/Richie1710/create-wareworks/issues/53))
+
+517. **Does an optimizer row say why?** Build a short aisle of wooden rack bays, all at the default priority, put iron
+    into one and list iron and an item you do not have in a Warehouse Optimizer. Press Optimise: the iron's dot turns
+    gold, and its tooltip reads "All places have the same priority" with "Give better places a higher priority" below;
+    the item you do not have keeps the grey dot and "Nothing to move". Give the iron's bay priority 5 and press again:
+    "No place with a higher priority". Switch the game to German and read the same rows. **Does the reason tell you what
+    to do?**
+518. **Does a waiting input say why?** Fill every rack bay of a small aisle with a different item type and feed one
+    more type into the input. Look at the input with Engineer's Goggles: "Not stored:", then "no free place for this
+    item type", then "Each rack bay holds one item type: add bays or a chest". The controller's planning line says the
+    same reason. Set a filter for another item on one bay: where a filter is what refuses the item, the input says "no
+    storage location takes these items, whatever room it has". In German the rows fit the goggle box. **Would you know
+    what to build next?**

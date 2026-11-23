@@ -32,6 +32,8 @@ import dev.wareworks.core.warehouse.LocationKind;
 class JobPlannerTest {
     private static final String IRON = "iron";
     private static final String DIAMOND = "diamond";
+    private static final String COBBLESTONE = "cobblestone";
+    private static final String DIRT = "dirt";
     private static final String SHULKER = "shulker";
     /** Keys of one item type with different components, written "type#components" (see {@code itemType}). */
     private static final String ITEM_TYPE_SEPARATOR = "#";
@@ -66,6 +68,8 @@ class JobPlannerTest {
     private final Map<RackPosition, Set<String>> storeFilters = new HashMap<>();
     /** Locations whose list is a <b>deny</b> list: they accept everything they do not list, but select nothing. */
     private final Set<RackPosition> denyLists = new HashSet<>();
+    /** One-type places and the item type each is committed to (issue #53). */
+    private final Map<RackPosition, String> committedTypes = new HashMap<>();
     /** Storage priorities per location ({@link PlannerInput#storePriority()}, M16); absent means 0. */
     private final Map<RackPosition, Integer> priorities = new HashMap<>();
     /** Signed port ranks ({@link PlannerInput#portRank()}, M17); absent means 0, i.e. "no accepting port". */
@@ -159,7 +163,22 @@ class JobPlannerTest {
         return priorities.getOrDefault(location, 0);
     }
 
+    /**
+     * Makes {@code location} a one-type place committed to {@code type}, as a rack bay holding it is (issue #53): every
+     * other key its filter would allow answers {@link FilterMatch#TAKEN_BY_OTHER_TYPE}, as {@code AisleFilters} does.
+     */
+    private void oneType(RackPosition location, String type) {
+        committedTypes.put(location, type);
+    }
+
     private FilterMatch filterMatch(RackPosition location, String key) {
+        FilterMatch filter = filterOnly(location, key);
+        String committed = committedTypes.get(location);
+        return committed != null && !committed.equals(key) && filter.allowsStoring()
+                ? FilterMatch.TAKEN_BY_OTHER_TYPE : filter;
+    }
+
+    private FilterMatch filterOnly(RackPosition location, String key) {
         Set<String> listed = storeFilters.get(location);
         if (listed == null)
             return FilterMatch.UNFILTERED;
@@ -833,6 +852,57 @@ class JobPlannerTest {
                 .build());
         assertFalse(outOfRoom.hasJob());
         assertEquals(Set.of(NoJobReason.WAREHOUSE_FULL), outOfRoom.reasons());
+    }
+
+    /**
+     * Issue #53: an item that waits only because every place that would take it holds another item type (a wall of
+     * one-type rack bays) is reported as {@link NoJobReason#NO_LOCATION_FOR_TYPE}, not as a filter mismatch — no filter is
+     * at fault there. A filter that really rejects the item keeps {@link NoJobReason#NO_MATCHING_FILTER}, and when both
+     * happen the free place of the right kind is what was missing. Each input's own answer is in
+     * {@link PlanResult#storeReasons()}.
+     */
+    @Test
+    void anItemWhosePlacesHoldOtherTypesHasNoLocationForItsType() {
+        RackPosition cobbleBay = rack(1, 0, Side.LEFT);
+        RackPosition dirtBay = rack(2, 0, Side.LEFT);
+        stock.update(cobbleBay, slots(26, COBBLESTONE, STACK));
+        stock.update(dirtBay, slots(26, DIRT, STACK));
+        oneType(cobbleBay, COBBLESTONE);
+        oneType(dirtBay, DIRT);
+        live.insertable.put(cobbleBay, STACK);
+        live.insertable.put(dirtBay, STACK);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(cobbleBay, dirtBay))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK))
+                .inputBuffers(location -> slots(0, IRON, 3));
+
+        PlanResult<String, RackPosition> taken = planner.plan(base.build());
+        assertFalse(taken.hasJob(), "both bays are some other item's");
+        assertEquals(Set.of(NoJobReason.NO_LOCATION_FOR_TYPE), taken.reasons());
+        assertEquals(Map.of(IN_A, NoJobReason.NO_LOCATION_FOR_TYPE), taken.storeReasons(), "the input's own answer");
+        assertEquals(List.of(), live.insertCalls, "a taken bay costs no live call, like a rejecting filter");
+
+        // A filter that really rejects the item elsewhere does not hide that a free place of its kind was missing.
+        RackPosition diamonds = rack(3, 0, Side.LEFT);
+        stock.update(diamonds, slots(27));
+        filter(diamonds, DIAMOND);
+        assertEquals(Set.of(NoJobReason.NO_LOCATION_FOR_TYPE),
+                planner.plan(base.storageLocations(List.of(cobbleBay, dirtBay, diamonds)).build()).reasons());
+
+        // Filters alone: still NO_MATCHING_FILTER. A taken bay whose filter rejects the item too counts as the filter.
+        filter(cobbleBay, COBBLESTONE);
+        filter(dirtBay, DIRT);
+        PlanResult<String, RackPosition> filtered = planner.plan(base.build());
+        assertEquals(Set.of(NoJobReason.NO_MATCHING_FILTER), filtered.reasons());
+        assertEquals(Map.of(IN_A, NoJobReason.NO_MATCHING_FILTER), filtered.storeReasons());
+
+        // And a free place of any kind is used as before: nothing about storing changed.
+        RackPosition empty = rack(4, 0, Side.LEFT);
+        stock.update(empty, slots(27));
+        live.insertable.put(empty, STACK);
+        PlanResult<String, RackPosition> stored = planner.plan(base.storageLocations(List.of(cobbleBay, empty)).build());
+        assertEquals(empty, stored.job().orElseThrow().job().target());
+        assertEquals(Map.of(), stored.storeReasons(), "an input whose items are stored has no reason");
     }
 
     /** A reroute stores the leftovers, so it obeys the same filters as the store plan. */

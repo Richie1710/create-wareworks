@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.BooleanSupplier;
 
 import org.jetbrains.annotations.Nullable;
@@ -19,6 +20,7 @@ import dev.wareworks.content.controller.WarehouseRegistry;
 import dev.wareworks.content.item.InsertOnlyItemHandler;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.packagemode.PackageModeGate;
+import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.production.PackageModeDrain;
 import dev.wareworks.core.warehouse.LocationKind;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
@@ -508,7 +510,12 @@ public class WarehouseInputBlockEntity extends WarehouseStationBlockEntity {
         String refusedLoose = lastLooseRefused == null || !packageMode ? ""
                 : BuiltInRegistries.ITEM.getKey(lastLooseRefused).toString();
         long[] held = heldForAHand();
+        // Why the items here wait (issue #53): the controller's answer about this input, only while it holds any.
+        Optional<NoJobReason> notStored = level == null || level.isClientSide || buffer.snapshot().isEmpty()
+                ? Optional.empty()
+                : WarehouseRegistry.findController(level, worldPosition).flatMap(c -> c.storeRefusalAt(worldPosition));
         return super.createSummary()
+                .withNotStored(notStored)
                 .withPackages(new PackageUnpackSummary(packagesOpened, refusedPackageStacks, refusedFreeSlots,
                         held[0], refusedLoose, packagerRefusedForPackageMode && packageMode,
                         packageMode ? lastBoxAtMaximum : null, held[1]));
@@ -525,6 +532,17 @@ public class WarehouseInputBlockEntity extends WarehouseStationBlockEntity {
     @Override
     protected void addStationGoggleLines(List<Component> tooltip, StationGoggleSummary shown) {
         super.addStationGoggleLines(tooltip, shown);
+        // Why the items here wait (issue #53), in the words of the controller's planning line, and for the one type
+        // rule the cure as well: a player standing at a full input should not have to find the controller first.
+        shown.notStored().ifPresent(reason -> {
+            WareworksLang.translate(WareworksLang.GOGGLES_INPUT_NOT_STORED).style(ChatFormatting.GOLD)
+                    .forGoggles(tooltip, 1);
+            WareworksLang.translate(WareworksLang.noJobReasonKey(reason)).style(ChatFormatting.WHITE)
+                    .forGoggles(tooltip, 2);
+            if (reason == NoJobReason.NO_LOCATION_FOR_TYPE)
+                WareworksLang.translate(WareworksLang.GOGGLES_INPUT_ONE_TYPE_HINT).style(ChatFormatting.GRAY)
+                        .forGoggles(tooltip, 2);
+        });
         PackageUnpackSummary packages = shown.packages();
         boolean unpacksHere = packagerUnpacksHere();
         // Package mode (issue #40): the client reads the switch the server told it at login.

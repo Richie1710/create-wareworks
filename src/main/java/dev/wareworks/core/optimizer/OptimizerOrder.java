@@ -9,6 +9,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.jetbrains.annotations.Nullable;
+
+import dev.wareworks.core.job.RelocationReason;
+
 /**
  * One press of a Warehouse Optimizer's Optimise (issue #46, ADR-079): the items it asked to move up to a better storage
  * location, how many trips it may still cost and what it has moved so far. Immutable; {@link OptimizerOrders} replaces
@@ -79,15 +83,28 @@ public record OptimizerOrder<K, P>(P optimizer, State state, List<Entry<K>> entr
      * @param id    stable identity, which the planner reports back ({@code PlanResult#relocationsExhausted})
      * @param key   the item
      * @param state where it is
-     * @param moved how many of it this order's trips really put down
-     * @param <K>   item key type
+     * @param moved  how many of it this order's trips really put down
+     * @param reason why it ended with nothing (more) to move (issue #53): set for {@link EntryState#NOTHING_TO_MOVE}
+     *               and {@link EntryState#DONE} when the warehouse knew why, null while it is open or stopped and for an
+     *               entry saved before the reason existed
+     * @param <K>    item key type
      */
-    public record Entry<K>(UUID id, K key, EntryState state, long moved) {
+    public record Entry<K>(UUID id, K key, EntryState state, long moved, @Nullable RelocationReason reason) {
         public Entry {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(state, "state");
             moved = Math.max(0L, moved);
+        }
+
+        /** An entry without a reason: open, stopped, or saved before issue #53. */
+        public Entry(UUID id, K key, EntryState state, long moved) {
+            this(id, key, state, moved, null);
+        }
+
+        /** Why it ended with nothing (more) to move, if the warehouse said. */
+        public Optional<RelocationReason> endReason() {
+            return Optional.ofNullable(reason);
         }
 
         /** Whether the entry is still searched for trips. */
@@ -171,7 +188,8 @@ public record OptimizerOrder<K, P>(P optimizer, State state, List<Entry<K>> entr
         List<Entry<K>> next = new ArrayList<>(entries.size());
         for (Entry<K> entry : entries) {
             next.add(entry.id().equals(entryId)
-                    ? new Entry<>(entry.id(), entry.key(), entry.state(), entry.moved() + amount) : entry);
+                    ? new Entry<>(entry.id(), entry.key(), entry.state(), entry.moved() + amount, entry.reason())
+                    : entry);
         }
         return new OptimizerOrder<>(optimizer, state, next, tripsLeft, moved + amount, inFlight);
     }

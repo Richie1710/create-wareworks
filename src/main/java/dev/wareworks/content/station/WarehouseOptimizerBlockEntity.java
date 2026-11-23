@@ -212,7 +212,7 @@ public class WarehouseOptimizerBlockEntity extends SmartBlockEntity
             int viewIndex = index++;
             PriorityBreakdown view = viewIndex < views.size() ? views.get(viewIndex) : PriorityBreakdown.NONE;
             shown.add(new OptimizerScreenState.RowView(row, key, view,
-                    OptimizerScreenState.Pip.of(order, key.get())));
+                    OptimizerScreenState.Pip.of(order, key.get()), OptimizerScreenState.Pip.reasonOf(order, key.get())));
         }
         return new OptimizerScreenState(shown, linked, misaligned, OptimizerScreenState.OrderLine.of(order), message,
                 first, second);

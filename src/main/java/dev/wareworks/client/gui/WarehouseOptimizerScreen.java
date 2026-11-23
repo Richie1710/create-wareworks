@@ -16,6 +16,7 @@ import dev.wareworks.content.station.OptimizerAction;
 import dev.wareworks.content.station.OptimizerMenu;
 import dev.wareworks.content.station.OptimizerMenuLayout;
 import dev.wareworks.content.station.OptimizerScreenState;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.stock.PriorityBreakdown;
 import dev.wareworks.core.terminal.CountFormat;
 import dev.wareworks.network.OptimizerActionPayload;
@@ -326,7 +327,9 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             graphics.fill(x + PIP_SIZE - 1, y, x + PIP_SIZE, y + PIP_SIZE, outline);
             return;
         }
-        graphics.fill(x, y, x + PIP_SIZE, y + PIP_SIZE, pipColor(pip));
+        // An item the warehouse said why it cannot move (issue #53) is gold: there is a reason to read on hover.
+        boolean explained = view.get().reason().filter(reason -> reason != RelocationReason.NONE_IN_STOCK).isPresent();
+        graphics.fill(x, y, x + PIP_SIZE, y + PIP_SIZE, explained ? COLOR_WARNING : pipColor(pip));
         if (hovered)
             graphics.fill(x, y, x + PIP_SIZE, y + PIP_SIZE, COLOR_CELL_HOVER);
     }
@@ -473,8 +476,7 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             return tooltip;
         }
         if (isOverStatus(mouseX, mouseY, row) && filled) {
-            OptimizerScreenState.Pip pip = view.get().pip();
-            tooltip.add(WareworksLang.translateDirect(pip.langKey()).copy().withStyle(pipFormat(pip)));
+            addStatusLines(tooltip, view.get());
             tooltip.add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PIP_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             return tooltip;
@@ -486,8 +488,7 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             tooltip.addAll(getTooltipFromItem(minecraft, shown.key().orElseThrow().toStack()));
             if (state.linked())
                 addBreakdownLines(tooltip, shown.breakdown());
-            tooltip.add(WareworksLang.translateDirect(shown.pip().langKey()).copy()
-                    .withStyle(pipFormat(shown.pip())));
+            addStatusLines(tooltip, shown);
         }
         tooltip.add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_ITEM_HINT).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
@@ -517,6 +518,18 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
                 LangNumberFormat.format(breakdown.movable())
                         + (breakdown.movableUnknown() ? UNKNOWN_MARK : "")).copy()
                 .withStyle(ChatFormatting.AQUA));
+    }
+
+    /**
+     * What a row's mark says: the mark's sentence, or for an item with nothing to move the reason the server gave
+     * (issue #53) in gold, with what a player can do about it below.
+     */
+    private static void addStatusLines(List<Component> tooltip, OptimizerScreenState.RowView view) {
+        boolean explained = view.reason().filter(reason -> reason != RelocationReason.NONE_IN_STOCK).isPresent();
+        tooltip.add(WareworksLang.translateDirect(view.statusKey()).copy()
+                .withStyle(explained ? ChatFormatting.GOLD : pipFormat(view.pip())));
+        view.reason().flatMap(OptimizerScreenState::reasonHintKey).ifPresent(hint -> tooltip.add(
+                WareworksLang.translateDirect(hint).copy().withStyle(ChatFormatting.GRAY)));
     }
 
     private static ChatFormatting pipFormat(OptimizerScreenState.Pip pip) {

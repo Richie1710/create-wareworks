@@ -9129,6 +9129,43 @@ empty box at a Packager behind an input (Create destroys it before any handler r
 well as its contents, `SceneItemCensus#takeWithBoxes`); the robustness run's package-mode phase; the Ponder scene
 `warehouse/package_mode`.
 
+### ADR-087 — Say why nothing happens, from the planner's own decision: a reason per optimizer row, and "no free place for this item type" for an input (amends ADR-042 and ADR-079) ([issue #53](https://github.com/Richie1710/create-wareworks/issues/53))
+
+*Context:* issue #50 found three places where the warehouse does the right thing and says nothing useful. An optimizer
+item with no strictly better place ended as "Nothing to move" next to stock it clearly holds, because a move needs a
+strictly higher priority (ADR-079) and every bay defaults to 0. A new item type waiting in the input because every
+one-type rack bay holds another type was reported as `NO_MATCHING_FILTER`, since M28 (ADR-042) put the one-type rule
+in the store filter's place in the ladder; the M28 review named `NO_LOCATION_FOR_TYPE` as the follow-up.
+
+*Decision:*
+
+* **D1 The reason is decided where the decision is made, on the server.** The client never infers a reason from the
+  numbers it shows: an estimate there can disagree with what the planner really found.
+* **D2 A one-type location taken by another key is `FilterMatch.TAKEN_BY_OTHER_TYPE`**, a value of its own beside
+  `REJECTED`, with `REJECTED`'s every consequence (`allowsStoring() == false`, rank 2, ranked last on a `RETRIEVE`
+  reroute, no estimate, no live call). `AisleFilters#match` asks the location's own filter behind the gate only to name
+  the cause: `REJECTED` when the filter rejects the key as well. The store survey notes it apart (`typeTaken`), and
+  `NoJobReason.NO_LOCATION_FOR_TYPE` follows `NO_MATCHING_FILTER`, wins over it (a free place of the right kind is
+  what was missing), arms the same back-off and is one of `refusesCollecting()` and the new `refusesStoring()`.
+* **D3 Each input gets its own answer.** `PlanResult#storeReasons` carries the survey's reason per input station;
+  `CraneDispatch` keeps the last one per input (cleared for an input a store job was planned from, and when nothing
+  waits), and the input's goggles show it with the one-type cure. The aisle-wide planning line is unchanged in kind.
+  Not saved: the first run after a load answers again.
+* **D4 An optimizer entry ends with a `RelocationReason`**: `NONE_IN_STOCK` and `SPOKEN_FOR` from the controller,
+  everything else from `JobPlanner#whyNothingBetter`, which reads the sources the search ranked and every available
+  storage location's priority and filter, with no live call, once per search that ended empty (`warehouse-system.md` §3.10 has the
+  ladder). Saved by name with the entry, sent in the optimizer's screen payload by ordinal + 1, shown as a gold dot and
+  a tooltip with the cure; "Nothing to move" stays for an item the warehouse holds none of.
+* **D5 No new behaviour.** Nothing is stored, moved or refused differently; ADR-079 still does not merge duplicates at
+  equal priority (that would want its own ADR, ADR-078 rejected a general tidy-up job).
+
+*Consequences:* network version 29 (with issue #52's `misaligned` flag, one raise for the unreleased version); an
+older build reads a saved entry's `EndReason` as nothing. Tests: JUnit `JobPlannerTest`
+(`anItemWhosePlacesHoldOtherTypesHasNoLocationForItsType`), `JobPlannerRelocateTest` (six reason cases),
+`OptimizerOrdersTest`, `OptimizerTextWidthTest`, `LangConsistencyTest#theInputWaitingRowsFitAGoggleTooltip`;
+GameTests `StoreReasonGameTests` (`optimizerrowsayswhynothingmoves`, `inputsaysnofreeplaceforitstype`); the visual
+scenario `optimizer` shoots the gold row's reason in English and German (`optimizer-reason`).
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -9224,7 +9261,7 @@ well as its contents, `SceneItemCensus#takeWithBoxes`); the robustness run's pac
   clients in full like the hand truck's load. What ties an open screen to the remote, the hand and the id
   (`RemoteBinding`), lives in the open menu and is gone with it.
 * **Warehouse Optimizer orders** (issue #46, ADR-079) are the controller's, not the block's: one new top-level NBT key,
-  `OptimizerOrders` (`[{Rack, State, Trips, Moved, Entries: [{Id, Item, State, Moved}], InFlight?: [{Job, Entry}]}]`,
+  `OptimizerOrders` (`[{Rack, State, Trips, Moved, Entries: [{Id, Item, State, Moved, EndReason?}], InFlight?: [{Job, Entry}]}]`,
   oldest first), written only while an order exists, so a warehouse nobody optimised saves byte for byte as before. It
   lives in the controller because the trips go on while the optimizer's chunk is unloaded. Reading never throws: at
   most 8 orders of at most 16 entries and 64 trips in flight are read, an undecodable item or an unknown state skips its
