@@ -926,6 +926,8 @@ public final class WareworksLang {
     public static final String OPTIMIZER_HINT = "gui.optimizer.hint";
     /** The status line while no controller serves this optimizer. */
     public static final String OPTIMIZER_NO_WAREHOUSE = "gui.optimizer.no_warehouse";
+    /** The status line while the optimizer faces away from the aisle it stands in, so it is no member (issue #52). */
+    public static final String OPTIMIZER_MISALIGNED = "gui.optimizer.misaligned";
     /** {@code "Moved %1$s, %2$s trips left"}: the status line while the order runs. */
     public static final String OPTIMIZER_RUNNING = "gui.optimizer.running";
     /** {@code "Done: moved %1$s"}: the status line after every item ended. */

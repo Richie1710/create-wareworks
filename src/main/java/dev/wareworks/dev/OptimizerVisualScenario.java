@@ -100,7 +100,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * ({@code optimizer-cancel-tooltip}) and a real click on it. The order stops at once, the trip under way is finished and
  * counted, and the copper stays where it lies ({@code optimizer-cancelled});</li>
  * <li>the same screen at the floor every layout is measured against, 1280 x 960 at GUI scale 4, i.e. 320 x 240
- * ({@code optimizer-floor}).</li>
+ * ({@code optimizer-floor});</li>
+ * <li>issue #52: the optimizer turned away from the aisle, so it is no member: the status row reads "Not in a
+ * warehouse: face the aisle", a real click on Optimise answers with that reason and the warehouse keeps no order
+ * ({@code optimizer-misaligned}); then it is turned back.</li>
  * </ol>
  * Every round starts from the same stock ({@link #restock}). The second render pass (Flywheel off, still German) clicks
  * the copper row's pip, which optimises that item alone, shoots its carry and the finished order with the green pip.
@@ -596,6 +599,83 @@ public final class OptimizerVisualScenario implements VisualScenario {
         // 6. The floor every layout is measured against.
         floor(script, tag, "optimizer-floor" + suffix);
         closeScreen(script, tag);
+
+        // 7. Issue #52: turned away from the aisle, the optimizer is not a member. Its screen says so, and Optimise
+        // answers with that reason and starts nothing.
+        misaligned(script, suffix);
+    }
+
+    /**
+     * Issue #52: the optimizer turned away from the aisle (the block entity and its list stay), its screen opened: the
+     * status row reads "Not in a warehouse: face the aisle" instead of the hint, a real click on Optimise answers with
+     * that reason, and the warehouse keeps no order for it. Then it is turned back and is a member again.
+     */
+    private void misaligned(VisualScript script, String suffix) {
+        String tag = "optimizer" + suffix + "-misaligned: ";
+        script.server(tag + "turn the optimizer away from the aisle", (server, context) -> turn(server, context, true))
+                .serverUntil(tag + "the warehouse no longer counts it as a member", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    WarehouseOptimizerBlockEntity optimizer = optimizer(level, context.origin());
+                    WarehouseControllerBlockEntity controller = controller(level, context.origin());
+                    return !controller.isMembershipDirty() && controller.locationAt(optimizer.getBlockPos()).isEmpty()
+                            && optimizer.controller().isEmpty() && optimizer.misaligned();
+                }, SCREEN_TIMEOUT_TICKS)
+                .server(tag + "open the optimizer's screen", (server, context) -> {
+                    if (!optimizer(server.overworld(), context.origin()).openScreen(context.serverPlayer(server)))
+                        throw new VisualTestException("the optimizer screen could not be opened");
+                })
+                .until(tag + "the screen shows it unlinked and misaligned", context -> context.minecraft()
+                        .screen instanceof WarehouseOptimizerScreen screen && !screen.state().linked()
+                        && screen.state().misaligned()
+                        && screen.state().rows().size() == screen.getMenu().rowCount(), SCREEN_TIMEOUT_TICKS)
+                .waitTicks(SETTLE_TICKS)
+                .client(tag + "CHECK the status row names the misalignment before any press", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    if (screen.state().order().state() != OptimizerScreenState.OrderState.NONE)
+                        throw new VisualTestException("an unlinked screen shows the order " + screen.state().order());
+                    requireStatusLine(screen, WareworksLang.OPTIMIZER_MISALIGNED);
+                })
+                .client(tag + "press Optimise", context -> click(context,
+                        ScreenInput.optimizerOptimiseButton(screen(context))))
+                .until(tag + "the press answers with the reason", context -> screen(context).state().message()
+                        == OptimizerScreenState.Message.MISALIGNED, CLICK_TIMEOUT_TICKS)
+                .client(tag + "CHECK the answer on the status row", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    requireStatusLine(screen, OptimizerScreenState.Message.MISALIGNED.langKey());
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS Optimise on a misaligned optimizer says '{}'",
+                            ScreenInput.optimizerStatusLine(screen).getString());
+                })
+                .server(tag + "CHECK the warehouse keeps no order for it", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    BlockPos pos = optimizer(level, context.origin()).getBlockPos();
+                    if (controller(level, context.origin()).optimizerOrder(pos).isPresent())
+                        throw new VisualTestException("a misaligned optimizer has an order");
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS a misaligned optimizer starts no order");
+                    census(server, context, "optimizer: a refused press moved no item");
+                });
+        parkAndShoot(script, "optimizer-misaligned" + suffix);
+        closeScreen(script, tag);
+        script.server(tag + "turn the optimizer back towards the aisle", (server, context) -> turn(server, context,
+                        false))
+                .serverUntil(tag + "it is a member again", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    WarehouseOptimizerBlockEntity optimizer = optimizer(level, context.origin());
+                    WarehouseControllerBlockEntity controller = controller(level, context.origin());
+                    return !controller.isMembershipDirty() && optimizer.controller().isPresent();
+                }, SCREEN_TIMEOUT_TICKS);
+    }
+
+    /** Turns the optimizer away from the aisle or back towards it; the same block, so its block entity stays. */
+    private static void turn(MinecraftServer server, VisualContext context, boolean away) {
+        ServerLevel level = server.overworld();
+        BranchLayout layout = layout(context.origin());
+        BlockPos pos = layout.rackPos(OPTIMIZER);
+        Direction towards = layout.sideDirection(OPTIMIZER.side()).getOpposite();
+        WarehouseOptimizerBlockEntity before = optimizer(level, context.origin());
+        level.setBlock(pos, level.getBlockState(pos).setValue(WarehouseOptimizerBlock.FACING,
+                away ? towards.getOpposite() : towards), 3);
+        if (optimizer(level, context.origin()) != before)
+            throw new VisualTestException("turning the optimizer replaced its block entity");
     }
 
     /**

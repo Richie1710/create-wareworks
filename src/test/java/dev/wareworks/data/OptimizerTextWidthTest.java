@@ -67,6 +67,7 @@ class OptimizerTextWidthTest {
             "gui.optimizer.movable_short");
     /** Status row sentences without a number. */
     private static final List<String> STATUS_PLAIN = List.of("gui.optimizer.hint", "gui.optimizer.no_warehouse",
+            "gui.optimizer.misaligned",
             "gui.optimizer.message.all_listed", "gui.optimizer.message.clipboard_empty",
             "gui.optimizer.message.not_a_clipboard", "gui.optimizer.message.already_listed",
             "gui.optimizer.message.no_items", "gui.optimizer.message.too_many_orders");

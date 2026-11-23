@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   storing an item did not count an empty rack bay or chest another crane was already carrying that item to as holding
   it, so with inputs at both ends of the aisle the same item could open a second place. A place another crane is filling
   with the item now counts as holding it and is filled first. A warehouse with one crane is unchanged.
+- **A Warehouse Optimizer facing away from the aisle now says so**
+  ([#52](https://github.com/Richie1710/create-wareworks/issues/52)). Placed with its front turned away from the aisle,
+  the optimizer is not a member of the warehouse, yet its screen looked linked and showed the normal hint, and Optimise
+  silently did nothing. Its screen and goggles now count it as served only as a member: the status line reads "Not in a
+  warehouse: face the aisle" (or "Not part of a warehouse" outside any aisle), and pressing Optimise or the stop
+  mark answers with that reason instead of nothing. Turned towards the aisle, it works as before.
 
 ## [0.24.0-beta] - 2026-11-22
 

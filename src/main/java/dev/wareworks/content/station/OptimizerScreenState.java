@@ -26,20 +26,24 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
  * an unknown ordinal falls back to the first value instead of throwing.
  *
  * @param rows    one entry per item row of the optimizer, in row order
- * @param linked  whether a loaded controller serves this optimizer at all ("Not part of a warehouse" otherwise)
+ * @param linked  whether a loaded controller serves this optimizer at all ("Not part of a warehouse" otherwise): it
+ *                is a member of that controller's aisle
+ * @param misaligned whether an optimizer that is not {@code linked} stands at a rack position facing away from the
+ *                aisle ("Not in a warehouse: face the aisle", issue #52); always false while linked
  * @param order   the optimizer's order, running or finished, or {@link OrderLine#NONE}
  * @param message what the last action of this screen had to say, or {@link Message#NONE}
  * @param first   the first number of {@link #message()}, 0 when it has none
  * @param second  the second number of {@link #message()}, 0 when it has none
  */
-public record OptimizerScreenState(List<RowView> rows, boolean linked, OrderLine order, Message message, int first,
-                                   int second) {
+public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean misaligned, OrderLine order,
+                                   Message message, int first, int second) {
     /** No optimizer known yet: what a screen renders until the first payload arrives. */
     public static final OptimizerScreenState NONE =
-            new OptimizerScreenState(List.of(), false, OrderLine.NONE, Message.NONE, 0, 0);
+            new OptimizerScreenState(List.of(), false, false, OrderLine.NONE, Message.NONE, 0, 0);
 
     public OptimizerScreenState {
         rows = List.copyOf(Objects.requireNonNull(rows, "rows"));
+        misaligned = misaligned && !linked;
         if (order == null)
             order = OrderLine.NONE;
         if (message == null)
@@ -147,11 +151,28 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, OrderLine
         /** Optimise was pressed with no item listed (or on an empty row). */
         NO_ITEMS,
         /** Every order this warehouse keeps is running ({@code OptimizerOrders.Start#TOO_MANY_ORDERS}). */
-        TOO_MANY_ORDERS;
+        TOO_MANY_ORDERS,
+        /** A press found no warehouse this optimizer is a member of (issue #52). */
+        NO_WAREHOUSE,
+        /** A press found the optimizer facing away from the aisle it stands in, so it is no member (issue #52). */
+        MISALIGNED;
 
-        /** Relative lang key of this message, e.g. {@code gui.optimizer.message.added}; {@link #NONE} has none. */
+        /**
+         * Relative lang key of this message, e.g. {@code gui.optimizer.message.added}; {@link #NONE} has none. The two
+         * "not part of a warehouse" answers say exactly what the status line says without a press, so they share its
+         * keys ({@link #ownSentence()} is false for them).
+         */
         public String langKey() {
-            return WareworksLang.OPTIMIZER_MESSAGE_PREFIX + name().toLowerCase(Locale.ROOT);
+            return switch (this) {
+                case NO_WAREHOUSE -> WareworksLang.OPTIMIZER_NO_WAREHOUSE;
+                case MISALIGNED -> WareworksLang.OPTIMIZER_MISALIGNED;
+                default -> WareworksLang.OPTIMIZER_MESSAGE_PREFIX + name().toLowerCase(Locale.ROOT);
+            };
+        }
+
+        /** Whether this message has a sentence of its own under {@code gui.optimizer.message.}. */
+        public boolean ownSentence() {
+            return this != NONE && this != NO_WAREHOUSE && this != MISALIGNED;
         }
     }
 
@@ -214,6 +235,7 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, OrderLine
         for (int i = 0; i < count; i++)
             rows.get(i).write(buffer);
         buffer.writeBoolean(linked);
+        buffer.writeBoolean(misaligned);
         buffer.writeVarInt(order.state().ordinal());
         buffer.writeVarLong(order.moved());
         buffer.writeVarInt(order.tripsLeft());
@@ -229,11 +251,12 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, OrderLine
         for (int i = 0; i < count; i++)
             rows.add(RowView.read(buffer));
         boolean linked = buffer.readBoolean();
+        boolean misaligned = buffer.readBoolean();
         OrderState state = byOrdinal(OrderState.values(), buffer.readVarInt());
         long moved = buffer.readVarLong();
         int tripsLeft = buffer.readVarInt();
         Message message = byOrdinal(Message.values(), buffer.readVarInt());
-        return new OptimizerScreenState(rows, linked, new OrderLine(state, moved, tripsLeft), message,
+        return new OptimizerScreenState(rows, linked, misaligned, new OrderLine(state, moved, tripsLeft), message,
                 buffer.readVarInt(), buffer.readVarInt());
     }
 

@@ -402,7 +402,8 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             return WareworksLang.translateDirect(state.message().langKey(), LangNumberFormat.format(state.first()),
                     LangNumberFormat.format(state.second()));
         if (!state.linked())
-            return WareworksLang.translateDirect(WareworksLang.OPTIMIZER_NO_WAREHOUSE);
+            return WareworksLang.translateDirect(state.misaligned() ? WareworksLang.OPTIMIZER_MISALIGNED
+                    : WareworksLang.OPTIMIZER_NO_WAREHOUSE);
         OptimizerScreenState.OrderLine order = state.order();
         String moved = LangNumberFormat.format(order.moved());
         return switch (order.state()) {

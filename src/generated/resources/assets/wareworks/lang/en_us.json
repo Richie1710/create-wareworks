@@ -668,6 +668,7 @@
   "wareworks.gui.optimizer.message.no_items": "Set an item first",
   "wareworks.gui.optimizer.message.not_a_clipboard": "Click with a clipboard",
   "wareworks.gui.optimizer.message.too_many_orders": "Too many optimizers are busy",
+  "wareworks.gui.optimizer.misaligned": "Not in a warehouse: face the aisle",
   "wareworks.gui.optimizer.movable": "Could move now",
   "wareworks.gui.optimizer.movable_hint": "Estimated room in better places",
   "wareworks.gui.optimizer.movable_now": "Could move now: %1$s",

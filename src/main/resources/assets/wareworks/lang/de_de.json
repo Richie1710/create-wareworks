@@ -638,6 +638,7 @@
   "wareworks.gui.optimizer.movable_short": "Umlag.",
   "wareworks.gui.optimizer.movable_unknown": "? = noch nicht jeder Platz gemessen",
   "wareworks.gui.optimizer.no_warehouse": "Keinem Lager zugeordnet",
+  "wareworks.gui.optimizer.misaligned": "Nicht im Lager: zum Gang drehen",
   "wareworks.gui.optimizer.none_stored": "Nicht auf Lager",
   "wareworks.gui.optimizer.optimise": "Optimieren",
   "wareworks.gui.optimizer.optimise_hint": "Lagert sie an bessere Plätze um",

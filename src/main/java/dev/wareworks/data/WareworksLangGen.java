@@ -1760,15 +1760,17 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_CANCEL_HINT), "A trip under way is finished");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_HINT), "Set items, then press Optimise");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_NO_WAREHOUSE), "Not part of a warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MISALIGNED), "Not in a warehouse: face the aisle");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_RUNNING), "Moved %1$s, %2$s trips left");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_FINISHED), "Done: moved %1$s");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_OUT_OF_TRIPS), "Out of trips: moved %1$s");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_CANCELLED), "Stopped: moved %1$s");
         for (OptimizerScreenState.Message message : OptimizerScreenState.Message.values()) {
-            if (message == OptimizerScreenState.Message.NONE)
-                continue;
+            if (!message.ownSentence())
+                continue; // NONE says nothing; the two "not part of a warehouse" answers share the status line's keys
             lang.accept(WareworksLang.key(message.langKey()), switch (message) {
-                case NONE -> throw new IllegalStateException("NONE has no sentence");
+                case NONE, NO_WAREHOUSE, MISALIGNED ->
+                        throw new IllegalStateException(message + " has no sentence of its own");
                 // The count last, after a colon: it may be 1, and a fixed plural behind it would be wrong then.
                 case ADDED -> "Items added: %1$s";
                 case ADDED_NO_ROOM -> "Added %1$s; %2$s found no free row";

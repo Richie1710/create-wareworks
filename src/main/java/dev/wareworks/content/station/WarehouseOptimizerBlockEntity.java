@@ -15,6 +15,7 @@ import com.simibubi.create.foundation.blockEntity.SmartBlockEntity;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import com.simibubi.create.foundation.utility.IInteractionChecker;
 
+import dev.wareworks.content.controller.AisleAssignment;
 import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.controller.WarehouseMember;
 import dev.wareworks.content.controller.WarehouseRegistry;
@@ -97,11 +98,29 @@ public class WarehouseOptimizerBlockEntity extends SmartBlockEntity
         return getBlockState().getOptionalValue(HorizontalDirectionalBlock.FACING).orElse(Direction.NORTH);
     }
 
-    /** The controller of the warehouse this optimizer is an aligned member of (server). */
+    /**
+     * The controller of the warehouse this optimizer is a <b>member</b> of (server). Only a member may start an order
+     * ({@code WarehouseControllerBlockEntity#startOptimizerOrder}), so the screen and the goggles count the optimizer
+     * as served only then. {@link WarehouseRegistry#findController} alone also answers for a block that stands at a
+     * rack position facing away from the aisle, which made a misaligned optimizer look linked while Optimise did
+     * nothing (issue #52).
+     */
     public Optional<WarehouseControllerBlockEntity> controller() {
         if (level == null || level.isClientSide || isRemoved())
             return Optional.empty();
-        return WarehouseRegistry.findController(level, worldPosition);
+        return WarehouseRegistry.findController(level, worldPosition)
+                .filter(controller -> controller.locationAt(worldPosition)
+                        .map(record -> record.kind() == LocationKind.OPTIMIZER).orElse(false));
+    }
+
+    /**
+     * Whether this optimizer stands at a rack position of an aisle but faces away from it (server): the reason it is no
+     * member, which the screen names ("face the aisle") instead of the plain "Not part of a warehouse".
+     */
+    public boolean misaligned() {
+        if (level == null || level.isClientSide || isRemoved())
+            return false;
+        return WarehouseRegistry.assignmentOf(level, worldPosition, this).state() == AisleAssignment.State.MISALIGNED;
     }
 
     // --- the list ------------------------------------------------------------------------------------------------
@@ -178,6 +197,7 @@ public class WarehouseOptimizerBlockEntity extends SmartBlockEntity
             Map<ItemKey, List<PriorityBreakdown.Room>> rooms, OptimizerScreenState.Message message, int first,
             int second) {
         boolean linked = controller != null && !controller.isRemoved();
+        boolean misaligned = !linked && misaligned();
         List<ItemKey> keys = rows.keys();
         List<PriorityBreakdown> views = linked ? controller.optimizerView(keys, rooms) : List.of();
         Optional<OptimizerOrder<ItemKey, RackPosition>> order = order(controller);
@@ -194,8 +214,8 @@ public class WarehouseOptimizerBlockEntity extends SmartBlockEntity
             shown.add(new OptimizerScreenState.RowView(row, key, view,
                     OptimizerScreenState.Pip.of(order, key.get())));
         }
-        return new OptimizerScreenState(shown, linked, OptimizerScreenState.OrderLine.of(order), message, first,
-                second);
+        return new OptimizerScreenState(shown, linked, misaligned, OptimizerScreenState.OrderLine.of(order), message,
+                first, second);
     }
 
     /**

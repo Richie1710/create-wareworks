@@ -7626,7 +7626,10 @@ keyed by the optimizer's rack position):
   the warehouse has when every crane is free, and ends if that finds nothing either; one whose better place is only
   behind the busy crane stays open. It then ends in every running order that lists it.
 * Only an optimizer the warehouse records as a member starts an order: a misaligned one (turned away from the aisle)
-  is refused, because removing a member is what forgets its order.
+  is refused, because removing a member is what forgets its order. Its screen and goggles count it as served only as
+  a member (`WarehouseOptimizerBlockEntity#controller`, issue #52): the status line reads "Not in a warehouse: face
+  the aisle" for a misaligned one and "Not part of a warehouse" outside any aisle, and a press of Optimise or of
+  the stop mark answers with that reason (`OptimizerScreenState.Message#MISALIGNED` / `#NO_WAREHOUSE`).
 * The order ends when every entry has, when its trips run out, when the player cancels or when the optimizer is
   removed. A trip under way is always finished: a crane's job is never taken back. Nothing polls and nothing retries;
   an order means "what fits now".
