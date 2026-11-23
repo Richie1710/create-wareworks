@@ -374,6 +374,34 @@ class JobPlannerTest {
         assertEquals(nearOtherSide, diamond.job().target(), "equal travel time: list order decides");
     }
 
+    /**
+     * Issue #51: with two cranes on one controller, crane 2 plans while crane 1 is still carrying the same key to an
+     * empty location. The index shows that location empty until the delivery, but the room reserved there for the key
+     * already makes it the key's location, so it outranks a nearer empty one exactly like a location holding the key.
+     * Room reserved for another key attracts nothing.
+     */
+    @Test
+    void roomReservedForTheKeyOutranksANearerEmptyLocation() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition far = rack(6, 0, Side.LEFT);
+        stock.update(near, slots(27));
+        stock.update(far, slots(27));
+        for (RackPosition location : List.of(near, far))
+            live.insertable.put(location, STACK);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A))
+                .storageLocations(List.of(near, far))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+        assertEquals(near, storeTarget(base, IRON), "without a reservation the nearer empty location wins");
+
+        ledger.reserveCapacity(id(90), far, DIAMOND, 20);
+        assertEquals(near, storeTarget(base, IRON), "room reserved for another key does not attract iron");
+
+        ledger.reserveCapacity(id(90), far, IRON, 20);
+        assertEquals(far, storeTarget(base, IRON),
+                "the empty location another crane is filling with iron takes the iron, not a second location");
+        assertEquals(near, storeTarget(base, DIAMOND), "the iron reservation does not attract diamonds");
+    }
+
     @Test
     void storePrefersLocationsWithoutOtherItemTypes() {
         RackPosition nearMixed = rack(1, 0, Side.LEFT);

@@ -8508,6 +8508,11 @@ several do:
   stock index, and skipped by the goggles' "incoming" summary.
 * **Room at a delivery target** (`reservedInbound`): what other jobs already carry to or have reserved at a target is
   subtracted, so the second crane never sets off towards room the first is about to fill.
+* **Room reserved for the same item counts as holding it** (issue #51): the store ranking's consolidation key asks the
+  ledger as well as the index (`reservedCapacity(location, key) > 0`). The index shows an empty location empty until a
+  crane has delivered into it, so while crane 1 carried an item to an empty location, crane 2 storing the same item saw
+  that location tie with every other empty one, and travel time from an input at the other end opened a second
+  location for one item. Room reserved for another item attracts nothing. The relocation targets share the ranking.
 * **One crane per port at a time**: only one crane collects from a collecting port, and only one brings a retrieve to a
   warehouse port, until it has delivered — a port's room is measured live, and two trips sized by the same room would
   bring twice what it takes. A terminal and a production station take any number of cranes.
@@ -8522,8 +8527,9 @@ crane's. The dock's goggles show the remaining trip ("About 14 s left"), worked 
 job and speeds (`core.crane.RemainingTrip`); while another crane holds it up the line adds "not counting the wait",
 because the estimate never contains traffic. The controller's crane list shows the same number per crane.
 
-**Tests**: `MultiCraneGameTests` (26 GameTests: joining, the cap, both ends at once, waiting, moving aside, the nearest
-crane and its tie-break, a comb and a ring, the four "never promise the same" cases, production on both cranes, the
+**Tests**: `MultiCraneGameTests` (33 GameTests: joining, the cap, both ends at once, waiting, moving aside, the nearest
+crane and its tie-break, a comb and a ring, the four "never promise the same" cases, one item into one location
+(`twocranesstoreoneitemintoonelocation`, issue #51), production on both cranes, the
 failure cases of §8.2, a save mid-flight, a deterministic trace, the goggles), and the JUnit tests of ADR-075.
 
 ## 8. Robustness rules (item conservation)

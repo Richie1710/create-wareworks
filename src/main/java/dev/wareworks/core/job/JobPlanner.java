@@ -66,7 +66,8 @@ import dev.wareworks.core.warehouse.LocationKind;
  *       the rest stays in the input on purpose. Candidates are the available storage locations whose store filter
  *       accepts the item and whose estimate exceeds their reserved capacity, ranked by (a0) a filter that
  *       <b>selects</b> the item ({@link FilterMatch#DEDICATED}; a deny list that merely does not exclude it is
- *       {@link FilterMatch#ALLOWED} and ranks like an unfiltered location), then (a) already holding the item, then
+ *       {@link FilterMatch#ALLOWED} and ranks like an unfiltered location), then (a) already holding the item or having
+ *       room reserved for it by another job ({@link ReservationView#reservedCapacity(Object, Object)}, issue #51), then
  *       (a2) holding nothing or only items of the same type ({@link PlannerInput#itemType()}), then (a3) the storage
  *       priority a player gave the location ({@link PlannerInput#storePriority()}, higher first, M16), then (b) travel
  *       time crane → input → location. Amount =
@@ -1197,7 +1198,13 @@ public final class JobPlanner<K, L> {
                 note(survey, false);
                 continue;
             }
-            boolean consolidates = input.stock().countAt(key, location) > 0;
+            // Already holding the key, per index or per ledger (issue #51): room another job reserved here for this key
+            // is the key on its way in. With several cranes a second store is planned while the first is still carrying
+            // into an empty location the index shows empty until the delivery (the index is refreshed right after it),
+            // and without this the two would open two locations for one item. Room reserved for another key attracts
+            // nothing. With one crane no job is in flight while one is planned, so nothing changes there.
+            boolean consolidates = input.stock().countAt(key, location) > 0
+                    || input.reservations().reservedCapacity(location, key) > 0;
             // Nothing of another item type (per index): item types are not mixed while such locations are free.
             boolean compatible = consolidates || holdsOnlyTypeOf(input, location, key);
             // The one place a storage priority is read when storing (M16), and only once the location may take the item
@@ -1418,7 +1425,8 @@ public final class JobPlanner<K, L> {
      *                     {@link #CLASS_STORAGE} literally, so the key answers 0 for every pair there
      * @param filterRank   {@link FilterMatch#storeRank()} of its store filter (storage locations and ports);
      *                     {@link #NEUTRAL_FILTER_RANK} where no filter applies (stations, retrieve sources)
-     * @param consolidates already holds the item key (storage only)
+     * @param consolidates already holds the item key, or has room reserved for it by another job (storage only, issue
+     *                     #51)
      * @param compatible   holds nothing or only items of the key's type per index (storage only)
      * @param priority     the storage priority a player gave the location, higher first when storing (M16) and lowest
      *                     first for a retrieve source (issue #47, {@link #SOURCE_RANKING}), or an accepting port's

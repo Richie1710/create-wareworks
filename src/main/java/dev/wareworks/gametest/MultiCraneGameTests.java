@@ -624,6 +624,60 @@ public final class MultiCraneGameTests {
                 .thenSucceed();
     }
 
+    /**
+     * Issue #51: two inputs at opposite ends fed the same item in the same tick, two empty chests, each nearer to one
+     * input. The first crane's trip promises room for the iron in one chest while the index still shows it empty; the
+     * second crane must store into that chest too, not open the other one, so exactly one chest ends up holding iron.
+     * Every store job's target is recorded on every tick, and the census is exact throughout.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void twocranesstoreoneitemintoonelocation(GameTestHelper helper) {
+        build(helper, LINE, true);
+        BlockPos westChest = storage(helper, LINE, 4, Side.LEFT);
+        BlockPos eastChest = storage(helper, LINE, 10, Side.LEFT);
+        BlockPos westInput = LINE.rack(3, Side.RIGHT);
+        BlockPos eastInput = LINE.rack(11, Side.RIGHT);
+        input(helper, westInput, Side.RIGHT);
+        input(helper, eastInput, Side.RIGHT);
+        AtomicReference<Map<ItemKey, Long>> census = new AtomicReference<>();
+        Set<RackPosition> targets = new HashSet<>();
+        Set<Integer> storing = new TreeSet<>();
+        helper.onEachTick(() -> {
+            if (census.get() != null)
+                ItemCensus.assertEquals(helper, census.get(), "while storing");
+            assertApart(helper, LINE.docks());
+            for (BlockPos dock : LINE.docks()) {
+                StackerCraneBlockEntity crane = crane(helper, dock);
+                crane.currentJob().filter(job -> job.key().equals(IRON)).ifPresent(job -> {
+                    targets.add(job.target());
+                    storing.add(crane.craneNumber());
+                });
+            }
+            helper.assertTrue(targets.size() <= 1, "every iron trip goes to one location, not " + targets);
+        });
+        helper.startSequence()
+                .thenWaitUntil(() -> assertReady(helper, LINE))
+                .thenExecute(() -> {
+                    insert(helper, westInput, IRON.toStack(COUNT));
+                    insert(helper, eastInput, IRON.toStack(COUNT));
+                    census.set(ItemCensus.take(helper));
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(stationCount(helper, westInput, IRON)
+                            + stationCount(helper, eastInput, IRON), 0L, "both inputs are empty");
+                    assertIdle(helper, LINE);
+                })
+                .thenExecute(() -> {
+                    long west = countIn(helper, westChest, IRON);
+                    long east = countIn(helper, eastChest, IRON);
+                    helper.assertValueEqual(west + east, (long) 2 * COUNT, "everything was stored");
+                    helper.assertTrue(west == 0 || east == 0,
+                            "the iron is in one chest only (west " + west + ", east " + east + ")");
+                    helper.assertValueEqual(storing.size(), severalCranes() ? 2 : 1, "every crane stored iron");
+                })
+                .thenSucceed();
+    }
+
     /** One input, two cranes: they share its buffered items and never plan the same ones twice. */
     @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
     public static void twojobsneverpromisethesamebuffereditems(GameTestHelper helper) {

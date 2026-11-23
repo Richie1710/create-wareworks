@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   item was stored. It now shows the filter item where the stored item would stand, so a rack wall that is set up but
   not yet filled reads as "this bay is for X"; a List, Attribute or Package Filter is shown as that filter item. A bay
   with stock keeps showing its stock, and an empty bay without a filter still shows nothing.
+- **Two cranes no longer store the same item into two empty places**
+  ([#51](https://github.com/Richie1710/create-wareworks/issues/51)). With several cranes on one warehouse, a crane
+  storing an item did not count an empty rack bay or chest another crane was already carrying that item to as holding
+  it, so with inputs at both ends of the aisle the same item could open a second place. A place another crane is filling
+  with the item now counts as holding it and is filled first. A warehouse with one crane is unchanged.
 
 ## [0.24.0-beta] - 2026-11-22
 
