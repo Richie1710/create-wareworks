@@ -5576,7 +5576,7 @@ factory far away: the recipe travels as a slip in the package.
   and gets a new one), a station that already has the other tier, a machine that already has a selector, and the
   machine's top face. A Mixer or Press click points at the Basin below it.
 * **The pattern check.** At a selector station every pattern is checked against the machine's real recipes: one
-  output, no chance outputs, no fluids, whole runs, Create's `allowStonecuttingOnSaw` and its automation filter. A
+  output, no chance outputs, no fluid results (a fluid ingredient needs matching fluid cells, §3.13), whole runs, Create's `allowStonecuttingOnSaw` and its automation filter. A
   pattern that fails (also one with List or Attribute Filter cells) is drawn red with the reason in the station's
   screen and never ordered there.
 * **Switching off and breaking.** The selector row of the station's screen switches the selector (or the slips) off
@@ -5607,7 +5607,7 @@ factory far away: the recipe travels as a slip in the package.
 * **Layouts that work:** saw facing up fed by a chute or hopper from the station, output into the return input; a
   basin under a Mixer or Press with a funnel into the return input; a far factory with an unpacking Packager, a chest,
   a chute and the saw, the products packed and sent back to a Packager behind the return input. **Layouts that do
-  not:** a press on a belt, Deployers, fluid recipes, two stations on one machine, two selectors on one machine, a
+  not:** a press on a belt, Deployers, fluid results, fluid recipes at the Ender tier, two stations on one machine, two selectors on one machine, a
   Crafter Feeder at a selector station, a long belt between the unpack target and the machine (not inspected).
 * **Where it shows.** The terminal's order rows and tooltips, the station screen's selector row (machine, setting,
   switches, holds and the Resume affordance) and the goggles of the station and of the selector (setting, set-backs,

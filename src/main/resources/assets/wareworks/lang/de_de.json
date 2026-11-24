@@ -718,7 +718,7 @@
   "wareworks.gui.production.feeder": "Crafter-Zuführung",
   "wareworks.gui.production.lay.not_only_items": "Dieses Rezept braucht eine Zutat, die ein Muster nicht fasst: nur Gegenstände und Flüssigkeiten",
   "wareworks.gui.production.lay.too_many_fluids": "Dieses Rezept braucht mehr als 2 verschiedene Flüssigkeiten: Ein Muster fasst 2",
-  "wareworks.gui.production.lay.fluid_too_much": "Dieses Rezept braucht mehr als 1000 mB einer Flüssigkeit pro Durchgang: Ein Flüssigkeitsfeld fasst 1000",
+  "wareworks.gui.production.lay.fluid_too_much": "Dieses Rezept braucht mehr als 1000 mB einer Flüssigkeit pro Durchlauf: Ein Flüssigkeitsfeld fasst 1000",
   "wareworks.gui.production.lay.fluid_result": "Dieses Rezept stellt eine Flüssigkeit her: Ein Muster macht nur Gegenstände",
   "wareworks.gui.production.lay.unknown_fluid": "Dieser Server kennt eine Flüssigkeit dieses Rezepts nicht",
   "wareworks.gui.production.lay.too_many_inputs": "Dieses Rezept braucht mehr als die 9 Felder des Musters",

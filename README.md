@@ -320,8 +320,9 @@ Selector** and the production station: the unfiltered saw cycling, the selector 
 input, stairs and then slabs, the item that comes back unexpected and how to take it out, and the Basin under a Mixer.
 The twenty-eighth, **Setting a Far Factory's Recipe with Recipe Slips**, belongs to the **Ender Recipe Selector** and
 the production station: the four sneak-clicks, the saw set as a package arrives, the slab package waiting in its port
-until the line is empty, and the two ways of bypassing the selector to avoid. **Fluid in a Production Pattern** belongs to the production station: the fluid cell, the filled
-bucket the crane brings, the machine behind the station that needs no arm, and the warnings about arms and depots.
+until the line is empty, and the two ways of bypassing the selector to avoid. The twenty-ninth, **Fluid in a Production Pattern**, belongs to the production
+station: the fluid cell, the filled bucket the crane brings, the machine behind the station that needs no arm, and the
+warnings about arms and depots.
 
 ## Balancing the crane
 
@@ -1071,8 +1072,9 @@ items; the amount field says how many items Fetch brings ingredients for.
 
 With a **Warehouse Production** screen open, the **+** on a recipe of any JEI category writes it into the selected
 pattern tab, with its result and amounts: a crafting recipe in its own grid, so it suits a Crafter Feeder, and a
-machine's recipe, such as Create's saw, in the cells in order. Recipes a pattern cannot hold, such as one with a fluid,
-have a greyed-out **+** that says why.
+machine's recipe, such as Create's saw, in the cells in order. Recipes a pattern cannot hold, such as one that makes a
+fluid, needs more than two fluids or more than 1000 mB of one, have a greyed-out **+** that says why. A recipe's fluid
+inputs are laid as fluid cells.
 
 **EMI** is not supported directly: Wareworks has no EMI plugin, so with EMI and no JEI, EMI's **+** does not work at
 the terminal, and the crafting grid works exactly as without a recipe viewer.
