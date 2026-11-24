@@ -333,7 +333,7 @@
   "wareworks.gui.goggles.dock_join.own_controller": "Mira hacia el almacén %1$s, pero tiene un controlador propio: un almacén aparte",
   "wareworks.gui.goggles.dock_join.pending": "Se unirá al almacén %1$s como otra grúa en la próxima comprobación de raíles",
   "wareworks.gui.goggles.empty": "Vacío",
-  "wareworks.gui.goggles.ender_recipe_selector": "Selector de recetas Ender:",
+  "wareworks.gui.goggles.ender_recipe_selector": "Selector de recetas a distancia:",
   "wareworks.gui.goggles.filtered_locations": "Ubicaciones filtradas: %1$s",
   "wareworks.gui.goggles.fluid_bay": "%1$s:",
   "wareworks.gui.goggles.fluid_bay_accepts_first": "Acepta el primer fluido que llegue",
