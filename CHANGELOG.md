@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Warehouse Optimizer: merge an item kept in several places into its home**
   ([#57](https://github.com/Richie1710/create-wareworks/issues/57)). A new Merge button beside Optimise (and a click on
   a row's new places number) has the cranes gather each listed item into one place, on request and with idle cranes
-  only, capped by the same trips setting as Optimise. Only moves that empty a place completely are planned, the
-  smallest holder first, so every trip frees a bay; nothing is moved into a lower priority, into a filter that fits
-  worse or into a fluid bay. Each row shows in how many places the warehouse
+  only, capped by the same trips setting as Optimise. Only a place whose whole stock fits its home is emptied, the
+  smallest holder first (a big one takes several trips, as many as the trips setting allows); nothing is moved into a
+  lower priority, into a filter that fits worse or into a fluid bay. Each row shows in how many places the warehouse
   holds the item before you press. Where an item belongs is one rule now, used by the merge and by normal storing, so a
   crane never spreads a merged item again: a place whose store filter names the item is its home; without one it is the
   place that already holds the most of it, on the highest priority that holds it at all, and a tie goes to the place's
@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Storing prefers the place that already holds most of an item** ([#57](https://github.com/Richie1710/create-wareworks/issues/57)).
+  Among places of equal priority and suitability, the crane now stores into the one holding the most of the item (a
+  tie: the first in the aisle) instead of the nearest, so a merged item is not spread again.
 - **Server and players have to update together** again: the optimizer's screen data changed (the places number and the
   order's mode).
 - **A stock rule's maximum says what to do about the items it keeps out**

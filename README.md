@@ -698,7 +698,7 @@ reserved, each with what to do about it. *Nothing to move* is left for an item t
 holds the item. Press **Merge** (beside Optimise, or click a row's number for that item alone) and the crane gathers
 the item into its **home**: the place whose store filter names it, otherwise the place that already holds the most of
 it on the highest priority that holds it at all (a tie goes to the place that comes first in the aisle). The smallest
-place is emptied first, every trip frees a bay, nothing goes into a lower priority or a filter that fits worse, and
+place is emptied first, and only when all of it fits the home; nothing goes into a lower priority or a filter that fits worse, and
 new items of that type are stored in the same home, so the crane does not spread them again.
 
 ## Production
