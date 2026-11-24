@@ -49,4 +49,15 @@ class RelocationRuleTest {
             }
         }
     }
+
+    /** Issue #57, ADR-088: a merge goes to a place of equal or higher priority with a filter no worse. */
+    @Test
+    void aMergeTargetMayBeAtTheSamePriorityButNeverLowerOrWorse() {
+        assertTrue(RelocationRule.isMergeTarget(3, 1, 3, 1), "equal priority: the whole point of a merge");
+        assertTrue(RelocationRule.isMergeTarget(3, 1, 4, 1));
+        assertFalse(RelocationRule.isMergeTarget(3, 1, 2, 1), "never into a lower priority");
+        assertFalse(RelocationRule.isMergeTarget(3, 0, 3, 1), "never into a filter that fits worse");
+        assertTrue(RelocationRule.isMergeTarget(3, 2, 3, 0));
+        assertFalse(RelocationRule.isBetter(3, 1, 3, 1), "optimising stays strict: nothing moves sideways");
+    }
 }

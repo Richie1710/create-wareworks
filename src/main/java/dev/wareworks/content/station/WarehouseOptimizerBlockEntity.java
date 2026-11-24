@@ -169,8 +169,16 @@ public class WarehouseOptimizerBlockEntity extends SmartBlockEntity
      * whatever this optimizer had running. Empty when no controller serves this optimizer.
      */
     public Optional<OptimizerOrders.Start> optimise(List<ItemKey> keys) {
+        return optimise(keys, OptimizerOrder.Mode.OPTIMISE);
+    }
+
+    /**
+     * Server: {@link #optimise(List)} in {@code mode}; {@link OptimizerOrder.Mode#MERGE} asks the warehouse to gather each
+     * item into its home place (issue #57, ADR-088).
+     */
+    public Optional<OptimizerOrders.Start> optimise(List<ItemKey> keys, OptimizerOrder.Mode mode) {
         Objects.requireNonNull(keys, "keys");
-        return controller().flatMap(controller -> controller.startOptimizerOrder(worldPosition, keys));
+        return controller().flatMap(controller -> controller.startOptimizerOrder(worldPosition, keys, mode));
     }
 
     /** Server: stops this optimizer's running order; a trip under way is finished. */
@@ -200,6 +208,7 @@ public class WarehouseOptimizerBlockEntity extends SmartBlockEntity
         boolean misaligned = !linked && misaligned();
         List<ItemKey> keys = rows.keys();
         List<PriorityBreakdown> views = linked ? controller.optimizerView(keys, rooms) : List.of();
+        List<Integer> places = linked ? controller.optimizerPlaces(keys) : List.of();
         Optional<OptimizerOrder<ItemKey, RackPosition>> order = order(controller);
         List<OptimizerScreenState.RowView> shown = new ArrayList<>(rows.size());
         int index = 0;
@@ -212,7 +221,8 @@ public class WarehouseOptimizerBlockEntity extends SmartBlockEntity
             int viewIndex = index++;
             PriorityBreakdown view = viewIndex < views.size() ? views.get(viewIndex) : PriorityBreakdown.NONE;
             shown.add(new OptimizerScreenState.RowView(row, key, view,
-                    OptimizerScreenState.Pip.of(order, key.get()), OptimizerScreenState.Pip.reasonOf(order, key.get())));
+                    OptimizerScreenState.Pip.of(order, key.get()), OptimizerScreenState.Pip.reasonOf(order, key.get()),
+                    viewIndex < places.size() ? places.get(viewIndex) : 0));
         }
         return new OptimizerScreenState(shown, linked, misaligned, OptimizerScreenState.OrderLine.of(order), message,
                 first, second);

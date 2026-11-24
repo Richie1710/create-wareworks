@@ -694,6 +694,12 @@ line stops it, and a trip under way is finished. When an item has nothing to mov
 tooltip says why: *All places have the same priority*, *No place with a higher priority*, *No free room at a higher
 priority*, *Higher places' filters do not fit*, *Its places cannot be reached now*, or that all of it is requested or
 reserved, each with what to do about it. *Nothing to move* is left for an item the warehouse holds none of.
+**Merging an item kept in several places.** A small number beside each row says in how many places the warehouse
+holds the item. Press **Merge** (beside Optimise, or click a row's number for that item alone) and the crane gathers
+the item into its **home**: the place whose store filter names it, otherwise the place that already holds the most of
+it on the highest priority that holds it at all (a tie goes to the place that comes first in the aisle). The smallest
+place is emptied first, every trip frees a bay, nothing goes into a lower priority or a filter that fits worse, and
+new items of that type are stored in the same home, so the crane does not spread them again.
 
 ## Production
 
@@ -993,8 +999,8 @@ a second bay only when that one cannot take it. That happens when:
 
 **What does the Warehouse Optimizer do, and what not?** It moves the items you list **up in priority**: from a storage
 location to one with a **higher** priority whose filter fits the item no worse. That is all it does. It does **not**
-merge an item that lies in two places of the same priority, it does not sort, and with every bay at the default
-priority 0 it has nothing to do. Give the places you want filled first a higher priority, then press Optimise. When a
+merge an item that lies in two places of the same priority (that is what **Merge** does, when you press it), it does
+not sort, and with every bay at the default priority 0 Optimise has nothing to do. Give the places you want filled first a higher priority, then press Optimise. When a
 row moves nothing, its gold dot tells you why.
 
 **Why do items wait in the Warehouse Input?** Mostly because **each rack bay holds one item type** until it is empty

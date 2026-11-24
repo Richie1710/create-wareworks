@@ -269,6 +269,7 @@ public final class JobPlanner<K, L> {
             .thenComparing((Candidate<?> candidate) -> !candidate.consolidates())
             .thenComparing((Candidate<?> candidate) -> !candidate.compatible())
             .thenComparing((a, b) -> Integer.compare(b.priority(), a.priority()))
+            .thenComparing((a, b) -> ItemHome.compareHolding(a.held(), a.order(), b.held(), b.order()))
             .thenComparingLong(Candidate::travelTicks)
             .thenComparingInt(Candidate::order);
     /**
@@ -921,7 +922,8 @@ public final class JobPlanner<K, L> {
             Map<UUID, RelocationReason> exhausted) {
         for (PlannerInput.RelocateNeed<K> need : input.relocations()) {
             RelocationReason[] why = {RelocationReason.NO_ROOM_HIGHER};
-            Optional<PlannedJob<K, L>> job = planRelocation(input, need, budget, why);
+            Optional<PlannedJob<K, L>> job = need.merge() ? planMerge(input, need, budget, why)
+                    : planRelocation(input, need, budget, why);
             if (job.isPresent())
                 return job;
             if (budget.exhausted)
@@ -1043,7 +1045,8 @@ public final class JobPlanner<K, L> {
                 long travel = TravelTimeModel.add(source.travelTicks(), input.travel().travelTicks(sourcePos.branch(),
                         sourcePos.x(), sourcePos.y(), pos.branch(), pos.x(), pos.y()));
                 better.add(new Candidate<>(target.location(), target.kind(), target.rankClass(), target.filterRank(),
-                        target.consolidates(), target.compatible(), target.priority(), travel, target.order(), amount));
+                        target.consolidates(), target.compatible(), target.priority(), travel, target.order(), amount,
+                        target.held()));
             }
             better.sort(RANKING);
             Optional<Selection<L>> selection = tryInsert(input, better, key, budget, false);
@@ -1060,6 +1063,183 @@ public final class JobPlanner<K, L> {
         return Optional.empty();
     }
 
+
+    // --- merge (issue #57, ADR-088) ---------------------------------------------------------------------------------
+
+    /** A storage place that could be a key's home or one of its sources, with what the merge ranks it by. */
+    private record Place<L>(L location, long count, int priority, int filterRank, int order) {
+    }
+
+    /**
+     * One merge need: a trip of its key from one place into the key's <b>home</b> ({@link ItemHome}) that works toward
+     * emptying the source place completely, the smallest holder first.
+     * <ol>
+     * <li><b>The home</b> is chosen among the places holding the key and the places whose store filter names it
+     * ({@link FilterMatch#DEDICATED}): a dedicated place first, then the highest priority, then the most held, then the
+     * lower index ({@link ItemHome#pick}). It is chosen over <i>all</i> of them, reachable or not, so the home never
+     * wanders to another place just because the first was out of reach: an unreachable home ends the item as
+     * {@link RelocationReason#NOT_REACHABLE}. Places {@link PlannerInput#relocateTarget()} and
+     * {@link PlannerInput#storeExcluded()} keep out (fluid bays, package mode) are neither home nor source.</li>
+     * <li><b>Sources</b> are the other holders, smallest first. One is eligible when nothing of it is spoken for or
+     * held back, when the home is no lower in priority and no worse a match ({@link RelocationRule#isMergeTarget}), and
+     * when everything it holds fits the home's room right now (the estimate less the room other jobs reserved), so a
+     * source is not started towards a full home.</li>
+     * <li>The first eligible source costs one live extract and one live insert, <b>only</b> into the home; a trip carries
+     * at most the carry limit, so a large source takes several trips and stays the smallest holder meanwhile.</li>
+     * </ol>
+     * The home only grows and the sources only shrink, so the number of places holding the key falls with every
+     * emptied source and the merge ends, with any number of cranes.
+     */
+    private Optional<PlannedJob<K, L>> planMerge(PlannerInput<K, L> input, PlannerInput.RelocateNeed<K> need,
+            Budget budget, RelocationReason[] why) {
+        K key = need.key();
+        int limit = limit(need.movable(), input.carryLimit().applyAsInt(key));
+        if (limit < 1) {
+            why[0] = RelocationReason.SPOKEN_FOR;
+            return Optional.empty();
+        }
+        List<L> all = input.storageLocations();
+        Map<L, Integer> indexOf = new HashMap<>();
+        for (int at = 0; at < all.size(); at++)
+            indexOf.putIfAbsent(all.get(at), at);
+        int beyond = all.size();
+        boolean anyHeld = false;
+        List<Place<L>> places = new ArrayList<>();
+        Set<L> seen = new HashSet<>();
+        for (LocationCount<L> entry : input.stock().locationsOf(key)) {
+            L location = entry.location();
+            if (entry.count() <= 0)
+                continue;
+            anyHeld = true;
+            if (!input.relocateTarget().test(location, key) || input.storeExcluded().test(location, key))
+                continue;
+            FilterMatch filter = Objects.requireNonNull(input.storeFilter().apply(location, key), "storeFilter result");
+            seen.add(location);
+            Integer at = indexOf.get(location);
+            places.add(new Place<>(location, entry.count(), input.storePriority().applyAsInt(location),
+                    filter.storeRank(), at != null ? at : beyond++));
+        }
+        if (!anyHeld) {
+            why[0] = RelocationReason.NONE_IN_STOCK;
+            return Optional.empty();
+        }
+        // Rule 1 of the home: a place whose filter names the key is its home, empty or not.
+        for (L location : all) {
+            if (seen.contains(location) || !input.relocateTarget().test(location, key)
+                    || input.storeExcluded().test(location, key))
+                continue;
+            if (Objects.requireNonNull(input.storeFilter().apply(location, key), "storeFilter result")
+                    == FilterMatch.DEDICATED)
+                places.add(new Place<>(location, 0L, input.storePriority().applyAsInt(location),
+                        FilterMatch.DEDICATED.storeRank(), indexOf.get(location)));
+        }
+        int dedicatedRank = FilterMatch.DEDICATED.storeRank();
+        int plainRank = FilterMatch.UNFILTERED.storeRank();
+        boolean anyDedicated = places.stream().anyMatch(place -> place.filterRank() == dedicatedRank);
+        Map<Integer, Place<L>> byOrder = new HashMap<>();
+        List<ItemHome.Holder> candidates = new ArrayList<>();
+        for (Place<L> place : places) {
+            // A place that rejects the key (re-dedicated to something else) is never its home; with a dedicated place
+            // around, only dedicated places are.
+            if (place.filterRank() > plainRank || (anyDedicated && place.filterRank() != dedicatedRank))
+                continue;
+            byOrder.put(place.order(), place);
+            // What is under way counts: room another crane reserved for the key here is as good as held, stock it is
+            // carrying away is gone, so the home does not flip while a trip towards it is in the air (review fix).
+            long underWay = input.reservations().reservedCapacity(place.location(), key)
+                    - input.reservations().reservedStock(place.location(), key);
+            candidates.add(new ItemHome.Holder(place.priority(), Math.max(0L, place.count() + underWay),
+                    place.order()));
+        }
+        Optional<ItemHome.Holder> picked = ItemHome.pick(candidates);
+        if (picked.isEmpty()) {
+            why[0] = RelocationReason.HOME_WORSE;
+            return Optional.empty();
+        }
+        Place<L> home = byOrder.get(picked.get().order());
+        if (!input.available().test(home.location())) {
+            why[0] = RelocationReason.NOT_REACHABLE;
+            return Optional.empty();
+        }
+        List<Place<L>> sources = new ArrayList<>();
+        for (Place<L> place : places) {
+            if (place.count() > 0 && !place.location().equals(home.location()))
+                sources.add(place);
+        }
+        if (sources.isEmpty()) {
+            why[0] = RelocationReason.ALREADY_ONE_PLACE;
+            return Optional.empty();
+        }
+        // What is spoken for stays where a retrieve takes it from, in the worst places first (#47): a source holding
+        // some of it cannot be emptied, so it is no source.
+        Map<L, Long> keep = new HashMap<>();
+        long held = need.heldBack();
+        if (held > 0) {
+            List<Place<L>> worstFirst = new ArrayList<>(sources);
+            if (home.count() > 0)
+                worstFirst.add(home);
+            worstFirst.sort(Comparator.comparingInt((Place<L> place) -> place.priority())
+                    .thenComparingInt(Place::order));
+            for (Place<L> place : worstFirst) {
+                if (held <= 0)
+                    break;
+                long free = Math.max(0L, place.count() - input.reservations().reservedStock(place.location(), key));
+                long kept = Math.min(held, free);
+                keep.put(place.location(), kept);
+                held -= kept;
+            }
+        }
+        sources.sort(Comparator.comparingLong((Place<L> place) -> place.count()).thenComparingInt(Place::order));
+        long estimate = input.insertEstimate().estimateInsertable(home.location(), key);
+        long homeRoom = estimate == UNKNOWN_CAPACITY ? Long.MAX_VALUE
+                : estimate - input.reservations().reservedCapacity(home.location());
+        boolean full = false;
+        boolean worse = false;
+        boolean spoken = false;
+        for (Place<L> source : sources) {
+            if (!input.available().test(source.location()) || input.extractRefused().test(source.location(), key))
+                continue;
+            long reserved = input.reservations().reservedStock(source.location(), key);
+            long free = source.count() - reserved;
+            if (free <= 0 || keep.getOrDefault(source.location(), 0L) > 0) {
+                spoken = true;
+                continue;
+            }
+            if (!RelocationRule.isMergeTarget(source.priority(), source.filterRank(), home.priority(),
+                    home.filterRank())) {
+                worse = true;
+                continue;
+            }
+            if (free > homeRoom) {
+                full = true;
+                continue;
+            }
+            if (!budget.tryUse())
+                return Optional.empty();
+            long live = input.liveExtract().simulateExtract(source.location(), key,
+                    CapacityMath.toIntClamped(limit + reserved));
+            int amount = (int) Math.max(0L, Math.min(limit, live - reserved));
+            if (amount < 1) {
+                spoken = true;
+                continue;
+            }
+            Optional<Selection<L>> selection = tryInsert(input, List.of(new Candidate<>(home.location(),
+                    LocationKind.STORAGE, CLASS_STORAGE, home.filterRank(), true, true, home.priority(), 0L,
+                    home.order(), amount, home.count())), key, budget, false);
+            if (selection.isPresent()) {
+                TransportJob<K, L> job = TransportJob.relocate(newId(), source.location(), home.location(), key,
+                        selection.get().amount());
+                return Optional.of(new PlannedJob<>(job, tripTicks(input, job)));
+            }
+            if (budget.exhausted)
+                return Optional.empty();
+            full = true; // the home refuses live: no other source fits it either
+            break;
+        }
+        why[0] = full ? RelocationReason.HOME_FULL : worse ? RelocationReason.HOME_WORSE
+                : spoken ? RelocationReason.SPOKEN_FOR : RelocationReason.NOT_REACHABLE;
+        return Optional.empty();
+    }
     /**
      * Why no storage location is a better place for {@code key} than any of {@code sources} (issue #53, ADR-087), asked
      * once a relocation search has ended with nothing found. It reads the same facts the search ranked by — priority,
@@ -1287,8 +1467,8 @@ public final class JobPlanner<K, L> {
             // into an empty location the index shows empty until the delivery (the index is refreshed right after it),
             // and without this the two would open two locations for one item. Room reserved for another key attracts
             // nothing. With one crane no job is in flight while one is planned, so nothing changes there.
-            boolean consolidates = input.stock().countAt(key, location) > 0
-                    || input.reservations().reservedCapacity(location, key) > 0;
+            long held = input.stock().countAt(key, location);
+            boolean consolidates = held > 0 || input.reservations().reservedCapacity(location, key) > 0;
             // Nothing of another item type (per index): item types are not mixed while such locations are free.
             boolean compatible = consolidates || holdsOnlyTypeOf(input, location, key);
             // The one place a storage priority is read when storing (M16), and only once the location may take the item
@@ -1302,7 +1482,7 @@ public final class JobPlanner<K, L> {
             long travel = TravelTimeModel.add(baseTravel,
                     input.travel().travelTicks(fromBranch, fromX, fromY, pos.branch(), pos.x(), pos.y()));
             candidates.add(new Candidate<>(location, LocationKind.STORAGE, CLASS_STORAGE, filter.storeRank(),
-                    consolidates, compatible, priority, travel, rank, limit));
+                    consolidates, compatible, priority, travel, rank, limit, held));
             if (survey != null)
                 survey.storageRanked = true;
         }
@@ -1525,7 +1705,13 @@ public final class JobPlanner<K, L> {
      *                     whenever a stock rule's maximum bounds the latter (M15 × M17)
      */
     private record Candidate<L>(L location, LocationKind kind, int rankClass, int filterRank, boolean consolidates,
-            boolean compatible, int priority, long travelTicks, int order, int limit) {
+            boolean compatible, int priority, long travelTicks, int order, int limit, long held) {
+        /** A candidate holding none of the key (everything but a storing target that already holds it). */
+        Candidate(L location, LocationKind kind, int rankClass, int filterRank, boolean consolidates,
+                boolean compatible, int priority, long travelTicks, int order, int limit) {
+            this(location, kind, rankClass, filterRank, consolidates, compatible, priority, travelTicks, order, limit,
+                    0L);
+        }
     }
 
     /**

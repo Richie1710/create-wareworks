@@ -114,6 +114,9 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
             case SAME_PRIORITY, NO_HIGHER_PRIORITY -> WareworksLang.OPTIMIZER_REASON_HINT_PRIORITY;
             case FILTER_DOES_NOT_FIT -> WareworksLang.OPTIMIZER_REASON_HINT_FILTER;
             case NO_ROOM_HIGHER -> WareworksLang.OPTIMIZER_REASON_HINT_ROOM;
+            case ALREADY_ONE_PLACE -> null;
+            case HOME_FULL -> WareworksLang.OPTIMIZER_REASON_HINT_HOME;
+            case HOME_WORSE -> WareworksLang.OPTIMIZER_REASON_HINT_PRIORITY;
         });
     }
 
@@ -147,9 +150,15 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
      * @param state     where it is
      * @param moved     how many items its trips have put down
      * @param tripsLeft how many trips it may still cost
+     * @param merge     whether it is a merge order (issue #57, ADR-088) rather than an optimise order
      */
-    public record OrderLine(OrderState state, long moved, int tripsLeft) {
-        public static final OrderLine NONE = new OrderLine(OrderState.NONE, 0L, 0);
+    public record OrderLine(OrderState state, long moved, int tripsLeft, boolean merge) {
+        public static final OrderLine NONE = new OrderLine(OrderState.NONE, 0L, 0, false);
+
+        /** The line of an optimise order. */
+        public OrderLine(OrderState state, long moved, int tripsLeft) {
+            this(state, moved, tripsLeft, false);
+        }
 
         public OrderLine {
             if (state == null)
@@ -160,7 +169,8 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
 
         /** The line of {@code order}, or {@link #NONE}. */
         public static OrderLine of(Optional<? extends OptimizerOrder<?, ?>> order) {
-            return order.map(o -> new OrderLine(OrderState.of(o.state()), o.moved(), o.tripsLeft())).orElse(NONE);
+            return order.map(o -> new OrderLine(OrderState.of(o.state()), o.moved(), o.tripsLeft(),
+                    o.mode() == OptimizerOrder.Mode.MERGE)).orElse(NONE);
         }
 
         public boolean running() {
@@ -222,9 +232,11 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
      * @param pip       what the optimizer's order is doing with it
      * @param reason    why it has nothing to move (issue #53), decided on the server ({@link Pip#reasonOf}); present only
      *                  with {@link Pip#NOTHING_TO_MOVE}
+     * @param places    in how many places the warehouse holds the item (issue #57), 0 for an empty row; a place in an
+     *                  unloaded chunk counts, a shared inventory counts once
      */
     public record RowView(int row, Optional<ItemKey> key, PriorityBreakdown breakdown, Pip pip,
-                          Optional<RelocationReason> reason) {
+                          Optional<RelocationReason> reason, int places) {
         public RowView {
             row = Math.max(0, row);
             if (key == null)
@@ -235,6 +247,13 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
                 pip = Pip.IDLE;
             if (reason == null || pip != Pip.NOTHING_TO_MOVE)
                 reason = Optional.empty();
+            places = Math.max(0, places);
+        }
+
+        /** A row with a reason and no place count. */
+        public RowView(int row, Optional<ItemKey> key, PriorityBreakdown breakdown, Pip pip,
+                       Optional<RelocationReason> reason) {
+            this(row, key, breakdown, pip, reason, 0);
         }
 
         /** A row without a reason. */
@@ -255,6 +274,18 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
             return reason.map(OptimizerScreenState::reasonKey).orElse(pip.langKey());
         }
 
+        /**
+         * {@link #statusKey()} for a row of a merge order (issue #57): running and done say merging and merged, every
+         * other mark and every reason read as they do for optimising.
+         */
+        public String statusKey(boolean merge) {
+            if (merge && reason.isEmpty() && pip == Pip.RUNNING)
+                return WareworksLang.OPTIMIZER_PIP_MERGING;
+            if (merge && reason.isEmpty() && pip == Pip.DONE)
+                return WareworksLang.OPTIMIZER_PIP_MERGED;
+            return statusKey();
+        }
+
         public void write(RegistryFriendlyByteBuf buffer) {
             buffer.writeVarInt(row);
             buffer.writeBoolean(key.isPresent());
@@ -263,6 +294,7 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
             buffer.writeVarInt(pip.ordinal());
             // 0 for none, the reason's ordinal + 1 otherwise (issue #53).
             buffer.writeVarInt(reason.map(value -> value.ordinal() + 1).orElse(0));
+            buffer.writeVarInt(places);
         }
 
         /**
@@ -277,8 +309,9 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
             Pip pip = byOrdinal(Pip.values(), buffer.readVarInt());
             int reason = buffer.readVarInt() - 1;
             RelocationReason[] reasons = RelocationReason.values();
-            return new RowView(row, key, breakdown, pip, reason < 0 || reason >= reasons.length ? Optional.empty()
-                    : Optional.of(reasons[reason]));
+            Optional<RelocationReason> why = reason < 0 || reason >= reasons.length ? Optional.empty()
+                    : Optional.of(reasons[reason]);
+            return new RowView(row, key, breakdown, pip, why, buffer.readVarInt());
         }
     }
 
@@ -302,6 +335,7 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
         buffer.writeVarInt(order.state().ordinal());
         buffer.writeVarLong(order.moved());
         buffer.writeVarInt(order.tripsLeft());
+        buffer.writeBoolean(order.merge());
         buffer.writeVarInt(message.ordinal());
         buffer.writeVarInt(first);
         buffer.writeVarInt(second);
@@ -318,8 +352,9 @@ public record OptimizerScreenState(List<RowView> rows, boolean linked, boolean m
         OrderState state = byOrdinal(OrderState.values(), buffer.readVarInt());
         long moved = buffer.readVarLong();
         int tripsLeft = buffer.readVarInt();
+        boolean merge = buffer.readBoolean();
         Message message = byOrdinal(Message.values(), buffer.readVarInt());
-        return new OptimizerScreenState(rows, linked, misaligned, new OrderLine(state, moved, tripsLeft), message,
+        return new OptimizerScreenState(rows, linked, misaligned, new OrderLine(state, moved, tripsLeft, merge), message,
                 buffer.readVarInt(), buffer.readVarInt());
     }
 

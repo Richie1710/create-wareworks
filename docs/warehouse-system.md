@@ -7662,6 +7662,23 @@ item. It is an estimate: the crane may move a little less (a stale snapshot, a p
 planner prefers a place that already holds the item, a little more. `OptimizerMenu` pushes the counts every 10 ticks and repeats the walk at most every
 40 ticks, sooner when the list changes or the order puts items down. An optimizer nobody looks at costs nothing.
 
+**Merge mode and the home of an item** ([issue #57](https://github.com/Richie1710/create-wareworks/issues/57), **ADR-088**,
+amending ADR-079 D2). Optimise only moves up, so an item kept in several places of one priority stays split. Merge
+gathers it, on request and for the listed items only, with the same idle-crane rule and the same
+`optimizer.tripsPerRequest` cap (a second button beside Optimise; a click on a row's places number merges that item
+alone; `OptimizerOrder.Mode.MERGE`, saved as `Mode: "MERGE"` only when set). Where an item belongs is one rule, `core.job.ItemHome`,
+read by the store ranking and by the merge: (1) a place whose store filter names the item is its home; (2) otherwise the
+place that already holds the most of it on the highest priority that holds it at all, a tie to the place's index order
+in the aisle (never the travel time). `JobPlanner#planMerge` takes the smallest other holder as the source, never into a
+lower priority and never into a filter that fits worse (`RelocationRule#isMergeTarget`: equal priority qualifies, which
+`isBetter` does not allow), only a source whose whole stock fits the home's room, one trip at most a carry at a time,
+and it leaves fluid bays and places package mode keeps the item out of alone. Every trip goes from a source to the one
+home, so the number of places falls and nothing is moved twice. The new reasons are `ALREADY_ONE_PLACE`, `HOME_FULL`
+(the home has no room for the smallest source) and `HOME_WORSE` (every other place has a higher priority or a better
+filter than the home). The screen has a fourth number, **places** (a small `#` column): in how many places the item lies,
+unloaded ones included, a shared inventory counted once and fluid bays left out
+(`WarehouseControllerBlockEntity#optimizerPlaces`).
+
 **Goggles**: the header "Warehouse Optimizer:", the aisle assignment, "Items: n" or "No items set", "Not part of a
 warehouse" outside one, and "Optimising: n moved, k trips left" while its order runs. Observer-driven and throttled
 like every goggle summary. The controller's crane list and the crane status display source say "relocating" for a
@@ -7691,7 +7708,8 @@ order.
 * `content.station`: `WarehouseOptimizerBlock` / `BlockEntity`, `OptimizerRows`, `OptimizerMenu`,
   `OptimizerMenuLayout`, `OptimizerScreenState`, `OptimizerGoggleSummary`, `OptimizerAction`.
 * `client.gui`: `WarehouseOptimizerScreen`, `ClientOptimizers`, `OptimizerScreenUpdates`.
-* `network`: `OptimizerActionPayload`, `OptimizerScreenPayload` (network version 22).
+* `network`: `OptimizerActionPayload`, `OptimizerScreenPayload` (network version 30 since issue #57).
+* Merge mode (issue #57): `core.job.ItemHome`, `JobPlannerMergeTest`, `ItemHomeTest`, GameTests `OptimizerMergeGameTests`.
 * JUnit: `RelocationRuleTest`, `JobPlannerRelocateTest`, `OptimizerOrdersTest`, `RelocationStockTest`,
   `PriorityBreakdownTest`, `OptimizerTextWidthTest`, and additions to `ReservationLedgerTest`, `TransportJobTest`,
   `CraneRosterTest` and `AisleMembershipTest`.

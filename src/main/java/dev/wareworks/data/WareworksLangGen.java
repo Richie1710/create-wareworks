@@ -1773,6 +1773,9 @@ public final class WareworksLangGen {
                 case NO_HIGHER_PRIORITY -> "No place with a higher priority";
                 case FILTER_DOES_NOT_FIT -> "Higher places' filters do not fit";
                 case NO_ROOM_HIGHER -> "No free room at a higher priority";
+                case ALREADY_ONE_PLACE -> "All of it lies in one place";
+                case HOME_FULL -> "Its home place has no room left";
+                case HOME_WORSE -> "Other places rank above its home";
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_PRIORITY),
@@ -1781,6 +1784,17 @@ public final class WareworksLangGen {
                 "A higher place needs a fitting filter");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_ROOM), "Make more room at a higher priority");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_REACH), "Load the chunk or mend the rails");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_HOME), "Make room in its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PIP_MERGING), "Being gathered into its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PIP_MERGED), "Done: all that fits is in one place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PLACES_SHORT), "#");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PLACES), "Places holding it");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PLACES_HINT), "Click to gather it in its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MERGE), "Merge");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MERGE_HINT),
+                "Gathers each item in its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MERGE_NOW),
+                "Only places that fit whole, with a free crane");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST), "Clipboard");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST_HINT),
                 "Click a clipboard here to add its items");

@@ -200,6 +200,9 @@ public class OptimizerMenu extends MenuBase<WarehouseOptimizerBlockEntity> {
             case IMPORT_CLIPBOARD -> importClipboard();
             case OPTIMISE -> started(contentHolder.rows().keys());
             case OPTIMISE_ROW -> started(contentHolder.rows().keyAt(row).map(List::of).orElse(List.of()));
+            case MERGE -> started(contentHolder.rows().keys(), OptimizerOrder.Mode.MERGE);
+            case MERGE_ROW -> started(contentHolder.rows().keyAt(row).map(List::of).orElse(List.of()),
+                    OptimizerOrder.Mode.MERGE);
             case CANCEL -> cancelled();
         };
         markDirty(); // also pushes back a refused action, so the screen never shows a row nobody stored
@@ -234,11 +237,15 @@ public class OptimizerMenu extends MenuBase<WarehouseOptimizerBlockEntity> {
     }
 
     private boolean started(List<ItemKey> keys) {
+        return started(keys, OptimizerOrder.Mode.OPTIMISE);
+    }
+
+    private boolean started(List<ItemKey> keys, OptimizerOrder.Mode mode) {
         if (keys.isEmpty()) {
             say(OptimizerScreenState.Message.NO_ITEMS, 0, 0);
             return false;
         }
-        Optional<OptimizerOrders.Start> start = contentHolder.optimise(keys);
+        Optional<OptimizerOrders.Start> start = contentHolder.optimise(keys, mode);
         if (start.isEmpty()) {
             // No warehouse this optimizer is a member of (issue #52): the press answers with the reason, so a click is
             // never met with silence.

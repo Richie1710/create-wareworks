@@ -143,6 +143,8 @@ final class ControllerPersistence {
     private static final String ENTRIES = "Entries";
     /** Why an ended optimizer entry moved nothing (more), by name (issue #53); absent while it has none. */
     private static final String END_REASON = "EndReason";
+    /** An order's mode (issue #57), written only for a merge order: absent reads as optimise. */
+    private static final String ORDER_MODE = "Mode";
     private static final String IN_FLIGHT = "InFlight";
     private static final String TRIP_JOB = "Job";
     private static final String TRIP_ENTRY = "Entry";
@@ -1034,6 +1036,8 @@ final class ControllerPersistence {
                 entry.putInt(TRIPS, order.tripsLeft());
                 entry.putLong(MOVED, order.moved());
                 entry.put(ENTRIES, entries);
+                if (order.mode() == OptimizerOrder.Mode.MERGE)
+                    entry.putString(ORDER_MODE, order.mode().name());
                 if (!inFlight.isEmpty())
                     entry.put(IN_FLIGHT, inFlight);
                 list.add(entry);
@@ -1096,7 +1100,8 @@ final class ControllerPersistence {
                 inFlight.put(trip.getUUID(TRIP_JOB), trip.getUUID(TRIP_ENTRY));
         }
         return Optional.of(new OptimizerOrder<>(rack.get(), state.get(), entries, entry.getInt(TRIPS),
-                entry.getLong(MOVED), inFlight));
+                entry.getLong(MOVED), inFlight,
+                OptimizerOrder.Mode.byName(entry.getString(ORDER_MODE)).orElse(OptimizerOrder.Mode.OPTIMISE)));
     }
 
     /**

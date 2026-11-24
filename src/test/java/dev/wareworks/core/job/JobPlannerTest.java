@@ -394,6 +394,34 @@ class JobPlannerTest {
     }
 
     /**
+     * Issue #57, ADR-088: the home of an item. Among places that already hold it at one priority the fullest wins, not
+     * the nearest; equal counts go to the lower index (the position in the aisle's location list), not to the shorter
+     * way; a higher priority still beats the count.
+     */
+    @Test
+    void storeFollowsTheHomeOfTheItem() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition mid = rack(4, 0, Side.LEFT);
+        RackPosition far = rack(6, 0, Side.LEFT);
+        stock.update(near, slots(26, IRON, 10));
+        stock.update(mid, slots(26, IRON, 30));
+        stock.update(far, slots(26, IRON, 30));
+        for (RackPosition location : List.of(near, mid, far))
+            live.insertable.put(location, STACK);
+        PlannerInput.Builder<String, RackPosition> base = input().inputs(List.of(IN_A)).storePriority(this::priorityOf)
+                .inputBuffers(location -> slots(0, IRON, 20))
+                .insertEstimate(JobPlanner.InsertEstimate.fromSnapshots(stock.readOnlyView(), key -> STACK));
+
+        assertEquals(far, planner.plan(base.storageLocations(List.of(near, far, mid)).build()).job().orElseThrow()
+                .job().target(), "30 and 30 beat 10 (near); the tie goes to the lower index (far), not the travel");
+        assertEquals(mid, planner.plan(base.storageLocations(List.of(near, mid, far)).build()).job().orElseThrow()
+                .job().target(), "the same places in another list order: the lower index is mid now");
+        priorities.put(near, 3);
+        assertEquals(near, planner.plan(base.storageLocations(List.of(near, mid, far)).build()).job().orElseThrow()
+                .job().target(), "a higher priority beats the larger count");
+    }
+
+    /**
      * Issue #51: with two cranes on one controller, crane 2 plans while crane 1 is still carrying the same key to an
      * empty location. The index shows that location empty until the delivery, but the room reserved there for the key
      * already makes it the key's location, so it outranks a nearer empty one exactly like a location holding the key.

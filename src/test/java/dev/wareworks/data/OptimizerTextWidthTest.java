@@ -91,7 +91,14 @@ class OptimizerTextWidthTest {
             "gui.optimizer.reason.same_priority", "gui.optimizer.reason.no_higher_priority",
             "gui.optimizer.reason.filter_does_not_fit", "gui.optimizer.reason.no_room_higher",
             "gui.optimizer.reason_hint.priority", "gui.optimizer.reason_hint.filter",
-            "gui.optimizer.reason_hint.room", "gui.optimizer.reason_hint.reach");
+            "gui.optimizer.reason_hint.room", "gui.optimizer.reason_hint.reach",
+            // Merge mode (issue #57, ADR-088).
+            "gui.optimizer.reason.already_one_place", "gui.optimizer.reason.home_full",
+            "gui.optimizer.reason.home_worse", "gui.optimizer.reason_hint.home", "gui.optimizer.pip.merging",
+            "gui.optimizer.pip.merged", "gui.optimizer.places", "gui.optimizer.places_hint",
+            "gui.optimizer.merge", "gui.optimizer.merge_hint", "gui.optimizer.merge_now");
+    /** The places column's header: a short mark, right-aligned in its narrow field. */
+    private static final String PLACES_HEADER = "gui.optimizer.places_short";
     private static final String PRIORITY = "gui.optimizer.priority";
     private static final String UNLOADED = "gui.optimizer.unloaded";
     private static final String MOVABLE_NOW = "gui.optimizer.movable_now";
@@ -109,7 +116,9 @@ class OptimizerTextWidthTest {
             String name = language.getKey();
             Map<String, String> lang = ItemTooltipLengthTest.strings(language.getValue());
             check(tooWide, name, ITEMS, ItemTooltipLengthTest.width(text(lang, name, ITEMS), advances),
-                    layout.numbersX() - OptimizerMenuLayout.MARGIN - OptimizerMenuLayout.GAP);
+                    layout.placesX() - OptimizerMenuLayout.MARGIN - OptimizerMenuLayout.GAP);
+            check(tooWide, name, PLACES_HEADER, ItemTooltipLengthTest.width(text(lang, name, PLACES_HEADER), advances),
+                    OptimizerMenuLayout.PLACES_WIDTH - OptimizerMenuLayout.NUMBER_PADDING - 1);
             for (String key : HEADERS)
                 check(tooWide, name, key, ItemTooltipLengthTest.width(text(lang, name, key), advances), HEADER_WIDTH);
         }
@@ -200,6 +209,7 @@ class OptimizerTextWidthTest {
         Set<String> measured = new TreeSet<>();
         measured.add(ITEMS);
         measured.addAll(HEADERS);
+        measured.add(PLACES_HEADER);
         measured.addAll(STATUS_PLAIN);
         measured.addAll(STATUS_MOVED);
         measured.add(RUNNING);
@@ -222,7 +232,9 @@ class OptimizerTextWidthTest {
         assertTrue(layout.scrolls(), "16 rows do not all fit at once");
         assertEquals(OptimizerLimits.MAX_ROWS - layout.visibleRows(), layout.maxScroll());
         assertTrue(layout.cancelX() > layout.statusTextX(), "the cancel mark stands right of the status text");
-        assertTrue(layout.statusTextX() + layout.statusTextWidth() < layout.optimiseX(), "the text ends before the button");
+        assertTrue(layout.statusTextX() + layout.statusTextWidth() < layout.mergeX(), "the text ends before the buttons");
+        assertTrue(layout.mergeX() + OptimizerMenuLayout.SLOT <= layout.optimiseX(), "Merge stands left of Optimise");
+        assertTrue(layout.nameWidth() >= 60, "the item name lost its room: " + layout.nameWidth());
     }
 
     private static void check(List<String> tooWide, String language, String key, int width, int room) {

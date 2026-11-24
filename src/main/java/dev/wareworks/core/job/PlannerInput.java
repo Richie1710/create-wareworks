@@ -412,15 +412,22 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
      *                 they lie in the worst places, because that is where a retrieve takes them from (#47). Without
      *                 this, every trip would leave the free surplus as large as before — the moved items still count —
      *                 and an order would carry the spoken-for items up as well, trip by trip
+     * @param merge    a merge need (issue #57, ADR-088): the key is gathered into its home place instead of moved up
+     *                 ({@link JobPlanner}'s merge planning); false is the optimise need of issue #46
      * @param <K>      item key type
      */
-    public record RelocateNeed<K>(UUID id, K key, long movable, long heldBack) {
+    public record RelocateNeed<K>(UUID id, K key, long movable, long heldBack, boolean merge) {
         public RelocateNeed {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(key, "key");
             if (movable < 1)
                 throw new IllegalArgumentException("movable must be at least 1: " + movable);
             heldBack = Math.max(0L, heldBack);
+        }
+
+        /** An optimise need: what is held back is counted off, nothing merges (issue #46). */
+        public RelocateNeed(UUID id, K key, long movable, long heldBack) {
+            this(id, key, movable, heldBack, false);
         }
 
         /** A need of which nothing is held back. */

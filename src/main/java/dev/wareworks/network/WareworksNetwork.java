@@ -244,8 +244,13 @@ public final class WareworksNetwork {
      * reason after its pip (issue #53, {@code RelocationReason} by ordinal + 1); a reader of the old shape would misread
      * the rows. A Warehouse Input's goggle data may carry why its items wait ({@code NotStored}, by name), and the store
      * reason {@code NO_LOCATION_FOR_TYPE} is new; both travel by name.
+     * <p>
+     * <b>{@code "30"} is the unreleased version after 0.25.0-beta</b>: {@code OptimizerScreenState} carries the merge flag
+     * of the order after its trips left and every row the number of places the item lies in after its reason (issue
+     * #57, ADR-088), and {@code RelocationReason} has three more values; {@code OptimizerAction} gained MERGE and
+     * MERGE_ROW (by name).
      */
-    public static final String VERSION = "29";
+    public static final String VERSION = "30";
 
     private WareworksNetwork() {
     }

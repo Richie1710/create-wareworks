@@ -232,4 +232,51 @@ class OptimizerOrdersTest {
         assertEquals(OptimizerLimits.MAX_TRIPS, OptimizerLimits.clampTrips(Integer.MAX_VALUE));
         assertEquals(OptimizerLimits.DEFAULT_TRIPS, OptimizerLimits.clampTrips(OptimizerLimits.DEFAULT_TRIPS));
     }
+
+    // --- merge mode (issue #57, ADR-088) ----------------------------------------------------------------------------
+
+    @Test
+    void anOrderKeepsItsModeThroughEveryChange() {
+        orders.start(NORTH, List.of(IRON, GOLD), 4, OptimizerOrder.Mode.MERGE);
+        assertEquals(OptimizerOrder.Mode.MERGE, order(NORTH).mode());
+        assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(1), IRON, OptimizerOrder.Mode.MERGE),
+                new OptimizerOrders.OpenEntry<>(id(2), GOLD, OptimizerOrder.Mode.MERGE)), orders.openEntries());
+        orders.onAssigned(id(50), IRON);
+        orders.onDelivered(id(50), 10);
+        orders.onJobEnded(id(50));
+        orders.endKey(GOLD, RelocationReason.ALREADY_ONE_PLACE);
+        assertEquals(OptimizerOrder.Mode.MERGE, order(NORTH).mode());
+        orders.cancel(NORTH);
+        assertEquals(OptimizerOrder.Mode.MERGE, order(NORTH).mode());
+        orders.start(NORTH, List.of(IRON), 4);
+        assertEquals(OptimizerOrder.Mode.OPTIMISE, order(NORTH).mode(), "the plain start is an optimise order");
+    }
+
+    @Test
+    void aSearchEndsOnlyTheEntriesOfItsOwnMode() {
+        orders.start(NORTH, List.of(IRON), 8);
+        orders.start(SOUTH, List.of(IRON), 8, OptimizerOrder.Mode.MERGE);
+        // The oldest order's entry is the one searched; both modes want iron.
+        assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(1), IRON)), orders.openEntries());
+
+        assertTrue(orders.endExhausted(Map.of(id(1), RelocationReason.SAME_PRIORITY)));
+
+        assertEquals(OptimizerOrder.EntryState.NOTHING_TO_MOVE, order(NORTH).entries().getFirst().state());
+        assertEquals(OptimizerOrder.EntryState.OPEN, order(SOUTH).entries().getFirst().state(),
+                "what an optimise search found says nothing about a merge");
+        assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(2), IRON, OptimizerOrder.Mode.MERGE)),
+                orders.openEntries(), "the merge entry is searched next");
+        assertTrue(orders.endExhausted(Map.of(id(2), RelocationReason.ALREADY_ONE_PLACE)));
+        assertEquals(RelocationReason.ALREADY_ONE_PLACE, order(SOUTH).entries().getFirst().reason());
+        assertFalse(orders.hasPending());
+    }
+
+    @Test
+    void aTripIsCreditedToTheOrderThePlannerSearched() {
+        orders.start(NORTH, List.of(IRON), 8, OptimizerOrder.Mode.MERGE);
+        orders.start(SOUTH, List.of(IRON), 8);
+        assertTrue(orders.onAssigned(id(70), IRON));
+        assertEquals(7, order(NORTH).tripsLeft());
+        assertEquals(8, order(SOUTH).tripsLeft());
+    }
 }

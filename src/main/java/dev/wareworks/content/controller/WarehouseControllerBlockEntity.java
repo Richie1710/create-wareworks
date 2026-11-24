@@ -3869,6 +3869,17 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      *         only)
      */
     public Optional<OptimizerOrders.Start> startOptimizerOrder(BlockPos optimizer, List<ItemKey> keys) {
+        return startOptimizerOrder(optimizer, keys, OptimizerOrder.Mode.OPTIMISE);
+    }
+
+    /**
+     * {@link #startOptimizerOrder(BlockPos, List)} for an order in {@code mode}: {@link OptimizerOrder.Mode#MERGE}
+     * gathers each item into its home place and empties the places it was spread over (issue #57, ADR-088), at most the
+     * same {@code optimizerTripsPerRequest} trips.
+     */
+    public Optional<OptimizerOrders.Start> startOptimizerOrder(BlockPos optimizer, List<ItemKey> keys,
+            OptimizerOrder.Mode mode) {
+        Objects.requireNonNull(mode, "mode");
         Objects.requireNonNull(optimizer, "optimizer");
         Objects.requireNonNull(keys, "keys");
         if (level == null || level.isClientSide)
@@ -3877,7 +3888,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (rack.isEmpty() || membership.kindAt(rack.get()).orElse(null) != LocationKind.OPTIMIZER)
             return Optional.empty();
         OptimizerOrders.Start started = optimizerOrders.start(rack.get(), keys,
-                WareworksConfig.optimizerTripsPerRequest());
+                WareworksConfig.optimizerTripsPerRequest(), mode);
         if (started == OptimizerOrders.Start.STARTED) {
             setChanged();
             // Event driven like every other new work: the next dispatch plans it, nothing polls (M19).
@@ -3953,6 +3964,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * How many of {@code key} a merge may move (issue #57, ADR-088): the free surplus <b>without</b> taking off the
+     * relocations already on their way. A merge trip empties a source toward its home and moves nothing up, so a trip of
+     * the order that is still carrying must not make the next source look spoken for (several cranes).
+     */
+    private long optimizerMergeMovable(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        return Math.max(0L, stockRules().availableTo(StockAccess.AUTOMATION, key, availableStock(key)));
+    }
+
+    /** What a merge holds back ({@link #optimizerHeldBack}), measured against {@link #optimizerMergeMovable}. */
+    private long optimizerMergeHeldBack(ItemKey key, long movable) {
+        return Math.max(0L, stock.count(key) - dispatch.reservations().reservedStock(key) - movable);
+    }
+
+    /**
      * {@code holdings} with {@code heldBack} items taken off their free figures, the worst place first — the order in
      * which {@link PriorityBreakdown} fills and the planner's relocation stage takes — so the view offers no item the
      * planner would leave where it lies.
@@ -3985,6 +4011,27 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public List<PriorityBreakdown> optimizerView(List<ItemKey> keys) {
         return optimizerView(keys, optimizerRooms(keys));
+    }
+
+    /**
+     * In how many places the warehouse holds each of {@code keys} (issue #57, ADR-088): the index's holders, a place in
+     * an unloaded chunk included, a shared inventory counted once (its aliases hold nothing of their own), and a fluid
+     * bay left out, which a merge never touches. One index lookup per key and one membership read per holder; shown
+     * beside the counts, so the split is visible before a player presses Merge.
+     */
+    public List<Integer> optimizerPlaces(List<ItemKey> keys) {
+        Objects.requireNonNull(keys, "keys");
+        List<Integer> places = new ArrayList<>(keys.size());
+        for (ItemKey key : keys) {
+            int count = 0;
+            for (LocationCount<RackPosition> held : stock.locationsOf(key)) {
+                RackPosition rack = held.location();
+                if (held.count() > 0 && !sharedInventories.isAlias(rack) && !takesFluidContainers(rack))
+                    count++;
+            }
+            places.add(count);
+        }
+        return places;
     }
 
     /**
@@ -4099,7 +4146,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         List<PlannerInput.RelocateNeed<ItemKey>> needs = new ArrayList<>();
         boolean changed = false;
         for (OptimizerOrders.OpenEntry<ItemKey> entry : optimizerOrders.openEntries()) {
-            long movable = optimizerMovable(entry.key());
+            boolean merge = entry.mode() == OptimizerOrder.Mode.MERGE;
+            long movable = merge ? optimizerMergeMovable(entry.key()) : optimizerMovable(entry.key());
             // Nothing of it may move at all, which the controller knows before the planner is asked (issue #53): none
             // in stock is the one case a row still reads "Nothing to move"; otherwise all of it is spoken for.
             if (movable <= 0)
@@ -4107,7 +4155,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                         ? RelocationReason.NONE_IN_STOCK : RelocationReason.SPOKEN_FOR);
             else
                 needs.add(new PlannerInput.RelocateNeed<>(entry.id(), entry.key(), movable,
-                        optimizerHeldBack(entry.key(), movable)));
+                        merge ? optimizerMergeHeldBack(entry.key(), movable) : optimizerHeldBack(entry.key(), movable),
+                        merge));
         }
         if (changed)
             setChanged();

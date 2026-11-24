@@ -43,6 +43,8 @@ import dev.wareworks.content.station.TerminalDoorRow;
 import dev.wareworks.content.station.TerminalDoors;
 import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.TerminalRequestOutcome;
+import dev.wareworks.content.station.WarehouseOptimizerBlock;
+import dev.wareworks.content.station.WarehouseOptimizerBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlock;
@@ -76,6 +78,8 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.optimizer.OptimizerOrder;
+import dev.wareworks.core.optimizer.OptimizerOrders;
 import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RequestQueue;
 import dev.wareworks.core.job.RetrievalRequest;
@@ -457,6 +461,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
         doorOrder(script);
         feederOrder(script);
         chunkHold(script);
+        mergeOrder(script);
         twoCranesInFlight(script);
         packageMode(script);
         brokenBlocks(script);
@@ -1016,6 +1021,134 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> refill(server, context, bayTailFill()))
                 .serverUntil("robustness: wait until the crane carries items again", this::craneCarries,
                         JOB_TIMEOUT_TICKS);
+    }
+
+    // --- merge mode (issue #57, ADR-088) -----------------------------------------------------------------------------
+
+    /** The optimizer of the merge phase: the rack position beside the dock that nothing else uses. */
+    private static final RackPosition MERGE_OPTIMIZER = RackPosition.of(0, 0, Side.LEFT);
+    /** The two chests the merge item is spread over: the smaller is emptied into the larger, which is its home. */
+    private static final RackPosition MERGE_SMALL = RackPosition.of(2, 0, Side.LEFT);
+    private static final RackPosition MERGE_HOME = RackPosition.of(5, 0, Side.LEFT);
+    /** An item no other phase moves. */
+    private static final ItemKey MERGE_ITEM = ItemKey.of(Items.PRISMARINE_SHARD);
+    private static final int MERGE_SMALL_COUNT = 30;
+    private static final int MERGE_HOME_COUNT = 50;
+
+    /**
+     * <b>A merge order survives a save, quit and rejoin</b> (issue #57, ADR-088): prismarine shards lie in two chests
+     * (30 and 50), an optimizer is asked to merge them, and the world is saved while the crane carries the 30 to the
+     * chest holding 50. After the rejoin the controller must still hold the order <i>as a merge order</i> (the mode is
+     * saved only for a merge, so an optimise order would be a different, silent failure), the crane's trip lands, the
+     * order finishes, the small chest is empty and the census is exact at every step. The optimizer is taken out again
+     * so the phases after this one see the warehouse they always saw.
+     */
+    private void mergeOrder(VisualScript script) {
+        script.server("robustness: place an optimizer and spread prismarine over two chests", this::buildMergeScene)
+                .serverUntil("robustness: wait until the controller indexed the prismarine in two places",
+                        this::mergeSceneReady, SCENE_READY_TIMEOUT_TICKS)
+                .server("robustness: baseline census with the prismarine", (server, context) -> {
+                    expected = SceneItemCensus.take(server.overworld(), censusBox);
+                    census(server, "the merge scene before the order");
+                })
+                .server("robustness: ask the optimizer to merge the prismarine", this::startMerge)
+                .serverUntil("robustness: wait until the crane carries the merge trip", this::mergeCarries,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census while the merge trip is carried",
+                        (server, context) -> census(server, "a merge trip under way"))
+                .server("robustness: save the world in the middle of the merge trip",
+                        (server, context) -> server.saveEverything(true, true, true));
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: the merge order came back as a merge order", (server, context) -> {
+                    OptimizerOrder<ItemKey, RackPosition> order = mergeOrderOf(server, context);
+                    if (order.mode() != OptimizerOrder.Mode.MERGE)
+                        throw new VisualTestException("the merge order came back as " + order);
+                    LOGGER.info(PREFIX + "robustness PASS: the merge order was saved and read back as MERGE: {}", order);
+                })
+                .server("robustness: census after save, quit and rejoin during a merge trip",
+                        (server, context) -> census(server, "save, quit and rejoin during a merge trip"))
+                .serverUntil("robustness: wait until the merge finished", this::mergeFinished, JOB_TIMEOUT_TICKS)
+                .server("robustness: the prismarine lies in its home and the small chest is empty", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    if (chestCount(level, context.origin(), MERGE_SMALL) != 0
+                            || chestCount(level, context.origin(), MERGE_HOME) != MERGE_SMALL_COUNT + MERGE_HOME_COUNT)
+                        throw new VisualTestException("after the merge the chests hold "
+                                + chestCount(level, context.origin(), MERGE_SMALL) + " and "
+                                + chestCount(level, context.origin(), MERGE_HOME) + " prismarine");
+                    LOGGER.info(PREFIX + "robustness PASS: the merge trip landed after the rejoin, the small chest is "
+                            + "empty");
+                    census(server, "the merge finished after the rejoin");
+                })
+                .server("robustness: take the optimizer out again", (server, context) -> {
+                    server.overworld().destroyBlock(layout(context.origin()).rackPos(MERGE_OPTIMIZER), false);
+                });
+    }
+
+    private void buildMergeScene(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BranchLayout layout = layout(context.origin());
+        level.setBlockAndUpdate(layout.rackPos(MERGE_OPTIMIZER), WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState()
+                .setValue(WarehouseOptimizerBlock.FACING, layout.sideDirection(MERGE_OPTIMIZER.side()).getOpposite()));
+        putIntoChest(level, context.origin(), MERGE_SMALL, MERGE_SMALL_COUNT);
+        putIntoChest(level, context.origin(), MERGE_HOME, MERGE_HOME_COUNT);
+    }
+
+    private static void putIntoChest(ServerLevel level, BlockPos dock, RackPosition rack, int count) {
+        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, chestPos(dock, rack), null);
+        if (handler == null || !ItemHandlerHelper.insertItem(handler, MERGE_ITEM.toStack(count), false).isEmpty())
+            throw new VisualTestException("the chest behind " + rack + " did not take " + count + " prismarine");
+    }
+
+    private static BlockPos chestPos(BlockPos dock, RackPosition rack) {
+        BranchLayout layout = layout(dock);
+        return layout.rackPos(rack).relative(layout.sideDirection(rack.side()));
+    }
+
+    private static long chestCount(ServerLevel level, BlockPos dock, RackPosition rack) {
+        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, chestPos(dock, rack), null);
+        long count = 0;
+        for (int slot = 0; handler != null && slot < handler.getSlots(); slot++) {
+            ItemStack stack = handler.getStackInSlot(slot);
+            if (MERGE_ITEM.matches(stack))
+                count += stack.getCount();
+        }
+        return count;
+    }
+
+    private boolean mergeSceneReady(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        return sceneReady(server, context) && craneIdleAndInputEmpty(server, context)
+                && controller.countOf(MERGE_ITEM) == MERGE_SMALL_COUNT + MERGE_HOME_COUNT
+                && controller.optimizerPlaces(List.of(MERGE_ITEM)).equals(List.of(2))
+                && controller.locationAt(layout(context.origin()).rackPos(MERGE_OPTIMIZER)).isPresent();
+    }
+
+    private void startMerge(MinecraftServer server, VisualContext context) {
+        WarehouseOptimizerBlockEntity optimizer = WareworksBlockEntityTypes.WAREHOUSE_OPTIMIZER
+                .getNullable(server.overworld(), layout(context.origin()).rackPos(MERGE_OPTIMIZER));
+        if (optimizer == null
+                || !optimizer.optimise(List.of(MERGE_ITEM), OptimizerOrder.Mode.MERGE)
+                        .equals(Optional.of(OptimizerOrders.Start.STARTED)))
+            throw new VisualTestException("the merge order did not start");
+    }
+
+    private boolean mergeCarries(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity crane = crane(server, context);
+        return crane.heldItems().count(MERGE_ITEM) > 0
+                && crane.currentJob().map(job -> job.type() == JobType.RELOCATE).orElse(false);
+    }
+
+    private boolean mergeFinished(MinecraftServer server, VisualContext context) {
+        return craneIdleAndInputEmpty(server, context)
+                && mergeOrderOf(server, context).state() == OptimizerOrder.State.FINISHED;
+    }
+
+    private OptimizerOrder<ItemKey, RackPosition> mergeOrderOf(MinecraftServer server, VisualContext context) {
+        return controller(server, context).optimizerOrder(layout(context.origin()).rackPos(MERGE_OPTIMIZER))
+                .orElseThrow(() -> new VisualTestException("the warehouse keeps no order of the merge optimizer"));
     }
 
     // --- package mode (issue #40, ADR-086) ---------------------------------------------------------------------------

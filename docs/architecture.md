@@ -9166,6 +9166,49 @@ older build reads a saved entry's `EndReason` as nothing. Tests: JUnit `JobPlann
 GameTests `StoreReasonGameTests` (`optimizerrowsayswhynothingmoves`, `inputsaysnofreeplaceforitstype`); the visual
 scenario `optimizer` shoots the gold row's reason in English and German (`optimizer-reason`).
 
+### ADR-088 — Where an item belongs: one home rule for storing and for a merge mode at the optimizer (amends ADR-079 D2, ADR-087 D5) ([issue #57](https://github.com/Richie1710/create-wareworks/issues/57))
+
+*Context:* an item that lies in several places of one priority stays spread: ADR-079 D2 moves only to a strictly higher
+priority, and ADR-078 refused a background tidy-up. Issue #50 asked for a way to gather it; the owner decided what
+"gathered" means.
+
+*Decision:*
+
+* **D1 The home of an item** is one rule, used by normal storing and by the merge. (1) A place whose store filter names
+  the item is its home. (2) Without such a filter the home is the place that already holds the most of the item, on the
+  **highest priority that holds it at all**; a tie goes to the place's **index order** (its position in the aisle's
+  storage locations), never to travel time, so the home does not wander with the crane. Rule 1 was already the store
+  ranking's filter key; rule 2 is `ItemHome` (pure, `core.job`), read by `JobPlanner.RANKING` as one more key after the
+  priority and before travel (`Candidate.held`, the count the ranking already read for consolidation). A ranking with
+  fewer than two holders at a priority is the function it was.
+* **D2 Merge mode** is a second mode of the optimizer's order (`OptimizerOrder.Mode`, saved as `Mode: "MERGE"` only
+  when set; absent reads as optimise), started on request for the listed items (Merge button, or the places cell of a
+  row): no background tidying (ADR-078/079 stand). The planner's relocation stage is still last, so a merge only gets an
+  idle crane, and its trips are capped by the same `optimizerTripsPerRequest`.
+* **D3 What a merge moves.** `JobPlanner#planMerge` picks the home over *all* holders and the places a filter names,
+  reachable or not (an unreachable home ends the item as `NOT_REACHABLE`: the home never wanders). Sources are the other
+  holders, smallest first, a source only when nothing of it is spoken for, when the **home is of equal or higher
+  priority and no worse a filter match** (`RelocationRule#isMergeTarget`; `isBetter` stays strict, so optimising still
+  never moves sideways), and when everything it holds fits the home's room now (estimate less reserved room). Each trip
+  goes from the source to the home alone, at most the carry limit, so a large source takes several trips and stays the
+  smallest holder, and every emptied source frees a bay. Fluid bays and places package mode keeps the item out of are
+  neither source nor home. Three reasons are appended to `RelocationReason`: `ALREADY_ONE_PLACE`, `HOME_FULL`,
+  `HOME_WORSE`.
+* **D4 It ends.** The home only grows and sources only shrink, so the number of places holding the item falls; a source
+  above a filter-named home is skipped (`HOME_WORSE`), never moved down. With several cranes each trip's source stock is
+  reserved (a second crane takes the next smallest source or the remaining free part), the home's reserved room is
+  subtracted, and an item ends `HOME_FULL` only in a run in which all cranes were free. A merge and an optimise order for
+  one item are searched one after the other: a search ends only the entries of its own mode.
+* **D5 The view.** Each row shows in how many places the warehouse holds the item (holders in the index, unloaded
+  places included, shared inventories once, fluid bays left out), so the split is visible before pressing; clicking that
+  number merges that row.
+
+*Consequences:* network version 30 (`OptimizerScreenState`: the order's merge flag and a row's places; `RelocationReason`
+grew; `OptimizerAction` gained `MERGE` and `MERGE_ROW`). A half-merged order whose source cannot take the home's live
+answer is not forced: a live refusal ends the item `HOME_FULL` (a refusal can be momentary, another crane's room or a stack that just arrived; the item is then offered again by the next merge request, no retry inside one order). The home is picked over what is under way too: room another crane reserved at a place counts as held and stock a crane is carrying away from it does not, so the home does not flip while a trip is in the air. With several places whose filter names the item, storing ranks consolidation before priority (ADR-079's ranking) while merge ranks priority first; once a merge has run they agree and nothing is spread again. Tests: JUnit `ItemHomeTest`, `JobPlannerMergeTest`,
+`JobPlannerTest#storeFollowsTheHomeOfTheItem`, `RelocationRuleTest`, `OptimizerOrdersTest`, `OptimizerTextWidthTest`;
+GameTests `OptimizerMergeGameTests`; the visual scenario `optimizer` (merge in English and German); the robustness run.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).

@@ -34,7 +34,19 @@ public enum RelocationReason {
      * Places with a higher priority would take it, and none has room for it now: full, holding another item type, or
      * refusing it live.
      */
-    NO_ROOM_HIGHER;
+    NO_ROOM_HIGHER,
+    /**
+     * Merge mode (issue #57, ADR-088): all of it already lies in one place, its home. Appended last, so the ordinals the
+     * wire carries and the names saves hold stay valid.
+     */
+    ALREADY_ONE_PLACE,
+    /** Merge mode: the home has no room for what the smallest other place holds, which is only moved whole. */
+    HOME_FULL,
+    /**
+     * Merge mode: every other place has a higher priority than the home, or fits the item better (a store filter): an
+     * item is never merged downwards.
+     */
+    HOME_WORSE;
 
     /** The reason with this save name, or empty. */
     public static Optional<RelocationReason> byName(String name) {

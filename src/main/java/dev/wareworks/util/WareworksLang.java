@@ -908,6 +908,24 @@ public final class WareworksLang {
     public static final String OPTIMIZER_PIP_PREFIX = "gui.optimizer.pip.";
     /** How a single row is optimised (status pip tooltip). */
     public static final String OPTIMIZER_PIP_HINT = "gui.optimizer.pip_hint";
+    /** A row of a merge order that is still searched for trips (issue #57, ADR-088). */
+    public static final String OPTIMIZER_PIP_MERGING = "gui.optimizer.pip.merging";
+    /** A row of a merge order that moved some and has nothing more to merge. */
+    public static final String OPTIMIZER_PIP_MERGED = "gui.optimizer.pip.merged";
+    /** What a player can do when the home place has no room for the next place (issue #57). */
+    public static final String OPTIMIZER_REASON_HINT_HOME = "gui.optimizer.reason_hint.home";
+    /** Header of the places column: in how many places the warehouse holds the item (issue #57). */
+    public static final String OPTIMIZER_PLACES_SHORT = "gui.optimizer.places_short";
+    /** Tooltip title of the places number. */
+    public static final String OPTIMIZER_PLACES = "gui.optimizer.places";
+    /** What a click on the places number does. */
+    public static final String OPTIMIZER_PLACES_HINT = "gui.optimizer.places_hint";
+    /** Tooltip title of the Merge button. */
+    public static final String OPTIMIZER_MERGE = "gui.optimizer.merge";
+    /** What the Merge button does. */
+    public static final String OPTIMIZER_MERGE_HINT = "gui.optimizer.merge_hint";
+    /** That a press only moves whole places that fit now, and replaces the running order. */
+    public static final String OPTIMIZER_MERGE_NOW = "gui.optimizer.merge_now";
     /**
      * Prefix of why a row's item has nothing to move, {@code gui.optimizer.reason.<reason>} (issue #53,
      * {@code OptimizerScreenState#reasonKey}); {@code NONE_IN_STOCK} has no key of its own and reads "Nothing to move".

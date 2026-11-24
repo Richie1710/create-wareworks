@@ -4161,3 +4161,13 @@ you get tired of waiting, and put it back before judging check 160.
     same reason. Set a filter for another item on one bay: where a filter is what refuses the item, the input says "no
     storage location takes these items, whatever room it has". In German the rows fit the goggle box. **Would you know
     what to build next?**
+519. **Does Merge gather an item?** Build an aisle with three wooden rack bays at one priority, put 20, 30 and 50 iron
+    into them and list iron in a Warehouse Optimizer. The row's number reads 3. Press Merge (the button beside Optimise):
+    the crane carries the 20, then the 30 into the bay holding 50, and the number reads 1; the two emptied bays are free
+    for another item. Press Merge again: the dot's tooltip reads "All of it lies in one place". Give one of the two
+    smaller bays a filter for iron first: now that bay is the home and the others are emptied into it. Give a bay with iron
+    a higher priority than the filter bay: its iron stays ("Other places rank above its home"). **Is it clear where the
+    iron went and why?**
+520. **Does storing follow the home?** After 519, feed more iron into the input: it goes to the bay that holds the most,
+    not to the nearest one. A click on a row's number merges that item alone; in German the number's tooltip and the
+    Merge button's texts read well and fit the window at GUI scale 4.
