@@ -2074,6 +2074,12 @@ public final class WareworksLang {
     public static final String GOGGLES_INPUT_NOT_STORED = "gui.goggles.input_not_stored";
     /** The cure for {@code NO_LOCATION_FOR_TYPE} on an input's goggles: one item type per bay (issue #53). */
     public static final String GOGGLES_INPUT_ONE_TYPE_HINT = "gui.goggles.input_one_type_hint";
+    /**
+     * The cure for a stock rule at its maximum (issue #54): an accepting Warehouse Output with a negative rank (an
+     * overflow) takes what the maximum refuses. Drawn under {@code AT_MAXIMUM} on an input's goggles, under the keeper's
+     * "At maximum" goggle row and under the status in the keeper screen; the maximum itself never sends anything away.
+     */
+    public static final String GOGGLES_AT_MAXIMUM_OVERFLOW_HINT = "gui.goggles.at_maximum_overflow_hint";
     /** {@code "Boxes over a maximum, to take out by hand: %1$s"}: package mode (issue #40), boxes held in an input. */
     public static final String GOGGLES_INPUT_BOXES_HELD = "gui.goggles.input_boxes_held";
     /** Package mode (issue #40): an empty rack bay without a Package Filter takes no box. */

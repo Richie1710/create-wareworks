@@ -671,6 +671,9 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_NOT_STORED), "Not stored:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_ONE_TYPE_HINT),
                 "Each rack bay holds one item type: add bays or a chest");
+        // Issue #54: a maximum only refuses; the overflow is what takes the surplus away.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_AT_MAXIMUM_OVERFLOW_HINT),
+                "An accepting Warehouse Output with a negative rank takes the surplus");
         // Packages at the out door (M26, issue #18). "Packager" and "logistics network" are Create's own names for
         // the blocks a player holds, so these lines speak of them exactly as the game does.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGE_HANDOVER), "Hands over as a package");
@@ -1479,8 +1482,12 @@ public final class WareworksLangGen {
                 "Where the result goes",
                 "Put a _Warehouse Input_ in front of the _Crafter's_ output.");
 
+        // Issue #54: what a maximum does, since players read "surplus is taken" into it, which only an overflow does.
         tooltip(lang, "block.wareworks.warehouse_stock_keeper",
-                "Sets a _minimum_, a _maximum_ and a _reserve_ of the warehouse for each item.");
+                "Sets a _minimum_, a _maximum_ and a _reserve_ of the warehouse for each item.",
+                "At a maximum",
+                "The crane _stores no more_ and sends nothing away: the surplus _waits in the input_. An accepting "
+                        + "_Warehouse Output_ with a negative rank takes it.");
 
         tooltip(lang, "block.wareworks.warehouse_home_point",
                 "Where the crane waits when it has nothing to do.",

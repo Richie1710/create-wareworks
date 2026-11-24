@@ -515,9 +515,13 @@ public class WarehouseStockKeeperBlockEntity extends SmartBlockEntity
         if (shown.belowMinimum() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_KEEPER_BELOW_MINIMUM, shown.belowMinimum())
                     .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
-        if (shown.atMaximum() > 0)
+        if (shown.atMaximum() > 0) {
             WareworksLang.countLine(WareworksLang.GOGGLES_KEEPER_AT_MAXIMUM, shown.atMaximum())
                     .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
+            // Issue #54: a maximum only refuses; the cure for the input it backs up is an overflow.
+            WareworksLang.translate(WareworksLang.GOGGLES_AT_MAXIMUM_OVERFLOW_HINT).style(ChatFormatting.GRAY)
+                    .forGoggles(tooltip, 2);
+        }
         if (shown.atReserve() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_KEEPER_AT_RESERVE, shown.atReserve())
                     .forGoggles(tooltip, 1);

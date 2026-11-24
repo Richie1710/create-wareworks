@@ -1005,6 +1005,15 @@ chest behind a Warehouse Interface for the long tail of types you own only a few
 are a full warehouse, a full accepting port that was the only place left, a storage filter that takes the item nowhere, a
 stock rule at its maximum, or in package mode a box that needs a bay with a Package Filter.
 
+**My input fills up at a maximum.** That is the maximum working: it only says how much may be **stored**, so above it
+the crane takes no more and the rest **waits in the Warehouse Input** on purpose (*Not stored: a stock rule for these
+items is at its maximum*). With one input, everything behind that item waits too. A maximum never sends anything away;
+to do that, add an **overflow**: a Warehouse Output switched to *accept* with the wrench, with a **negative rank** and a
+chest or a belt behind it. It takes whatever is above the maximum (see [The warehouse port](#the-warehouse-port), and
+the Ponder scene "An Overflow for a Warehouse"). If what you really want is a large store that is used up first, do not
+set a maximum at all: set only a **minimum**, and give the extra chests or bays a **lower priority** than your main
+racks. They are filled last and emptied first, and the minimum counts them as stock too.
+
 ## Compatibility
 
 ### JEI and EMI

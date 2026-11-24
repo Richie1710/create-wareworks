@@ -276,6 +276,15 @@ public final class StockRuleScenes {
                 .pointAt(util.vector().blockSurface(input.above(), Direction.UP));
         scene.idle(SHORT_IDLE + 15);
 
+        // Issue #54: the maximum only refuses, so the way to send the surplus away is named where it backs up.
+        scene.overlay().showText(TEXT_TICKS)
+                .text("To send the surplus away instead, add an overflow: see the Warehouse Output's scene \"An "
+                        + "Overflow for a Warehouse\"")
+                .colored(PonderPalette.BLUE)
+                .placeNearTarget()
+                .pointAt(util.vector().blockSurface(input, FRONT));
+        scene.idle(TEXT_IDLE);
+
         // --- the reserve ---------------------------------------------------------------------------------------------
         scene.world().showSection(util.select().position(lever), Direction.DOWN);
         scene.idle(FADE_IDLE);

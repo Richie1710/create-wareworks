@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A stock rule's maximum says what to do about the items it keeps out**
+  ([#54](https://github.com/Richie1710/create-wareworks/issues/54)). A maximum only stops further storing, so the
+  surplus waits in the Warehouse Input on purpose, and nothing said how to send it away. The input's "Not stored" goggle
+  line for a maximum and the Stock Keeper's "At maximum" goggle line now add: an accepting Warehouse Output with a
+  negative rank (an overflow) takes the surplus. The Stock Keeper's tooltip has a line on what a maximum does, its row
+  tooltip repeats the hint under "At the maximum", the Stock Rules Ponder scene points to the "An Overflow for a
+  Warehouse" scene, and the README FAQ has "My input fills up at a maximum", with the other way: only a minimum, and the extra storage at a lower
+  priority.
+
+### Fixed
+
+- **The Recipe Selector Ponder scene shows how items get to the machine and back**
+  ([#56](https://github.com/Richie1710/create-wareworks/issues/56)). The saw and the Basin stood right behind the
+  Production Station and the products simply appeared in the return input, as if the station fed the machine. A
+  station never pushes items: the scene now builds the transport as a player has to, a hopper under the station onto a
+  belt into the saw, which pushes into the Warehouse Input, and for the Basin the same hopper filling it and a belt with
+  a funnel into the input, and says that the station pushes nothing itself.
+
 ## [0.25.0-beta] - 2026-11-23
 
 ### Added

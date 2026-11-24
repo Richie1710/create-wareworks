@@ -838,8 +838,8 @@ numbers of one rule, so keep the keeper's screen open on a second monitor if you
     "Rules: … " and "Rules paused: …", the terminal's badge tooltip and its **confirmation panel**, and both Ponder
     scenes. Nothing may show a raw key, run out of its box or be cut off — German is the longer language and the
     screenshot runs only ever render English, so this is the only place clipping shows up. The longest lines to watch are
-    the panel's reserved-ingredient sentence and, in the scenes, `warehouse_stock_rules.text_7` and `text_5` (119 and
-    115 characters in German, the two longest the milestone added).
+    the panel's reserved-ingredient sentence and, in the scenes, `warehouse_stock_rules.text_8`, `text_7` and `text_5` (119,
+    123 and 115 characters in German, the three longest the milestone added).
 
     The plural wart this check used to excuse is **fixed** (M15 Definition of Done): `gui.keeper.paused_lost` now reads
     "Ingredient items not recovered: %1$s" / "Nicht zurückgeholte Zutaten: %1$s", a label-and-number line that is right

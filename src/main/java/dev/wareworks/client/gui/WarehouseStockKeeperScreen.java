@@ -554,6 +554,7 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
             StockKeeperScreenState.RowView shown = view.get();
             tooltip.add(WareworksLang.translateDirect(WareworksLang.keeperStatusKey(shown.status())).copy()
                     .withStyle(statusFormat(shown.status())));
+            addMaximumLine(tooltip, shown);
             addRestockLines(tooltip, shown);
             addPausedLines(tooltip, shown);
             return tooltip;
@@ -588,6 +589,7 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
                         quantity(shown.shortfall(), fluid)).copy().withStyle(ChatFormatting.GRAY));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.keeperStatusKey(shown.status())).copy()
                     .withStyle(statusFormat(shown.status())));
+            addMaximumLine(tooltip, shown);
             addRestockLines(tooltip, shown);
             addPausedLines(tooltip, shown);
         }
@@ -621,6 +623,13 @@ public class WarehouseStockKeeperScreen extends AbstractSimiContainerScreen<Stoc
                 || outcome == RestockOutcome.DEFERRED)
             return ChatFormatting.AQUA;
         return outcome.isBlocked() ? ChatFormatting.GOLD : ChatFormatting.GRAY;
+    }
+
+    /** Issue #54: under "At the maximum", the cure for the input it backs up: an overflow takes the surplus. */
+    private static void addMaximumLine(List<Component> tooltip, StockKeeperScreenState.RowView shown) {
+        if (shown.status() == StockRuleStatus.AT_MAXIMUM)
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.GOGGLES_AT_MAXIMUM_OVERFLOW_HINT).copy()
+                    .withStyle(ChatFormatting.GRAY));
     }
 
     /**

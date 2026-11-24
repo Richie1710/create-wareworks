@@ -542,6 +542,10 @@ public class WarehouseInputBlockEntity extends WarehouseStationBlockEntity {
             if (reason == NoJobReason.NO_LOCATION_FOR_TYPE)
                 WareworksLang.translate(WareworksLang.GOGGLES_INPUT_ONE_TYPE_HINT).style(ChatFormatting.GRAY)
                         .forGoggles(tooltip, 2);
+            // Issue #54: the maximum keeps the items here on purpose; an overflow is what takes them away.
+            if (reason == NoJobReason.AT_MAXIMUM)
+                WareworksLang.translate(WareworksLang.GOGGLES_AT_MAXIMUM_OVERFLOW_HINT).style(ChatFormatting.GRAY)
+                        .forGoggles(tooltip, 2);
         });
         PackageUnpackSummary packages = shown.packages();
         boolean unpacksHere = packagerUnpacksHere();

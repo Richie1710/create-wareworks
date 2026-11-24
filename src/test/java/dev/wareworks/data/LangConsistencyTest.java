@@ -538,7 +538,7 @@ class LangConsistencyTest {
                 "gui.goggles.input_one_type_hint", "gui.goggles.no_job_reason.warehouse_full",
                 "gui.goggles.no_job_reason.no_matching_filter", "gui.goggles.no_job_reason.no_location_for_type",
                 "gui.goggles.no_job_reason.package_bay_needs_filter", "gui.goggles.no_job_reason.port_full",
-                "gui.goggles.no_job_reason.at_maximum");
+                "gui.goggles.no_job_reason.at_maximum", "gui.goggles.at_maximum_overflow_hint");
         /** The header row of a rack bay, whose one argument is the block's own name (M28, issue #20). */
         private static final String RACK_BAY_HEADER_KEY = "gui.goggles.rack_bay";
         /** The one rack bay row whose argument is a count rather than an item name. */
