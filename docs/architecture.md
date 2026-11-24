@@ -9129,6 +9129,180 @@ empty box at a Packager behind an input (Create destroys it before any handler r
 well as its contents, `SceneItemCensus#takeWithBoxes`); the robustness run's package-mode phase; the Ponder scene
 `warehouse/package_mode`.
 
+### ADR-087 — Say why nothing happens, from the planner's own decision: a reason per optimizer row, and "no free place for this item type" for an input (amends ADR-042 and ADR-079) ([issue #53](https://github.com/Richie1710/create-wareworks/issues/53))
+
+*Context:* issue #50 found three places where the warehouse does the right thing and says nothing useful. An optimizer
+item with no strictly better place ended as "Nothing to move" next to stock it clearly holds, because a move needs a
+strictly higher priority (ADR-079) and every bay defaults to 0. A new item type waiting in the input because every
+one-type rack bay holds another type was reported as `NO_MATCHING_FILTER`, since M28 (ADR-042) put the one-type rule
+in the store filter's place in the ladder; the M28 review named `NO_LOCATION_FOR_TYPE` as the follow-up.
+
+*Decision:*
+
+* **D1 The reason is decided where the decision is made, on the server.** The client never infers a reason from the
+  numbers it shows: an estimate there can disagree with what the planner really found.
+* **D2 A one-type location taken by another key is `FilterMatch.TAKEN_BY_OTHER_TYPE`**, a value of its own beside
+  `REJECTED`, with `REJECTED`'s every consequence (`allowsStoring() == false`, rank 2, ranked last on a `RETRIEVE`
+  reroute, no estimate, no live call). `AisleFilters#match` asks the location's own filter behind the gate only to name
+  the cause: `REJECTED` when the filter rejects the key as well. The store survey notes it apart (`typeTaken`), and
+  `NoJobReason.NO_LOCATION_FOR_TYPE` follows `NO_MATCHING_FILTER`, wins over it (a free place of the right kind is
+  what was missing), arms the same back-off and is one of `refusesCollecting()` and the new `refusesStoring()`.
+* **D3 Each input gets its own answer.** `PlanResult#storeReasons` carries the survey's reason per input station;
+  `CraneDispatch` keeps the last one per input (cleared for an input a store job was planned from, and when nothing
+  waits), and the input's goggles show it with the one-type cure. The aisle-wide planning line is unchanged in kind.
+  Not saved: the first run after a load answers again.
+* **D4 An optimizer entry ends with a `RelocationReason`**: `NONE_IN_STOCK` and `SPOKEN_FOR` from the controller,
+  everything else from `JobPlanner#whyNothingBetter`, which reads the sources the search ranked and every available
+  storage location's priority and filter, with no live call, once per search that ended empty (`warehouse-system.md` §3.10 has the
+  ladder). Saved by name with the entry, sent in the optimizer's screen payload by ordinal + 1, shown as a gold dot and
+  a tooltip with the cure; "Nothing to move" stays for an item the warehouse holds none of.
+* **D5 No new behaviour.** Nothing is stored, moved or refused differently; ADR-079 still does not merge duplicates at
+  equal priority (that would want its own ADR, ADR-078 rejected a general tidy-up job).
+
+*Consequences:* network version 29 (with issue #52's `misaligned` flag, one raise for the unreleased version); an
+older build reads a saved entry's `EndReason` as nothing. Tests: JUnit `JobPlannerTest`
+(`anItemWhosePlacesHoldOtherTypesHasNoLocationForItsType`), `JobPlannerRelocateTest` (six reason cases),
+`OptimizerOrdersTest`, `OptimizerTextWidthTest`, `LangConsistencyTest#theInputWaitingRowsFitAGoggleTooltip`;
+GameTests `StoreReasonGameTests` (`optimizerrowsayswhynothingmoves`, `inputsaysnofreeplaceforitstype`); the visual
+scenario `optimizer` shoots the gold row's reason in English and German (`optimizer-reason`).
+
+### ADR-088 — Where an item belongs: one home rule for storing and for a merge mode at the optimizer (amends ADR-079 D2, ADR-087 D5) ([issue #57](https://github.com/Richie1710/create-wareworks/issues/57))
+
+*Context:* an item that lies in several places of one priority stays spread: ADR-079 D2 moves only to a strictly higher
+priority, and ADR-078 refused a background tidy-up. Issue #50 asked for a way to gather it; the owner decided what
+"gathered" means.
+
+*Decision:*
+
+* **D1 The home of an item** is one rule, used by normal storing and by the merge. (1) A place whose store filter names
+  the item is its home. (2) Without such a filter the home is the place that already holds the most of the item, on the
+  **highest priority that holds it at all**; a tie goes to the place's **index order** (its position in the aisle's
+  storage locations), never to travel time, so the home does not wander with the crane. Rule 1 was already the store
+  ranking's filter key; rule 2 is `ItemHome` (pure, `core.job`), read by `JobPlanner.RANKING` as one more key after the
+  priority and before travel (`Candidate.held`, the count the ranking already read for consolidation). A ranking with
+  fewer than two holders at a priority is the function it was.
+* **D2 Merge mode** is a second mode of the optimizer's order (`OptimizerOrder.Mode`, saved as `Mode: "MERGE"` only
+  when set; absent reads as optimise), started on request for the listed items (Merge button, or the places cell of a
+  row): no background tidying (ADR-078/079 stand). The planner's relocation stage is still last, so a merge only gets an
+  idle crane, and its trips are capped by the same `optimizerTripsPerRequest`.
+* **D3 What a merge moves.** `JobPlanner#planMerge` picks the home over *all* holders and the places a filter names,
+  reachable or not (an unreachable home ends the item as `NOT_REACHABLE`: the home never wanders). Sources are the other
+  holders, smallest first, a source only when nothing of it is spoken for, when the **home is of equal or higher
+  priority and no worse a filter match** (`RelocationRule#isMergeTarget`; `isBetter` stays strict, so optimising still
+  never moves sideways), and when everything it holds fits the home's room now (estimate less reserved room). Each trip
+  goes from the source to the home alone, at most the carry limit, so a large source takes several trips and stays the
+  smallest holder, and every emptied source frees a bay. Fluid bays and places package mode keeps the item out of are
+  neither source nor home. Three reasons are appended to `RelocationReason`: `ALREADY_ONE_PLACE`, `HOME_FULL`,
+  `HOME_WORSE`.
+* **D4 It ends.** The home only grows and sources only shrink, so the number of places holding the item falls; a source
+  above a filter-named home is skipped (`HOME_WORSE`), never moved down. With several cranes each trip's source stock is
+  reserved (a second crane takes the next smallest source or the remaining free part), the home's reserved room is
+  subtracted, and an item ends `HOME_FULL` only in a run in which all cranes were free. A merge and an optimise order for
+  one item are searched one after the other: a search ends only the entries of its own mode.
+* **D5 The view.** Each row shows in how many places the warehouse holds the item (holders in the index, unloaded
+  places included, shared inventories once, fluid bays left out), so the split is visible before pressing; clicking that
+  number merges that row.
+
+*Consequences:* network version 30 (`OptimizerScreenState`: the order's merge flag and a row's places; `RelocationReason`
+grew; `OptimizerAction` gained `MERGE` and `MERGE_ROW`). A half-merged order whose source cannot take the home's live
+answer is not forced: a live refusal ends the item `HOME_FULL` (a refusal can be momentary, another crane's room or a stack that just arrived; the item is then offered again by the next merge request, no retry inside one order). The home is picked over what is under way too: room another crane reserved at a place counts as held and stock a crane is carrying away from it does not, so the home does not flip while a trip is in the air. With several places whose filter names the item, storing ranks consolidation before priority (ADR-079's ranking) while merge ranks priority first; once a merge has run they agree and nothing is spread again. Tests: JUnit `ItemHomeTest`, `JobPlannerMergeTest`,
+`JobPlannerTest#storeFollowsTheHomeOfTheItem`, `RelocationRuleTest`, `OptimizerOrdersTest`, `OptimizerTextWidthTest`;
+GameTests `OptimizerMergeGameTests`; the visual scenario `optimizer` (merge in English and German); the robustness run.
+
+### ADR-089 — A production pattern may name fluid ingredients: the crane brings them as filled buckets, the player's own machine without an arm turns them into fluid, the Recipe Selector accepts the Basin's fluid recipes (amends ADR-073 D1, ADR-076 D5, ADR-085 D14) ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55))
+
+*Context:* Create's Basin and Mixer have recipes with a fluid ingredient (water for mud and dough, lava for other
+things). A production pattern could name items only, so such a recipe had to be fed by hand or by pipes from outside the
+warehouse. The reporter asked for fluid cells; a spike on Create 6.0.10 (18 GameTests, `docs/api`) settled what the
+physics allow before any code was written.
+
+*Facts the design stands on (Create 6.0.10, verified):* a Mechanical Arm has **no interaction point** for an Item Drain
+or a Fluid Tank; an arm that can also reach a Basin puts a filled bucket into the Basin's **item** inventory; an
+extracting brass funnel with a filter on a production station's (extract-only) item handler takes exactly the filtered
+item and drops it as an item entity, which an Item Drain (or a Basin) below it catches; the drain holds 1500 mB, so a
+third 1000 mB bucket stalls it until the machine behind it consumes fluid (nothing times out); a depot is no way out
+for the empty bucket (it holds one and jams); a pipe placed beside a single neighbour opens the side opposite to it
+(`FluidPipeBlock#updateBlockState`) and keeps that open end when the next pipe arrives, and Create's pump divides
+every transfer between the Basin and such an open end, so half of the water is poured away (the visual scenario lost
+32 of every 64 mB until each pipe had exactly its two connections); a Create Fluid Tank refuses a survival player's
+bucket.
+
+*Decision:*
+
+* **D1 The fluid cell.** A pattern holds up to **2 fluid cells** next to its 3 × 3 items and the result; a cell is a
+  fluid id and **1..1000 mB per run** (`core.production.FluidCell`, the Basin's tank segment), two different fluids at
+  most. A pattern needs at least one item or one fluid. The cell is a fluid, not a bucket item: the old "bucket as an
+  item cell" is untouched and still means an item. It is saved in a **list of its own** per slot (`FluidCells`,
+  written only while the slot has one), never inside `Entries`, so a pattern without a fluid is byte-identical to
+  before. A click with a filled bucket sets the fluid (and the bucket's content as the amount); the wheel steps 50 mB,
+  Shift 250, Ctrl 1000; right-click clears. Fluids carry no data components (a potion is its base fluid).
+* **D2 Fluid travels as filled containers, one trip each (amends ADR-073 D1).** The warehouse delivers **whole filled
+  buckets** of the fluid's own bucket item (the container the game really fills, measured by `FillRecipes`, so a
+  modded fluid's container works); containers per cell = `ceil(runs × mB / the container's real mB)`. `JobType.FILL` may
+  now end at a production station: `SupplyNeed` carries a fluid flag, `JobPlanner.planFluidSupply` serves it with the
+  existing fill trip (an empty bucket from stock to a bay of that fluid, then to the station), and the fill ledger
+  gets synthetic FILL entries for open fluid lines (rebuilt from `supplyNeeds`, never saved), so a terminal fill and
+  an order never owe the same bucket twice. The station's item capability stays extract-only and the crane drops the
+  bucket into the buffer through the existing path. Nothing teleports; the controller only plans.
+* **D3 The plan.** Fluid lines are planned and reserved **before** item lines. A shortfall is never expanded into a
+  child step (no pattern makes fluid) and ends the plan with a named reason: `FLUID_MISSING`, `NO_EMPTY_CONTAINER`,
+  `BUFFER_TOO_SMALL`. The containers count against `productionBufferSlots` (item stacks plus at most 2 containers must
+  fit), and the plan **clamps the runs** instead of refusing when the buffer allows fewer. At most **2 filled containers
+  are in flight per station** (drain 1500 mB + Basin 1000 mB), counted over the buffer and the trips already reserved;
+  a fluid line is released only as the Recipe Selector's gate admits its order. An amount that does not divide 1000 mB
+  leaves a rest in the player's machine: the tooltip says so in gold (it is still allowed), and the rest is neither
+  credited nor tracked.
+* **D4 Leftover containers.** A carried container whose order is cancelled or whose station breaks is rerouted to a bay
+  of its fluid and drained there (tested). A container already **in the buffer** stays for the player's machine and the
+  return input: nothing in the mod lets a crane take items out of a station's buffer (the drop path is insert-only),
+  and the 2-per-station cap counts it, so a stuck pair blocks further fluid for that station. The empty bucket leaves
+  the player's machine through the return input as an ordinary item, or through any real sink (a funnel over a chest, a
+  belt). The stall is not silent: while no order is open, the station's goggles name the filled containers left in the
+  buffer (the planner's wait reason stays the shared `PRODUCTION_FULL`; a reason code of its own would have rippled
+  through every reason switch for a case the goggles already cover). The cap counts the in-flight trips of **every**
+  open fluid line of the station, also one a selector gate keeps out of the supplies, and a held count and the line
+  list are memoised per planner input. Two further limits (review): a fluid line counts as no promise of its filled
+  container (a bay fills it; the racks owe nothing), and an order whose fluid line cannot be read on load (the
+  container's mod was removed) is dropped whole, because keeping the line would hand the machine its items without its
+  fluid; a trip already carrying for it is rerouted like any other orphan.
+* **D5 The player's layout, without an arm.** The documented and tested build is: an **extracting brass funnel with
+  the filled bucket as its filter** at the station, an **Item Drain** under the funnel, a **pump and pipes** from the
+  drain into the **Basin** (every pipe with exactly two connections: a pipe with an open end pours the water away), a Mechanical Mixer two blocks above it, a
+  second filtered funnel (the dirt) above the Basin, and the Basin's spout into a Warehouse Input one level below (Create turns a
+  Basin's spout away from a side whose block has a collision shape, so that side stays free and a Recipe Selector goes
+  on another face; visual scenario `fluidpattern`, Ponder scene "Fluid in a Production Pattern"). **Warnings that are part of the
+  feature:** a Mechanical Arm that can reach the Basin puts buckets into its item slots and cannot be prevented from
+  there; a depot jams as the way out of the empty bucket; the Item Drain pushes the empty bucket out of a side that the funnel
+  which dropped it does not choose, so a funnel over a chest stands on every free side; the drain stalls on a third bucket until the Mixer has
+  consumed fluid.
+* **D6 JEI's "+" (amends ADR-076 D5).** A recipe's fluid input slot is laid as a fluid cell (equal fluids merge, the
+  first alternative of a tag is laid); it stays greyed out, with the reason, for a fluid in an output slot, more than 2
+  fluids and more than 1000 mB. `PatternLay`'s refusals `TOO_MANY_FLUIDS`, `FLUID_TOO_MUCH`, `FLUID_RESULT` are appended.
+* **D7 The Recipe Selector (amends ADR-085 D14).** A **local** selector at a Basin accepts a fluid recipe when its fluid
+  ingredients and the pattern's fluid cells pair one-to-one with equal amounts (`core.production.FluidNeeds`). A
+  pattern without the cell for a recipe's fluid is the new verdict `FLUID_MISMATCH` (before: `FLUID`); a pattern with
+  fluid cells at an **Ender** selector's station is `FLUID_FAR` (packages carry items only). `FLUID` stays for fluid
+  results and for more than two fluids. Verdicts travel by ordinal: both new ones are **appended**. Heat is **not**
+  checked (it comes from a Blaze Burner under the Basin); the Basin's goggles say so in one line.
+* **D8 Where it is inert or refused.** A Crafter Feeder refuses a pattern with fluid cells (`CrafterPatternCheck`
+  `FLUID_CELL`, appended; a vanilla Crafter cannot take a fluid). Package mode makes nothing, so the cells stay
+  editable and show their red reason. Automatic restock skips a pattern with fluid cells (it builds orders from the
+  pattern alone and would forget the fluid); the terminal and the ports plan them.
+* **D9 Not in this build:** fluid **results**, a station tank (exact mB, no bucket), fluid tags as cells, heat checks,
+  the Ender tier, an offer to make empty buckets first.
+
+*Consequences:* network version 31 (`ProductionPatternPayload` carries an optional fluid id, entries 10 and 11 are the
+two fluid cells; the lay payload ends with the fluid cells; `ProductionScreenState` a trailing section). The
+controller's saved order line gets an optional `Fluid` tag, written only for a fluid line; a line whose container item
+cannot be read (its mod was removed) drops the **whole order** on load rather than keep the items without the fluid,
+and an unknown fluid id with a readable container is kept as it is. **A world saved with fluid cells and then opened
+with an older Wareworks** loses them: the old mod ignores `FluidCells`, so a pattern that has only fluid cells is
+empty on its next save, and an open order's fluid line is read as an item line of the bucket. Tests: `FluidCellTest`,
+`ProductionPlannerFluidTest`, `JobPlannerFluidSupplyTest`, `FluidNeedsTest`, `PatternLayTest`,
+`SelectorVerdictOrdinalTest`, `ProductionFluidLayoutTest`, `ProductionFluidTextWidthTest`; GameTests
+`FluidPatternGameTests`, `FluidSupplyGameTests`, `MultiCraneGameTests`; the visual scenarios `fluidpattern` and
+`patternjei`; the robustness phase "fluid supply in flight"; the Ponder scene `warehouse/fluid_pattern`.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).
@@ -9224,7 +9398,7 @@ well as its contents, `SceneItemCensus#takeWithBoxes`); the robustness run's pac
   clients in full like the hand truck's load. What ties an open screen to the remote, the hand and the id
   (`RemoteBinding`), lives in the open menu and is gone with it.
 * **Warehouse Optimizer orders** (issue #46, ADR-079) are the controller's, not the block's: one new top-level NBT key,
-  `OptimizerOrders` (`[{Rack, State, Trips, Moved, Entries: [{Id, Item, State, Moved}], InFlight?: [{Job, Entry}]}]`,
+  `OptimizerOrders` (`[{Rack, State, Trips, Moved, Entries: [{Id, Item, State, Moved, EndReason?}], InFlight?: [{Job, Entry}]}]`,
   oldest first), written only while an order exists, so a warehouse nobody optimised saves byte for byte as before. It
   lives in the controller because the trips go on while the optimizer's chunk is unloaded. Reading never throws: at
   most 8 orders of at most 16 entries and 64 trips in flight are read, an undecodable item or an unknown state skips its

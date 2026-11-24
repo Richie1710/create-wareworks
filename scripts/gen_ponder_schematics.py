@@ -122,6 +122,7 @@ TEMPLATES = {
     "warehouse/recipe_selector": (9, 7, 9),
     "warehouse/ender_recipe_selector": (9, 7, 9),
     "warehouse/package_mode": (9, 7, 9),
+    "warehouse/fluid_pattern": (9, 7, 9),
 }
 
 TAG_END, TAG_INT, TAG_STRING, TAG_LIST, TAG_COMPOUND = 0, 3, 8, 9, 10

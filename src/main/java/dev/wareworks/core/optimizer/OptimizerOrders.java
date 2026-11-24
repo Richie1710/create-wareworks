@@ -13,6 +13,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
+import org.jetbrains.annotations.Nullable;
+
+import dev.wareworks.core.job.RelocationReason;
+
 /**
  * The Warehouse Optimizer orders of one warehouse (issue #46, ADR-079), oldest first, at most one per optimizer and
  * {@value OptimizerLimits#MAX_ORDERS} in all. The controller owns one and saves it; it plans nothing and moves nothing.
@@ -50,12 +54,19 @@ public final class OptimizerOrders<K, P> {
      *
      * @param id  the entry
      * @param key the item
+     * @param mode the mode of the order that owns the entry: what the planner searches for it (issue #57)
      * @param <K> item key type
      */
-    public record OpenEntry<K>(UUID id, K key) {
+    public record OpenEntry<K>(UUID id, K key, OptimizerOrder.Mode mode) {
         public OpenEntry {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(mode, "mode");
+        }
+
+        /** An entry of an optimise order. */
+        public OpenEntry(UUID id, K key) {
+            this(id, key, OptimizerOrder.Mode.OPTIMISE);
         }
     }
 
@@ -81,6 +92,12 @@ public final class OptimizerOrders<K, P> {
      * running, nothing changes.
      */
     public Start start(P optimizer, List<K> keys, int trips) {
+        return start(optimizer, keys, trips, OptimizerOrder.Mode.OPTIMISE);
+    }
+
+    /** {@link #start(Object, List, int)} for an order in {@code mode} (issue #57). */
+    public Start start(P optimizer, List<K> keys, int trips, OptimizerOrder.Mode mode) {
+        Objects.requireNonNull(mode, "mode");
         Objects.requireNonNull(optimizer, "optimizer");
         Objects.requireNonNull(keys, "keys");
         Set<K> distinct = new LinkedHashSet<>();
@@ -114,7 +131,7 @@ public final class OptimizerOrders<K, P> {
                     key, OptimizerOrder.EntryState.OPEN, 0L));
         }
         orders.put(optimizer, new OptimizerOrder<>(optimizer, OptimizerOrder.State.RUNNING, entries,
-                OptimizerLimits.clampTrips(trips), 0L, Map.of()));
+                OptimizerLimits.clampTrips(trips), 0L, Map.of(), mode));
         return Start.STARTED;
     }
 
@@ -174,7 +191,7 @@ public final class OptimizerOrders<K, P> {
                 continue;
             for (OptimizerOrder.Entry<K> entry : order.entries()) {
                 if (entry.isOpen() && seen.add(entry.key()))
-                    open.add(new OpenEntry<>(entry.id(), entry.key()));
+                    open.add(new OpenEntry<>(entry.id(), entry.key(), order.mode()));
             }
         }
         return open;
@@ -183,16 +200,27 @@ public final class OptimizerOrders<K, P> {
     /**
      * Ends {@code key} in every running order that lists it: nothing more of it fits anywhere better, or nothing of it
      * may move. An entry with a trip that set off is {@link OptimizerOrder.EntryState#DONE}, one without is
-     * {@link OptimizerOrder.EntryState#NOTHING_TO_MOVE}; an order left without an open entry is finished.
+     * {@link OptimizerOrder.EntryState#NOTHING_TO_MOVE}; an order left without an open entry is finished. Each ended entry
+     * keeps {@code reason}, why nothing (more) of it moves (issue #53), which its row shows.
      *
      * @return whether an entry ended
      */
-    public boolean endKey(K key) {
+    public boolean endKey(K key, RelocationReason reason) {
+        return endKey(key, reason, null);
+    }
+
+    /**
+     * {@link #endKey(Object, RelocationReason)} for the orders in {@code mode} only (issue #57): what the planner found
+     * for an optimise search says nothing about a merge, so an entry of the other mode stays open and is searched next.
+     * A null mode ends the item in every order.
+     */
+    public boolean endKey(K key, RelocationReason reason, @Nullable OptimizerOrder.Mode mode) {
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(reason, "reason");
         boolean changed = false;
         for (Map.Entry<P, OptimizerOrder<K, P>> slot : orders.entrySet()) {
             OptimizerOrder<K, P> order = slot.getValue();
-            if (!order.isRunning())
+            if (!order.isRunning() || (mode != null && order.mode() != mode))
                 continue;
             List<OptimizerOrder.Entry<K>> next = new ArrayList<>(order.entries().size());
             boolean ended = false;
@@ -201,7 +229,7 @@ public final class OptimizerOrders<K, P> {
                     boolean tripped = entry.moved() > 0 || order.inFlight().containsValue(entry.id());
                     next.add(new OptimizerOrder.Entry<>(entry.id(), entry.key(), tripped
                             ? OptimizerOrder.EntryState.DONE : OptimizerOrder.EntryState.NOTHING_TO_MOVE,
-                            entry.moved()));
+                            entry.moved(), reason));
                     ended = true;
                 } else {
                     next.add(entry);
@@ -216,25 +244,29 @@ public final class OptimizerOrders<K, P> {
     }
 
     /**
-     * Ends the items of the entries the planner reported exhausted ({@code PlanResult#relocationsExhausted}), each in
-     * every running order that lists it ({@link #endKey}).
+     * Ends the items of the entries the planner reported exhausted ({@code PlanResult#relocationReasons}), each in
+     * every running order that lists it ({@link #endKey}) and with the reason the planner gave for its entry.
      *
      * @return whether an entry ended
      */
-    public boolean endExhausted(Collection<UUID> entryIds) {
-        Objects.requireNonNull(entryIds, "entryIds");
-        if (entryIds.isEmpty())
+    public boolean endExhausted(Map<UUID, RelocationReason> exhausted) {
+        Objects.requireNonNull(exhausted, "exhausted");
+        if (exhausted.isEmpty())
             return false;
-        Set<K> keys = new LinkedHashSet<>();
+        // The mode of the order the entry is in: a merge search ends merge entries only (issue #57).
+        record Ended<K>(K key, OptimizerOrder.Mode mode) {
+        }
+        Map<Ended<K>, RelocationReason> keys = new LinkedHashMap<>();
         for (OptimizerOrder<K, P> order : orders.values()) {
             for (OptimizerOrder.Entry<K> entry : order.entries()) {
-                if (entryIds.contains(entry.id()))
-                    keys.add(entry.key());
+                RelocationReason reason = exhausted.get(entry.id());
+                if (reason != null)
+                    keys.putIfAbsent(new Ended<>(entry.key(), order.mode()), reason);
             }
         }
         boolean changed = false;
-        for (K key : keys)
-            changed |= endKey(key);
+        for (Map.Entry<Ended<K>, RelocationReason> key : keys.entrySet())
+            changed |= endKey(key.getKey().key(), key.getValue(), key.getKey().mode());
         return changed;
     }
 

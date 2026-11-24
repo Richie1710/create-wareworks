@@ -11,6 +11,7 @@ import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.selector.SelectorMachine;
 import dev.wareworks.content.selector.SelectorRecipeCheck;
 import dev.wareworks.core.production.CrafterPatternCheck;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.PlanLimits;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.SelectorMode;
@@ -284,10 +285,24 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         }
     }
 
-    /** The entries a pattern slot holds; an empty list is an empty slot. */
-    public record PatternView(List<EntryView> entries) {
+    /**
+     * The entries a pattern slot holds; an empty list is an empty slot.
+     *
+     * @param entries the item cells and the result
+     * @param fluids  the slot's fluid cells in cell order, at most {@value FluidCell#MAX_PER_PATTERN} (issue #55); empty
+     *                for a pattern without one. Their screen position is their list position
+     */
+    public record PatternView(List<EntryView> entries, List<FluidCell> fluids) {
         public PatternView {
             entries = List.copyOf(Objects.requireNonNull(entries, "entries"));
+            fluids = List.copyOf(Objects.requireNonNull(fluids, "fluids"));
+            if (fluids.size() > FluidCell.MAX_PER_PATTERN)
+                fluids = fluids.subList(0, FluidCell.MAX_PER_PATTERN);
+        }
+
+        /** A pattern without a fluid cell: the shape every view had before issue #55. */
+        public PatternView(List<EntryView> entries) {
+            this(entries, List.of());
         }
     }
 
@@ -512,6 +527,25 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         buffer.writeVarInt(selectorCheckCount);
         for (int i = 0; i < selectorCheckCount; i++)
             buffer.writeVarInt(selectorChecks.get(i).map(verdict -> verdict.ordinal() + 1).orElse(0));
+        // Appended after the selector checks (issue #55): the slots that have a fluid cell, as (slot, cells); a station
+        // without one pays one zero byte.
+        int withFluids = 0;
+        for (int i = 0; i < patternCount; i++) {
+            if (!patterns.get(i).fluids().isEmpty())
+                withFluids++;
+        }
+        buffer.writeVarInt(withFluids);
+        for (int i = 0; i < patternCount; i++) {
+            List<FluidCell> fluids = patterns.get(i).fluids();
+            if (fluids.isEmpty())
+                continue;
+            buffer.writeVarInt(i);
+            buffer.writeVarInt(fluids.size());
+            for (FluidCell fluid : fluids) {
+                buffer.writeUtf(fluid.fluid(), FluidCell.MAX_ID_LENGTH);
+                buffer.writeVarInt(fluid.millibuckets());
+            }
+        }
     }
 
     /** Reads a state written by {@link #write}; bounded, and unknown ordinals fall back to the first state. */
@@ -554,6 +588,20 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
             int value = buffer.readVarInt();
             selectorChecks.add(value <= 0 || value > verdicts.length ? Optional.empty()
                     : Optional.of(verdicts[value - 1]));
+        }
+        int withFluids = Math.min(Math.max(0, buffer.readVarInt()), ProductionPatterns.MAX_SLOTS);
+        for (int i = 0; i < withFluids; i++) {
+            int slot = buffer.readVarInt();
+            int fluidCount = Math.min(Math.max(0, buffer.readVarInt()), FluidCell.MAX_PER_PATTERN);
+            List<FluidCell> fluids = new ArrayList<>(fluidCount);
+            for (int f = 0; f < fluidCount; f++) {
+                String fluid = buffer.readUtf(FluidCell.MAX_ID_LENGTH);
+                int amount = buffer.readVarInt();
+                if (!fluid.isBlank())
+                    fluids.add(FluidCell.sanitized(fluid, amount));
+            }
+            if (slot >= 0 && slot < patterns.size())
+                patterns.set(slot, new PatternView(patterns.get(slot).entries(), fluids));
         }
         return new ProductionScreenState(patterns, orders, stopped, feeder, checks, choices, selector,
                 selectorChecks);
@@ -731,6 +779,14 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
                 return Optional.of(view);
         }
         return Optional.empty();
+    }
+
+    /** Fluid cell {@code cell} (0 or 1) of pattern slot {@code pattern}, if it is set (issue #55). */
+    public Optional<FluidCell> fluid(int pattern, int cell) {
+        if (pattern < 0 || pattern >= patterns.size() || cell < 0)
+            return Optional.empty();
+        List<FluidCell> fluids = patterns.get(pattern).fluids();
+        return cell < fluids.size() ? Optional.of(fluids.get(cell)) : Optional.empty();
     }
 
     /** The result entry of a pattern slot, i.e. what its tab shows. */

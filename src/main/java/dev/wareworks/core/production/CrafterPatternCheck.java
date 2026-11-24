@@ -30,7 +30,12 @@ public enum CrafterPatternCheck {
      * without an "is tagged" entry. A feeder would fetch items for a grid nobody verified, so the pattern is unused while
      * a feeder is attached.
      */
-    FILTER_NOT_CHECKABLE;
+    FILTER_NOT_CHECKABLE,
+    /**
+     * The pattern names a fluid cell (issue #55, ADR-089): a Crafter takes items only, so a feeder would lay the grid
+     * without the fluid and craft nothing. The pattern is unused while a feeder is attached.
+     */
+    FLUID_CELL;
 
     /** The check with this ordinal, or {@link #NOT_CHECKED} for an ordinal a newer version wrote. */
     public static CrafterPatternCheck byOrdinal(int ordinal) {
@@ -40,7 +45,8 @@ public enum CrafterPatternCheck {
 
     /** Whether the pattern is complete but the feeder refuses it, which the screen draws in red with the reason. */
     public boolean refused() {
-        return this == CELL_NOT_ONE || this == NOT_A_RECIPE || this == RESULT_DIFFERS || this == FILTER_NOT_CHECKABLE;
+        return this == CELL_NOT_ONE || this == NOT_A_RECIPE || this == RESULT_DIFFERS || this == FILTER_NOT_CHECKABLE
+                || this == FLUID_CELL;
     }
 
     /** Whether the planner may use the pattern: always without a feeder, and with one only after a passed check. */

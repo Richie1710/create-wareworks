@@ -34,6 +34,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.production.CrafterGrid;
 import dev.wareworks.core.production.CrafterPatternCheck;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
@@ -131,6 +132,8 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
     private int selectorChecksRevision = -1;
     @Nullable
     private SelectorMachine.Kind selectorChecksKind;
+    /** The selector mode the cached checks were computed for: a far factory refuses fluid cells (issue #55). */
+    private SelectorMode selectorChecksMode = SelectorMode.NONE;
     private WeakReference<Object> selectorChecksRecipes = new WeakReference<>(null);
     @Nullable
     private SelectorRecipeCheck.Options selectorChecksOptions;
@@ -265,19 +268,27 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         SelectorMachine.Kind kind = machineKind.orElseThrow();
         SelectorRecipeCheck.Options options = SelectorRecipeCheck.Options.fromServer();
         if (selectorChecksRevision != patternsRevision || selectorChecks.length != patterns.size()
-                || selectorChecksKind != kind || selectorChecksRecipes.get() != recipes
+                || selectorChecksKind != kind || selectorChecksMode != selectorMode
+                || selectorChecksRecipes.get() != recipes
                 || !options.equals(selectorChecksOptions)) {
             selectorChecks = new SelectorRecipeCheck.Verdict[patterns.size()];
             selectorChecksRevision = patternsRevision;
             selectorChecksKind = kind;
+            selectorChecksMode = selectorMode;
             selectorChecksRecipes = new WeakReference<>(recipes);
             selectorChecksOptions = options;
         }
         SelectorRecipeCheck.Verdict cached = selectorChecks[slot];
         if (cached == null) {
             Optional<ProductionPattern<ItemKey>> pattern = patterns.patternAt(slot);
-            cached = pattern.isEmpty() ? SelectorRecipeCheck.Verdict.NO_RECIPE
-                    : SelectorRecipeCheck.check(level, kind, pattern.get(), options);
+            // An Ender Recipe Selector's factory is served by packages, which carry items only: a fluid cell can never
+            // be paid there (issue #55, ADR-089).
+            if (pattern.isEmpty())
+                cached = SelectorRecipeCheck.Verdict.NO_RECIPE;
+            else if (selectorMode == SelectorMode.SLIPS && pattern.get().hasFluids())
+                cached = SelectorRecipeCheck.Verdict.FLUID_FAR;
+            else
+                cached = SelectorRecipeCheck.check(level, kind, pattern.get(), options);
             selectorChecks[slot] = cached;
         }
         return cached;
@@ -442,13 +453,16 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         /** The filter encodes into more than {@link PatternFilterCells#MAX_FILTER_BYTES} (D16). */
         FILTER_TOO_LARGE,
         /** A filter cell would let the slot's result through, in either direction of the edit (D12). */
-        FILTER_LETS_RESULT;
+        FILTER_LETS_RESULT,
+        /** The other fluid cell of the slot already holds this fluid (issue #55). */
+        FLUID_ALREADY_SET;
 
         /** The hotbar line of a refusal, or {@code null} for an outcome that is none. */
         public String langKey() {
             return switch (this) {
                 case FILTER_TOO_LARGE -> WareworksLang.PRODUCTION_FILTER_TOO_LARGE;
                 case FILTER_LETS_RESULT -> WareworksLang.PRODUCTION_FILTER_MAKES_RESULT;
+                case FLUID_ALREADY_SET -> WareworksLang.PRODUCTION_FLUID_SAME;
                 default -> null;
             };
         }
@@ -468,6 +482,35 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         patternsChanged();
         setChanged();
         return true;
+    }
+
+    /**
+     * Server: a player's edit of one fluid cell of a pattern (issue #55, ADR-089). The cell is a ghost like every pattern
+     * entry: nothing is taken from anyone, and no fluid moves.
+     *
+     * @param cell        0 or 1
+     * @param fluidId     the fluid's registry id, or {@code null} to clear the cell; an id this server has no fluid for is
+     *                    ignored, and a flowing fluid is stored as its source
+     * @param millibuckets one run's amount, clamped to {@code 1..1000}
+     */
+    public EditOutcome editFluidCell(int pattern, int cell, @Nullable String fluidId, int millibuckets) {
+        if (level == null || level.isClientSide || isRemoved() || pattern < 0 || pattern >= patterns.size())
+            return EditOutcome.UNCHANGED;
+        String stored = null;
+        if (fluidId != null) {
+            Optional<String> valid = PatternFluids.validId(fluidId);
+            if (valid.isEmpty())
+                return EditOutcome.UNCHANGED;
+            stored = valid.get();
+            if (cell >= 0 && cell < ProductionPatterns.FLUID_CELLS
+                    && patterns.fluidAt(pattern, 1 - cell).filter(other -> other.fluid().equals(valid.get())).isPresent())
+                return EditOutcome.FLUID_ALREADY_SET;
+        }
+        if (!patterns.setFluid(pattern, cell, stored, millibuckets))
+            return EditOutcome.UNCHANGED;
+        patternsChanged();
+        setChanged();
+        return EditOutcome.CHANGED;
     }
 
     /**
@@ -583,9 +626,21 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
      */
     public void writePattern(int pattern, CrafterGrid<ItemKey> cells, boolean[] filterCells, List<Integer> counts,
             ItemKey result, int resultCount) {
+        writePattern(pattern, cells, filterCells, counts, result, resultCount, List.of());
+    }
+
+    /**
+     * {@link #writePattern(int, CrafterGrid, boolean[], List, ItemKey, int)} with the fluid cells of the recipe (issue
+     * #55, ADR-089): the slot's fluid cells are replaced by {@code fluids}, which the caller has resolved against this
+     * server's fluids. A slot laid without fluids ends up with none.
+     */
+    public void writePattern(int pattern, CrafterGrid<ItemKey> cells, boolean[] filterCells, List<Integer> counts,
+            ItemKey result, int resultCount, List<FluidCell> fluids) {
         if (level == null || level.isClientSide || isRemoved())
             return;
         patterns.clearPattern(pattern);
+        for (int cell = 0; cell < fluids.size() && cell < ProductionPatterns.FLUID_CELLS; cell++)
+            patterns.setFluid(pattern, cell, fluids.get(cell).fluid(), fluids.get(cell).millibuckets());
         for (int cell = 0; cell < CrafterGrid.SLOTS; cell++) {
             int index = cell;
             boolean filter = index < filterCells.length && filterCells[index];
@@ -605,6 +660,15 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         patternsChanged();
         setChanged();
         return true;
+    }
+
+    /** How many items of {@code keys} the buffer holds in all (issue #55: the filled containers of a station's fluid lines). */
+    public long countOf(Collection<ItemKey> keys) {
+        Objects.requireNonNull(keys, "keys");
+        long total = 0L;
+        for (ItemKey key : keys)
+            total += buffer.countOf(key);
+        return total;
     }
 
     /**
@@ -1335,7 +1399,8 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         }
         if (found.isEmpty())
             return new ProductionGoggleSummary(patterns.patternCount(), 0, Optional.empty(), 0L, 0L, 0, 0L, false,
-                    feeder, refused);
+                    feeder, refused, ProductionGoggleSummary.SelectorSummary.NONE, fluidPatternCount(),
+                    fluidContainersInBuffer());
         List<StoppedProduct> stopped = stoppedProducts(found.get());
         long unrecovered = 0L;
         for (StoppedProduct entry : stopped)
@@ -1381,7 +1446,35 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                         selectorHold.isPresent(), found.get().selectorFault(worldPosition), headWait, headItem, queued)
                 : ProductionGoggleSummary.SelectorSummary.NONE;
         return new ProductionGoggleSummary(patterns.patternCount(), open, oldest, missing, awaited, stopped.size(),
-                unrecovered, oldestWaitingForStep, feeder, refused, selector);
+                unrecovered, oldestWaitingForStep, feeder, refused, selector, fluidPatternCount(),
+                fluidContainersInBuffer());
+    }
+
+    /**
+     * Filled containers of the fluids this station's patterns name that stand in its buffer (issue #55 review). The
+     * crane has no way to take anything out of a buffer, so after a cancel or a timeout the player has to; they also
+     * count against the two containers a station may have in flight, which is why the goggles say so.
+     */
+    private int fluidContainersInBuffer() {
+        java.util.Set<ItemKey> keys = new java.util.HashSet<>();
+        for (ProductionPattern<ItemKey> pattern : patterns.patterns()) {
+            for (FluidCell cell : pattern.fluids()) {
+                PatternFluids.resolve(cell.fluid()).map(fluid -> fluid.getBucket())
+                        .filter(bucket -> bucket != net.minecraft.world.item.Items.AIR)
+                        .ifPresent(bucket -> keys.add(ItemKey.of(bucket)));
+            }
+        }
+        return keys.isEmpty() ? 0 : (int) Math.min(Integer.MAX_VALUE, countOf(keys));
+    }
+
+    /** Complete patterns of this station with at least one fluid cell (issue #55). */
+    private int fluidPatternCount() {
+        int count = 0;
+        for (ProductionPattern<ItemKey> pattern : patterns.patterns()) {
+            if (pattern.hasFluids())
+                count++;
+        }
+        return count;
     }
 
     /**
@@ -1398,6 +1491,13 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         else
             WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_NO_PATTERNS).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
+        if (production.fluidPatterns() > 0)
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_FLUID_PATTERNS, production.fluidPatterns())
+                    .forGoggles(tooltip, 1);
+        // Filled containers nobody will take any more (cancelled or timed out order): the crane cannot empty a buffer.
+        if (production.fluidContainersHeld() > 0 && production.openOrders() == 0)
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_FLUID_HELD, production.fluidContainersHeld())
+                    .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
         // Package mode (issue #40): the patterns stay, but no new order is made from them; the client reads the switch the
         // server told it at login, so no data of the station changes.
         if (PackageModeGate.enabledOnClient())

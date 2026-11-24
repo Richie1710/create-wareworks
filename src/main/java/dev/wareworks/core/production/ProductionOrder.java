@@ -261,6 +261,10 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         // A choice is a filter no rack holds; an order of it must be built from the keys a plan chose (ADR-082, D11).
         if (pattern.hasChoices())
             throw new IllegalArgumentException("a pattern with choices needs planned lines: " + pattern.result());
+        // A fluid cell is delivered as filled containers a plan chose (issue #55): an order built from the ingredients
+        // alone would forget the fluid, and the machine would never get it.
+        if (pattern.hasFluids())
+            throw new IllegalArgumentException("a pattern with fluid cells needs planned lines: " + pattern.result());
         return build(id, station, pattern, runs, null, lineIds, now, timeoutTicks, resultStockNow, backingRequest,
                 promisedToRequest, restock, parentLine);
     }
@@ -283,7 +287,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
             lines = new ArrayList<>(planned.size());
             for (NodeLine<K> line : planned)
                 lines.add(new SupplyLine<>(Objects.requireNonNull(lineIds.get(), "line id"), line.key(),
-                        (int) Math.min(Integer.MAX_VALUE, line.amount()), 0, line.choice()));
+                        (int) Math.min(Integer.MAX_VALUE, line.amount()), 0, line.choice(), line.fluid()));
         }
         return new ProductionOrder<>(id, station, pattern.result().key(), pattern.resultFor(runs), lines,
                 ProductionOrderState.WAITING_FOR_INGREDIENTS, deadline(now, timeoutTicks), 0L,
@@ -440,7 +444,7 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
             return 0;
         int total = 0;
         for (SupplyLine<K> line : lines) {
-            if (line.key().equals(key))
+            if (!line.isFluid() && line.key().equals(key))
                 total += line.remaining();
         }
         return total;
@@ -699,7 +703,8 @@ public record ProductionOrder<K, L>(UUID id, L station, K result, int resultAmou
         for (SupplyLine<K> line : lines) {
             // fullRuns > 0 means every line delivered something, so required stays at least 1.
             trimmed.add(line.isComplete() ? line
-                    : new SupplyLine<>(line.id(), line.key(), line.delivered(), line.delivered(), line.choice()));
+                    : new SupplyLine<>(line.id(), line.key(), line.delivered(), line.delivered(), line.choice(),
+                            line.fluid()));
         }
         int runs = (int) fullRuns;
         int amount = (int) Math.max(1L, Math.min(resultAmount, (long) resultAmount * runs / selectorRuns));

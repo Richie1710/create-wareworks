@@ -347,7 +347,7 @@ public final class RequesterScenes {
      * {@code BeltBlock#initBelt} links a placed belt on a server: the start is the controller and index 0
      * ({@code BeltConnectorItem#createBelts} faces a belt from its start to its end).
      */
-    private static void placeBelt(CreateSceneBuilder scene, BlockPos start, Direction facing, int length) {
+    static void placeBelt(CreateSceneBuilder scene, BlockPos start, Direction facing, int length) {
         BlockState belt = AllBlocks.BELT.getDefaultState()
                 .setValue(BeltBlock.HORIZONTAL_FACING, facing)
                 .setValue(BeltBlock.SLOPE, BeltSlope.HORIZONTAL)
@@ -366,7 +366,7 @@ public final class RequesterScenes {
     }
 
     /** An andesite belt funnel facing {@code facing} on the belt below it, in {@code shape}. */
-    private static BlockState beltFunnel(Direction facing, BeltFunnelBlock.Shape shape) {
+    static BlockState beltFunnel(Direction facing, BeltFunnelBlock.Shape shape) {
         return AllBlocks.ANDESITE_BELT_FUNNEL.getDefaultState()
                 .setValue(BeltFunnelBlock.HORIZONTAL_FACING, facing)
                 .setValue(BeltFunnelBlock.SHAPE, shape);

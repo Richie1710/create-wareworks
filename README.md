@@ -320,7 +320,9 @@ Selector** and the production station: the unfiltered saw cycling, the selector 
 input, stairs and then slabs, the item that comes back unexpected and how to take it out, and the Basin under a Mixer.
 The twenty-eighth, **Setting a Far Factory's Recipe with Recipe Slips**, belongs to the **Ender Recipe Selector** and
 the production station: the four sneak-clicks, the saw set as a package arrives, the slab package waiting in its port
-until the line is empty, and the two ways of bypassing the selector to avoid.
+until the line is empty, and the two ways of bypassing the selector to avoid. The twenty-ninth, **Fluid in a Production Pattern**, belongs to the production
+station: the fluid cell, the filled bucket the crane brings, the machine behind the station that needs no arm, and the
+warnings about arms and depots.
 
 ## Balancing the crane
 
@@ -690,7 +692,16 @@ what a request, a production order or a stock rule's reserve needs stays where i
 priority and a filter that fits the item no worse, so nothing leaves a chest dedicated to it for a general rack, and
 nothing ever goes into a fluid bay. An order ends when nothing more fits anywhere better or after
 `optimizer.tripsPerRequest` trips (32 by default); press again later to move what fits then. The red mark on the status
-line stops it, and a trip under way is finished.
+line stops it, and a trip under way is finished. When an item has nothing to move, its row's dot turns gold and its
+tooltip says why: *All places have the same priority*, *No place with a higher priority*, *No free room at a higher
+priority*, *Higher places' filters do not fit*, *Its places cannot be reached now*, or that all of it is requested or
+reserved, each with what to do about it. *Nothing to move* is left for an item the warehouse holds none of.
+**Merging an item kept in several places.** A small number beside each row says in how many places the warehouse
+holds the item. Press **Merge** (beside Optimise, or click a row's number for that item alone) and the crane gathers
+the item into its **home**: the place whose store filter names it, otherwise the place that already holds the most of
+it on the highest priority that holds it at all (a tie goes to the place that comes first in the aisle). The smallest
+place is emptied first, and only when all of it fits the home; nothing goes into a lower priority or a filter that fits worse, and
+new items of that type are stored in the same home, so the crane does not spread them again.
 
 ## Production
 
@@ -779,6 +790,41 @@ pattern of the station is now one recipe for the Crafter, cell for cell:
 * Server config: `crafterFeederRequiresRotation` (default on) and `crafterFeederStressImpact` (2.0, like a Mechanical
   Crafter).
 
+**A pattern can name a fluid.** Besides its 3 × 3 items, a pattern has **two fluid cells** (above and below the
+result): click one with a **filled bucket** and it holds that fluid, the mouse wheel sets the millibuckets one run
+takes (50 mB a notch, Shift 250, Ctrl 1000; at most 1000 mB, the size of a Basin's tank), a right-click empties it. That
+is for the recipes of a **Basin under a Mechanical Mixer** that need water or lava, for example mud from dirt and 250
+mB of water. Order the product at the terminal as always:
+
+* **The crane brings the fluid as filled buckets**, never as fluid: it takes empty buckets out of stock, fills them at
+  a fluid bay of that fluid and carries them to the station, whole buckets only (one bucket serves four runs of 250
+  mB). So choose an amount that **divides 1000 mB**; any other amount works, but a rest stays in your machine and the
+  tooltip says so in gold. The warehouse needs the fluid in a bay and **empty buckets in stock**, and it says which is
+  missing ("Not enough fluid for …", "No empty container for …"). At most **two filled buckets** wait at one station,
+  and they count against its buffer slots.
+* **Your own machine turns the bucket into fluid — no Mechanical Arm.** An arm has no way to reach an Item Drain. The
+  layout that is tested: an **extracting brass funnel** at the station with **the filled bucket as its filter**, an
+  **Item Drain** under the funnel, a **pump and a pipe** from the drain into the Basin (every pipe must have exactly two connections: a pipe with a free open end pours
+  half of the water away, so wrench a pipe that shows an open stub), the Mixer two blocks above it, a second filtered funnel for the other ingredients, and
+  the Basin's spout into a Warehouse Input (keep the spout's side free: Create turns the spout away from a blocked
+  side, and then the mud stays in the Basin). The Ponder scene **Fluid in a Production Pattern** shows the principle
+  in a simplified layout; the exact positions the automated test runs are in `docs/manual-test-checklist.md`.
+* **Three warnings.** A **Mechanical Arm that can also reach the Basin** puts filled buckets into the Basin's item
+  slots, and the warehouse cannot stop that. A **depot is no way out for the empty bucket**: it holds one and the drain
+  jams behind it; use a funnel over a chest, a belt, or the Warehouse Input (the drain pushes the empty bucket out of a side you do not
+  choose, so put the sink on every free side). And the drain **stalls on a third bucket**
+  until the Mixer has used some of the fluid; the cap of two buckets and an amount that divides 1000 keep it moving.
+  The empty bucket comes back through the return input like any other item.
+* **Known limits.** Filled buckets that are **left in the station's buffer** after a cancel or a timeout are not taken
+  out by the crane: they count against the cap of two, so take them out (the goggles show "Filled containers left in
+  the buffer" while no order is open), or the next order of that fluid waits. **Shift-clicking a bucket** from your
+  inventory still writes an *item* cell, not a fluid cell; click it onto the fluid cell instead. A fluid cell keeps only
+  the fluid: a potion becomes its base fluid, item components of the container are dropped.
+* **What it does not do:** a pattern cannot **make** a fluid, a Crafter Feeder refuses a pattern with a fluid cell
+  (a Crafter cannot take one), package mode makes nothing so the cells stay inert, and an automatic stock-rule restock
+  skips such a pattern. JEI's "+" lays a recipe's fluid inputs as fluid cells. **Downgrading** to an older Wareworks
+  loses the cells: a pattern that has only fluid cells is empty after the next save there.
+
 **One machine, several products: the Recipe Selector.** Sneak-click the production station with a **Recipe
 Selector**, place it against the saw (facing up) or against the Basin under a Mixer or Press, and sneak-click the
 Warehouse Input the products come back through. From then on:
@@ -802,7 +848,8 @@ Warehouse Input the products come back through. From then on:
   saw and the chest behind the Packager are empty; old packages and packages of another station are refused. Never
   feed packages straight into the saw, and do not let a port push into the chest past the Packager: both bypass the
   selector.
-* Switch a selector or the slips off in the station's screen. Fluid recipes, Deployers, presses on belts and Crafter
+* Switch a selector or the slips off in the station's screen. A Basin's fluid recipe works when the pattern has the matching fluid cells (the
+  Basin's heat is not checked); the Ender tier refuses fluid cells. Deployers, presses on belts and Crafter
   Feeder stations are not supported. Server config: `selector.localRange` (32), `selector.machineRange` (16) and
   `selector.remoteProbe` (by default, after a restart, after the slips were switched on and after a stop, the first
   order of a new product at a far factory sends one run, until the right product has come back).
@@ -976,6 +1023,41 @@ warehouse sees it. A crane that was already carrying loose items out of an input
 switch off) finishes that one trip after the reload and stores them, at most one load per crane; likewise a box it was
 already carrying may still land in an empty bay. The `[packageMode]` section and the network version are part of every install, used or not.
 
+## FAQ
+
+**Why is the same item in several rack bays?** The crane stores an item into the bay that already holds it, and opens
+a second bay only when that one cannot take it. That happens when:
+
+* **the first bay is full** (64 stacks for a wooden bay, 256 for andesite, 1,024 for brass);
+* **items were put in without the crane**: a click on a bay, a funnel, a hopper, a chute or a Mechanical Arm puts them
+  into exactly the bay they face, and an empty bay takes any item type;
+* **the items are not quite the same**: a renamed item, an enchanted one or one with other data components is a type of
+  its own, so it gets a bay of its own;
+* the bay that holds it **could not be reached** when the item was stored (an unloaded chunk, a broken rail).
+
+**What does the Warehouse Optimizer do, and what not?** It moves the items you list **up in priority**: from a storage
+location to one with a **higher** priority whose filter fits the item no worse. That is all it does. It does **not**
+merge an item that lies in two places of the same priority (that is what **Merge** does, when you press it), it does
+not sort, and with every bay at the default priority 0 Optimise has nothing to do. Give the places you want filled first a higher priority, then press Optimise. When a
+row moves nothing, its gold dot tells you why.
+
+**Why do items wait in the Warehouse Input?** Mostly because **each rack bay holds one item type** until it is empty
+again. A wall of forty bays holds forty item types, however much room is left in them: sixteen colours of wool and
+sixteen of carpet take 32 bays before anything else arrives. The next new type then has no free bay and waits in the
+input. Nothing is lost, and the input's goggles say *Not stored: no free place for this item type*. Add bays, or put a
+chest behind a Warehouse Interface for the long tail of types you own only a few of. The other reasons the input shows
+are a full warehouse, a full accepting port that was the only place left, a storage filter that takes the item nowhere, a
+stock rule at its maximum, or in package mode a box that needs a bay with a Package Filter.
+
+**My input fills up at a maximum.** That is the maximum working: it only says how much may be **stored**, so above it
+the crane takes no more and the rest **waits in the Warehouse Input** on purpose (*Not stored: a stock rule for these
+items is at its maximum*). With one input, everything behind that item waits too. A maximum never sends anything away;
+to do that, add an **overflow**: a Warehouse Output switched to *accept* with the wrench, with a **negative rank** and a
+chest or a belt behind it. It takes whatever is above the maximum (see [The warehouse port](#the-warehouse-port), and
+the Ponder scene "An Overflow for a Warehouse"). If what you really want is a large store that is used up first, do not
+set a maximum at all: set only a **minimum**, and give the extra chests or bays a **lower priority** than your main
+racks. They are filled last and emptied first, and the minimum counts them as stock too.
+
 ## Compatibility
 
 ### JEI and EMI
@@ -990,8 +1072,9 @@ items; the amount field says how many items Fetch brings ingredients for.
 
 With a **Warehouse Production** screen open, the **+** on a recipe of any JEI category writes it into the selected
 pattern tab, with its result and amounts: a crafting recipe in its own grid, so it suits a Crafter Feeder, and a
-machine's recipe, such as Create's saw, in the cells in order. Recipes a pattern cannot hold, such as one with a fluid,
-have a greyed-out **+** that says why.
+machine's recipe, such as Create's saw, in the cells in order. Recipes a pattern cannot hold, such as one that makes a
+fluid, needs more than two fluids or more than 1000 mB of one, have a greyed-out **+** that says why. A recipe's fluid
+inputs are laid as fluid cells.
 
 **EMI** is not supported directly: Wareworks has no EMI plugin, so with EMI and no JEI, EMI's **+** does not work at
 the terminal, and the crafting grid works exactly as without a recipe viewer.

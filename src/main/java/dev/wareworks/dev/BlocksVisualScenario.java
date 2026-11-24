@@ -10,10 +10,12 @@ import java.util.OptionalInt;
 import java.util.function.BiConsumer;
 
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.simibubi.create.AllItems;
 import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.tterrag.registrate.util.entry.BlockEntry;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.client.render.RackBayRenderer;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
 import dev.wareworks.content.fluid.FluidKey;
@@ -40,6 +42,7 @@ import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.registry.WareworksCreativeTabs;
 import dev.wareworks.registry.WareworksItems;
+import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -194,6 +197,39 @@ public final class BlocksVisualScenario implements VisualScenario {
     /** Yard cameras: player eye height, and far enough back that the exhibit's own width fits the frame. */
     private static final double YARD_MARGIN = 2.6;
     private static final double YARD_LOOK_HEIGHT = 1.4;
+    /**
+     * The filter exhibit (issue #49): an empty bay with a filter has to show the filter where the stock would stand,
+     * a filled bay its stock, an empty bay without a filter nothing. Checked on the client against what
+     * {@code RackBayRenderer#displayedItem} decides, not only shot.
+     */
+    private static final String BAY_FILTERS_LABEL = "bay_filters";
+    private static final int BAY_FILTER_COLUMNS = 4;
+    private static final int BAY_FILTER_ITEM_COLUMN = 0;
+    private static final int BAY_FILTER_FILLED_COLUMN = 1;
+    private static final int BAY_FILTER_NONE_COLUMN = 2;
+    private static final int BAY_FILTER_CREATE_COLUMN = 3;
+    /** Fill step of the filled column: half full, so the cartons and the item in front of them both show. */
+    private static final int BAY_FILTER_FILL_STEP = 2;
+    /** Rows bottom to top; brass under andesite under wood is the one order the column rule allows. */
+    private static final List<BlockEntry<RackBayBlock>> BAY_FILTER_ROWS = List.of(WareworksBlocks.RACK_BAY_BRASS,
+            WareworksBlocks.RACK_BAY_ANDESITE, WareworksBlocks.RACK_BAY_WOOD);
+    /** The plain item filter of each row's first column: a block item, then two flat items. */
+    private static final List<Item> BAY_FILTER_ITEMS = List.of(Items.OAK_LOG, Items.IRON_INGOT, Items.REDSTONE);
+    /** The close camera of the filter exhibit: near enough that the items read, far enough for all twelve bays. */
+    private static final double BAY_FILTER_CLOSE_DISTANCE = 3.4;
+    private static final double BAY_FILTER_CLOSE_HEIGHT = 1.5;
+    /** Ticks the client gets for the filters' update packets before the display check fails. */
+    private static final int BAY_FILTER_SYNC_TIMEOUT_TICKS = 100;
+    /**
+     * Client ticks the close camera is held after the filter exhibit's draw records are cleared, so several frames are
+     * rendered there before {@link #checkBayFilters} reads what each bay really drew.
+     */
+    private static final int BAY_FILTER_DRAW_WAIT_TICKS = 5;
+    /**
+     * When ({@code Util#getNanos}) the filter exhibit's draw records were last cleared; client thread only. A bay's
+     * draw counts for the check only if it happened after this.
+     */
+    private static long bayFilterDrawsSince = Long.MIN_VALUE;
     /** The long run seen from inside the aisle at the height the crane's arm reaches through a bay. */
     private static final String RUN_LABEL = "bay_run";
     private static final double AISLE_EYE_OFFSET = 1.6;
@@ -256,6 +292,10 @@ public final class BlocksVisualScenario implements VisualScenario {
             // order the column rule allows. The seam between two tiers is the one place a shared upright is half one
             // material and half the other.
             new YardExhibit("bay_tiers", 4, BlocksVisualScenario::tierWall),
+            // Issue #49: what an empty bay shows. Rows brass, andesite and wood (the legal order); columns an empty bay
+            // with an item filter, a filled bay whose filter is a List Filter (the stock must win), an empty bay
+            // without a filter (nothing) and an empty bay whose filter is a Create filter item (drawn as that item).
+            new YardExhibit(BAY_FILTERS_LABEL, BAY_FILTER_COLUMNS, BlocksVisualScenario::filterWall),
             // Two runs meeting at a right angle. They face different ways, so they do not join - which is the point:
             // a corner is two racks, and it has to look like two racks.
             new YardExhibit(CORNER_LABEL, 4, BlocksVisualScenario::corner),
@@ -525,6 +565,48 @@ public final class BlocksVisualScenario implements VisualScenario {
             run(level, pos.above(row), rows.get(row), 4, 1, Direction.NORTH, rows.size() - row);
     }
 
+    /** The Create filter item of the last column, one per row: Package, Attribute and List Filter. */
+    private static Item createFilter(int row) {
+        return switch (row) {
+            case 0 -> AllItems.PACKAGE_FILTER.get();
+            case 1 -> AllItems.ATTRIBUTE_FILTER.get();
+            default -> AllItems.FILTER.get();
+        };
+    }
+
+    /**
+     * The filter exhibit (issue #49): {@value #BAY_FILTER_COLUMNS} columns by three tiers, see {@link #YARD}. The filled
+     * bay is filled first and given its List Filter afterwards, a filter its cobblestone would not pass: the stock must
+     * still be what the bay shows. Every filter is checked to have been taken.
+     */
+    private static void filterWall(ServerLevel level, BlockPos pos) {
+        for (int row = 0; row < BAY_FILTER_ROWS.size(); row++) {
+            BlockState state = BAY_FILTER_ROWS.get(row).getDefaultState();
+            for (int column = 0; column < BAY_FILTER_COLUMNS; column++) {
+                bay(level, along(pos, Direction.NORTH, column).above(row), state, Direction.NORTH,
+                        column == BAY_FILTER_FILLED_COLUMN ? BAY_FILTER_FILL_STEP : 0);
+            }
+            setBayFilter(level, along(pos, Direction.NORTH, BAY_FILTER_ITEM_COLUMN).above(row),
+                    new ItemStack(BAY_FILTER_ITEMS.get(row)));
+            setBayFilter(level, along(pos, Direction.NORTH, BAY_FILTER_FILLED_COLUMN).above(row),
+                    new ItemStack(AllItems.FILTER.get()));
+            setBayFilter(level, along(pos, Direction.NORTH, BAY_FILTER_CREATE_COLUMN).above(row),
+                    new ItemStack(createFilter(row)));
+        }
+        for (int row = 0; row < BAY_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < BAY_FILTER_COLUMNS; column++)
+                assertBayJoins(level, along(pos, Direction.NORTH, column).above(row), column > 0,
+                        column < BAY_FILTER_COLUMNS - 1);
+        }
+    }
+
+    private static void setBayFilter(ServerLevel level, BlockPos pos, ItemStack filter) {
+        if (!(level.getBlockEntity(pos) instanceof RackBayBlockEntity bay))
+            throw new VisualTestException("no rack bay block entity at " + pos);
+        if (!bay.setStoreFilter(filter) || !bay.storeFilterView().is(filter.getItem()))
+            throw new VisualTestException("the bay at " + pos + " did not take the filter " + filter);
+    }
+
     /**
      * One fluid bay at {@code pos}, turned onto {@code facing} and filled to {@code share} of its own capacity - or,
      * for a negative share, to {@value #TANK_DROP_MILLIBUCKETS} mB, which is the smallest thing a tank can be asked to
@@ -696,6 +778,20 @@ public final class BlocksVisualScenario implements VisualScenario {
                                 context -> measureTankBudget(context, "far"))
                         .shot(TANK_LEVELS_LABEL + "-far");
             }
+            if (exhibit.label().equals(BAY_FILTERS_LABEL)) {
+                // Issue #49: close enough that the items read, and the renderer's own decision checked for every bay
+                // at this very camera, together with whether it draws the bay here at all.
+                script.until("blocks: wait until the client has the filter exhibit's filters and stock",
+                                context -> bayFilterMismatch(context) == null, BAY_FILTER_SYNC_TIMEOUT_TICKS)
+                        .camera(CameraView.of("close", center, BAY_FILTER_CLOSE_HEIGHT,
+                                BLOCK_CENTER + BAY_FILTER_CLOSE_DISTANCE, center, BAY_FILTER_CLOSE_HEIGHT, BLOCK_CENTER))
+                        .client("blocks: clear what the filter exhibit's bays drew so far",
+                                BlocksVisualScenario::forgetBayFilterDraws)
+                        .waitTicks(BAY_FILTER_DRAW_WAIT_TICKS)
+                        .client("blocks: check what every bay of the filter exhibit shows",
+                                BlocksVisualScenario::checkBayFilters)
+                        .shot(BAY_FILTERS_LABEL + "-close");
+            }
             if (exhibit.label().equals(CORNER_LABEL)) {
                 // The inside of the L, where the aisles of both runs meet: the second run starts at the first one's
                 // left end and turns towards the camera, so a player stands off the left end and looks back at it.
@@ -847,6 +943,109 @@ public final class BlocksVisualScenario implements VisualScenario {
             throw new VisualTestException("only " + drawn + " of " + row.size()
                     + " tanks of the level row are drawn at the " + label + " camera, so the level is not the readout"
                     + " there");
+    }
+
+    /**
+     * What is wrong with the filter exhibit as the client's rack bay renderer sees it, or {@code null} when every bay
+     * shows what issue #49 asks for: the item filter in column {@value #BAY_FILTER_ITEM_COLUMN}, the cobblestone (not
+     * the List Filter) in column {@value #BAY_FILTER_FILLED_COLUMN}, nothing in column {@value #BAY_FILTER_NONE_COLUMN}
+     * and the Create filter item in column {@value #BAY_FILTER_CREATE_COLUMN}.
+     */
+    private static String bayFilterMismatch(VisualContext context) {
+        Minecraft minecraft = context.minecraft();
+        ClientLevel level = minecraft.level;
+        if (level == null)
+            return "no client level";
+        BlockPos base = context.origin().offset(yardX(yardIndex(BAY_FILTERS_LABEL)), 0, 0);
+        for (int row = 0; row < BAY_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < BAY_FILTER_COLUMNS; column++) {
+                BlockPos pos = along(base, Direction.NORTH, column).above(row);
+                if (!(level.getBlockEntity(pos) instanceof RackBayBlockEntity bay))
+                    return "no client rack bay at " + pos;
+                if (!(minecraft.getBlockEntityRenderDispatcher().getRenderer(bay) instanceof RackBayRenderer renderer))
+                    return "the rack bay at " + pos + " has no RackBayRenderer";
+                ItemStack shown = renderer.displayedItem(bay);
+                Item expected = switch (column) {
+                    case BAY_FILTER_ITEM_COLUMN -> BAY_FILTER_ITEMS.get(row);
+                    case BAY_FILTER_FILLED_COLUMN -> Items.COBBLESTONE;
+                    case BAY_FILTER_CREATE_COLUMN -> createFilter(row);
+                    default -> null;
+                };
+                boolean right = expected == null ? shown.isEmpty() : !shown.isEmpty() && shown.is(expected);
+                if (!right)
+                    return "the bay at row " + row + " column " + column + " shows " + shown + " instead of "
+                            + (expected == null ? "nothing" : BuiltInRegistries.ITEM.getKey(expected))
+                            + " (stored " + bay.storedKeyOrNull() + ", filter " + bay.storeFilterView() + ")";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Clears every filter exhibit bay's draw record ({@code RackBayBlockEntity#recordDrawn}) at the close camera and
+     * notes when, so {@link #checkBayFilters} sees only frames rendered from there.
+     */
+    private static void forgetBayFilterDraws(VisualContext context) {
+        ClientLevel level = context.minecraft().level;
+        if (level == null)
+            throw new VisualTestException("no client level");
+        BlockPos base = context.origin().offset(yardX(yardIndex(BAY_FILTERS_LABEL)), 0, 0);
+        for (int row = 0; row < BAY_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < BAY_FILTER_COLUMNS; column++) {
+                BlockPos pos = along(base, Direction.NORTH, column).above(row);
+                if (!(level.getBlockEntity(pos) instanceof RackBayBlockEntity bay))
+                    throw new VisualTestException("no client rack bay at " + pos);
+                bay.forgetDrawn();
+            }
+        }
+        bayFilterDrawsSince = Util.getNanos();
+    }
+
+    /**
+     * Issue #49 on the client: every bay of the filter exhibit shows what {@link #bayFilterMismatch} asks for, at the
+     * close camera every one of them is inside the frustum and within the renderer's view distance, and the renderer
+     * <b>really drew</b> it in the frames since {@link #forgetBayFilterDraws}: a bay that should show an item has a
+     * draw record of exactly that stack from those frames, and a bay that should show nothing has none. So a renderer
+     * that decides right but returns before drawing (the bug of issue #49) fails here, not only in the screenshot.
+     */
+    private static void checkBayFilters(VisualContext context) {
+        String mismatch = bayFilterMismatch(context);
+        if (mismatch != null)
+            throw new VisualTestException(mismatch);
+        Minecraft minecraft = context.minecraft();
+        ClientLevel level = minecraft.level;
+        BlockPos base = context.origin().offset(yardX(yardIndex(BAY_FILTERS_LABEL)), 0, 0);
+        Frustum frustum = minecraft.levelRenderer.getFrustum();
+        Vec3 camera = minecraft.gameRenderer.getMainCamera().getPosition();
+        List<String> shown = new ArrayList<>();
+        for (int row = 0; row < BAY_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < BAY_FILTER_COLUMNS; column++) {
+                BlockPos pos = along(base, Direction.NORTH, column).above(row);
+                RackBayBlockEntity bay = (RackBayBlockEntity) level.getBlockEntity(pos);
+                RackBayRenderer renderer =
+                        (RackBayRenderer) minecraft.getBlockEntityRenderDispatcher().getRenderer(bay);
+                if (!frustum.isVisible(renderer.getRenderBoundingBox(bay)) || !renderer.shouldRender(bay, camera))
+                    throw new VisualTestException("the rack bay at row " + row + " column " + column
+                            + " is not drawn at the close camera of the filter exhibit");
+                ItemStack item = renderer.displayedItem(bay);
+                ItemStack drawn = bay.lastDrawnItem();
+                boolean drawnSince = drawn != null && bay.lastDrawnNanos() >= bayFilterDrawsSince;
+                if (item.isEmpty() && drawnSince)
+                    throw new VisualTestException("the rack bay at row " + row + " column " + column
+                            + " should show nothing but drew " + drawn + " at the close camera");
+                if (!item.isEmpty() && !drawnSince)
+                    throw new VisualTestException("the rack bay at row " + row + " column " + column + " should show "
+                            + item + " but drew nothing in the " + BAY_FILTER_DRAW_WAIT_TICKS
+                            + " ticks at the close camera");
+                if (!item.isEmpty() && !ItemStack.matches(drawn, item))
+                    throw new VisualTestException("the rack bay at row " + row + " column " + column + " drew "
+                            + drawn + " instead of " + item);
+                shown.add(row + "/" + column + "="
+                        + (item.isEmpty() ? "nothing" : BuiltInRegistries.ITEM.getKey(item.getItem()).toString()));
+            }
+        }
+        LOGGER.info(PREFIX + "blocks: CHECK PASS rack bays show stock first, else their filter, else nothing, "
+                + "and drew exactly that (issue #49): {}", shown);
     }
 
     /** How far a Recipe Selector's model reaches from the face it is set against at most: its lamp (6 px). */

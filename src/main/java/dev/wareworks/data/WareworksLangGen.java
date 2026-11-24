@@ -15,6 +15,7 @@ import dev.wareworks.content.station.TerminalCraftResult;
 import dev.wareworks.content.station.TerminalListResult;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.port.DoorState;
 import dev.wareworks.core.port.PortRedstone;
 import dev.wareworks.core.port.PortSettings;
@@ -293,6 +294,10 @@ public final class WareworksLangGen {
         // ones say what is wrong in the words a player fixes it with; the goggles show them in gold.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FEEDER), "Crafter Feeder at the back");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_REFUSED), "Patterns the feeder skips: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FLUID_PATTERNS),
+                "Patterns with a fluid: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FLUID_HELD),
+                "Filled containers left in the buffer: %1$s (take them out)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRAFTER_FEEDER), "Crafter Feeder:");
         // Count last, with no plural noun after it: the count reaches 1 on every order's last run.
         lang.accept(WareworksLang.key(WareworksLang.CRAFTER_FEEDER_FEEDING), "Crafting %1$s \u00b7 runs left: %2$s");
@@ -479,7 +484,11 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key("gui.production.selector.check.stonecutting_off"),
                 "Stonecutting on saws is switched off on this server");
         lang.accept(WareworksLang.key("gui.production.selector.check.fluid"),
-                "Recipes with fluids cannot use a Recipe Selector yet");
+                "Recipes that make a fluid cannot use a Recipe Selector");
+        lang.accept(WareworksLang.key("gui.production.selector.check.fluid_mismatch"),
+                "%1$s: the recipe takes other fluids or amounts than the pattern's fluid cells");
+        lang.accept(WareworksLang.key("gui.production.selector.check.fluid_far"),
+                "A far factory is served by packages: they carry no fluid");
         lang.accept(WareworksLang.key("gui.terminal.order.selector.probe_one_run"),
                 "First run alone: checks the factory's selector");
         lang.accept(WareworksLang.key("gui.terminal.order.selector.behind"), "Waits for its turn: %1$s first");
@@ -541,6 +550,8 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_REFUSED), "Refused: %1$s × %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_LATCH), "Serves station %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_SET_BACKS), "Hand changes set back: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_HEAT_HINT),
+                "Heated recipes need a lit Blaze Burner below: not checked");
         lang.accept(WareworksLang.key("gui.goggles.selector_reason.cannot_make"), "cannot make it");
         lang.accept(WareworksLang.key("gui.goggles.selector_reason.foreign_slip"), "other station");
         lang.accept(WareworksLang.key("gui.goggles.selector_reason.stale_slip"), "old package");
@@ -666,6 +677,13 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_OWN_STORAGE),
                 "This inventory is already a storage location");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_COLLECT_REFUSED), "Not fetched: %1$s");
+        // The input's own answer to "why do my items wait here" (issue #53), with the same reason texts.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_NOT_STORED), "Not stored:");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_INPUT_ONE_TYPE_HINT),
+                "Each rack bay holds one item type: add bays or a chest");
+        // Issue #54: a maximum only refuses; the overflow is what takes the surplus away.
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_AT_MAXIMUM_OVERFLOW_HINT),
+                "An accepting Warehouse Output with a negative rank takes the surplus");
         // Packages at the out door (M26, issue #18). "Packager" and "logistics network" are Create's own names for
         // the blocks a player holds, so these lines speak of them exactly as the game does.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PORT_PACKAGE_HANDOVER), "Hands over as a package");
@@ -742,6 +760,7 @@ public final class WareworksLangGen {
                 // warehouse input, and a collect-only aisle need not contain an input at all.
                 case WAREHOUSE_FULL -> "no storage location accepts these items";
                 case NO_MATCHING_FILTER -> "no storage location takes these items, whatever room it has";
+                case NO_LOCATION_FOR_TYPE -> "no free place for this item type";
                 case PACKAGE_BAY_NEEDS_FILTER -> "boxes need a rack bay with a Package Filter or a chest";
                 case PORT_FULL -> "an accepting port was the only place left for these items and it is full";
                 case AT_MAXIMUM -> "a stock rule for these items is at its maximum";
@@ -1121,7 +1140,15 @@ public final class WareworksLangGen {
         // the consequence. They are tooltip lines of a 216 px window, measured by CrafterFeederTextWidthTest.
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FEEDER), "Crafter Feeder");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_NOT_ONLY_ITEMS),
-                "This recipe needs a fluid: a pattern holds items only");
+                "This recipe needs an ingredient a pattern cannot hold: only items and fluids");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_TOO_MANY_FLUIDS),
+                "This recipe needs more than 2 different fluids: a pattern holds 2");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_FLUID_TOO_MUCH),
+                "This recipe needs more than 1000 mB of a fluid per run: a fluid cell holds 1000");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_FLUID_RESULT),
+                "This recipe makes a fluid: a pattern makes items only");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_UNKNOWN_FLUID),
+                "This server does not know a fluid of this recipe");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_TOO_MANY_INPUTS),
                 "This recipe needs more than the pattern's 9 cells");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_MAKES_INGREDIENT),
@@ -1136,6 +1163,7 @@ public final class WareworksLangGen {
                 case NOT_A_RECIPE -> "Not a crafting recipe";
                 case RESULT_DIFFERS -> "The recipe makes %1$s x%2$s";
                 case FILTER_NOT_CHECKABLE -> "The filter names no item to check";
+                case FLUID_CELL -> "A Crafter takes no fluids";
                 default -> throw new IllegalStateException("no reason text for " + check);
             });
         }
@@ -1161,6 +1189,22 @@ public final class WareworksLangGen {
                 "A List or Attribute Filter allows a choice of items");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_ORDER_USES), "Uses %1$s");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_ORDER_USES_MORE), "and %1$s more");
+        // A fluid cell of a pattern (issue #55, ADR-089): the tooltip lines and the hotbar line of a refused edit. Tooltip
+        // lines of a 216 px window at the 320 x 240 floor, measured by ProductionFluidTextWidthTest.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_CELL), "Fluid ingredient");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_AMOUNT), "%1$s mB per run");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_BUCKETS), "One bucket serves %1$s runs");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_WHOLE), "Delivered in whole filled buckets");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_REST),
+                "Does not divide 1000 mB: a rest stays in your machine");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_SET_HINT),
+                "Click with a filled bucket to set the fluid");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_WHEEL_HINT),
+                "Scroll: 50 mB, Shift 250, Ctrl 1000");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_CLEAR_HINT), "Right-click clears");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_UNKNOWN), "Unknown fluid (its mod is missing?)");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_SAME),
+                "The other fluid cell already holds this fluid");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RULES), "Rules");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_EMPTY_ROW), "Empty row");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM), "Minimum");
@@ -1410,6 +1454,9 @@ public final class WareworksLangGen {
                 case TOO_MANY_INGREDIENT_ITEMS -> "Too many items to make %1$s";
                 case ORDERS_BUSY -> "No free order for %1$s";
                 case NO_MATCHING_ITEM -> "Nothing in stock fits %1$s";
+                case FLUID_MISSING -> "Not enough fluid for %1$s";
+                case NO_EMPTY_CONTAINER -> "No empty container for %1$s";
+                case BUFFER_TOO_SMALL -> "Buffer too small for %1$s";
             });
         }
 
@@ -1473,8 +1520,12 @@ public final class WareworksLangGen {
                 "Where the result goes",
                 "Put a _Warehouse Input_ in front of the _Crafter's_ output.");
 
+        // Issue #54: what a maximum does, since players read "surplus is taken" into it, which only an overflow does.
         tooltip(lang, "block.wareworks.warehouse_stock_keeper",
-                "Sets a _minimum_, a _maximum_ and a _reserve_ of the warehouse for each item.");
+                "Sets a _minimum_, a _maximum_ and a _reserve_ of the warehouse for each item.",
+                "At a maximum",
+                "The crane _stores no more_ and sends nothing away: the surplus _waits in the input_. An accepting "
+                        + "_Warehouse Output_ with a negative rank takes it.");
 
         tooltip(lang, "block.wareworks.warehouse_home_point",
                 "Where the crane waits when it has nothing to do.",
@@ -1748,6 +1799,40 @@ public final class WareworksLangGen {
             });
         }
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PIP_HINT), "Click to optimise this item alone");
+        // Why a row has nothing to move (issue #53), decided on the server. NONE_IN_STOCK keeps "Nothing to move".
+        for (RelocationReason reason : RelocationReason.values()) {
+            if (reason == RelocationReason.NONE_IN_STOCK)
+                continue;
+            lang.accept(WareworksLang.key(OptimizerScreenState.reasonKey(reason)), switch (reason) {
+                case NONE_IN_STOCK -> throw new IllegalStateException("NONE_IN_STOCK reads as the pip's own text");
+                case SPOKEN_FOR -> "All of it is requested or reserved";
+                case NOT_REACHABLE -> "Its places cannot be reached now";
+                case SAME_PRIORITY -> "All places have the same priority";
+                case NO_HIGHER_PRIORITY -> "No place with a higher priority";
+                case FILTER_DOES_NOT_FIT -> "Higher places' filters do not fit";
+                case NO_ROOM_HIGHER -> "No free room at a higher priority";
+                case ALREADY_ONE_PLACE -> "All of it lies in one place";
+                case HOME_FULL -> "Its home place has no room left";
+                case HOME_WORSE -> "Other places rank above its home";
+            });
+        }
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_PRIORITY),
+                "Give better places a higher priority");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_FILTER),
+                "A higher place needs a fitting filter");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_ROOM), "Make more room at a higher priority");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_REACH), "Load the chunk or mend the rails");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_REASON_HINT_HOME), "Make room in its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PIP_MERGING), "Being gathered into its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PIP_MERGED), "Done: all that fits is in one place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PLACES_SHORT), "#");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PLACES), "Places holding it");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_PLACES_HINT), "Click to gather it in its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MERGE), "Merge");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MERGE_HINT),
+                "Gathers each item in its home place");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MERGE_NOW),
+                "Only places that fit whole, with a free crane");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST), "Clipboard");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_LIST_HINT),
                 "Click a clipboard here to add its items");
@@ -1760,15 +1845,17 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_CANCEL_HINT), "A trip under way is finished");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_HINT), "Set items, then press Optimise");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_NO_WAREHOUSE), "Not part of a warehouse");
+        lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_MISALIGNED), "Not in a warehouse: face the aisle");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_RUNNING), "Moved %1$s, %2$s trips left");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_FINISHED), "Done: moved %1$s");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_OUT_OF_TRIPS), "Out of trips: moved %1$s");
         lang.accept(WareworksLang.key(WareworksLang.OPTIMIZER_CANCELLED), "Stopped: moved %1$s");
         for (OptimizerScreenState.Message message : OptimizerScreenState.Message.values()) {
-            if (message == OptimizerScreenState.Message.NONE)
-                continue;
+            if (!message.ownSentence())
+                continue; // NONE says nothing; the two "not part of a warehouse" answers share the status line's keys
             lang.accept(WareworksLang.key(message.langKey()), switch (message) {
-                case NONE -> throw new IllegalStateException("NONE has no sentence");
+                case NONE, NO_WAREHOUSE, MISALIGNED ->
+                        throw new IllegalStateException(message + " has no sentence of its own");
                 // The count last, after a colon: it may be 1, and a fixed plural behind it would be wrong then.
                 case ADDED -> "Items added: %1$s";
                 case ADDED_NO_ROOM -> "Added %1$s; %2$s found no free row";

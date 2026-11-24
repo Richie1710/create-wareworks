@@ -133,14 +133,29 @@ public record ProductionPlan<K, L>(List<PlanNode<K, L>> nodes, int depth, long i
         if (lines.size() > ProductionOrder.MAX_LINES)
             throw new IllegalArgumentException("node " + node.index() + " holds too many lines: " + lines.size());
         int matched = 0;
+        int fluidLines = 0;
+        for (NodeLine<K> line : lines) {
+            if (line.isFluid())
+                fluidLines++;
+        }
+        // The fluid lines (issue #55): exactly one per fluid cell of the pattern, naming that cell's fluid, in cell order
+        // after the item lines. How many containers they hold is the planner's arithmetic; here only the shape.
+        if (fluidLines != pattern.fluids().size())
+            throw new IllegalArgumentException("node " + node.index() + " holds " + fluidLines
+                    + " fluid lines for " + pattern.fluids().size() + " fluid cells");
+        for (int cell = 0; cell < pattern.fluids().size(); cell++) {
+            NodeLine<K> line = lines.get(lines.size() - fluidLines + cell);
+            if (!line.fluid().filter(pattern.fluids().get(cell).fluid()::equals).isPresent())
+                throw new IllegalArgumentException("node " + node.index() + " does not pay fluid cell " + cell);
+        }
         for (ProductionEntry<K> ingredient : pattern.ingredients()) {
             long need = (long) ingredient.count() * node.runs();
             long paid = 0L;
             int keys = 0;
             boolean choice = pattern.isChoice(ingredient.key());
             for (NodeLine<K> line : lines) {
-                boolean belongs = choice ? line.choice().filter(ingredient.key()::equals).isPresent()
-                        : line.choice().isEmpty() && line.key().equals(ingredient.key());
+                boolean belongs = !line.isFluid() && (choice ? line.choice().filter(ingredient.key()::equals).isPresent()
+                        : line.choice().isEmpty() && line.key().equals(ingredient.key()));
                 if (!belongs)
                     continue;
                 if (choice && line.amount() % ingredient.count() != 0)
@@ -156,7 +171,7 @@ public record ProductionPlan<K, L>(List<PlanNode<K, L>> nodes, int depth, long i
                 throw new IllegalArgumentException("node " + node.index() + " pays " + ingredient.key() + " with "
                         + keys + " lines");
         }
-        if (matched != lines.size())
+        if (matched != lines.size() - fluidLines)
             throw new IllegalArgumentException("node " + node.index() + " holds a line no ingredient asks for");
     }
 

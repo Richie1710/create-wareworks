@@ -200,7 +200,10 @@ public class OptimizerMenu extends MenuBase<WarehouseOptimizerBlockEntity> {
             case IMPORT_CLIPBOARD -> importClipboard();
             case OPTIMISE -> started(contentHolder.rows().keys());
             case OPTIMISE_ROW -> started(contentHolder.rows().keyAt(row).map(List::of).orElse(List.of()));
-            case CANCEL -> contentHolder.cancel();
+            case MERGE -> started(contentHolder.rows().keys(), OptimizerOrder.Mode.MERGE);
+            case MERGE_ROW -> started(contentHolder.rows().keyAt(row).map(List::of).orElse(List.of()),
+                    OptimizerOrder.Mode.MERGE);
+            case CANCEL -> cancelled();
         };
         markDirty(); // also pushes back a refused action, so the screen never shows a row nobody stored
         return changed;
@@ -234,13 +237,21 @@ public class OptimizerMenu extends MenuBase<WarehouseOptimizerBlockEntity> {
     }
 
     private boolean started(List<ItemKey> keys) {
+        return started(keys, OptimizerOrder.Mode.OPTIMISE);
+    }
+
+    private boolean started(List<ItemKey> keys, OptimizerOrder.Mode mode) {
         if (keys.isEmpty()) {
             say(OptimizerScreenState.Message.NO_ITEMS, 0, 0);
             return false;
         }
-        Optional<OptimizerOrders.Start> start = contentHolder.optimise(keys);
-        if (start.isEmpty())
-            return false; // no warehouse: the status line already says so
+        Optional<OptimizerOrders.Start> start = contentHolder.optimise(keys, mode);
+        if (start.isEmpty()) {
+            // No warehouse this optimizer is a member of (issue #52): the press answers with the reason, so a click is
+            // never met with silence.
+            sayNotServed();
+            return false;
+        }
         switch (start.get()) {
             case STARTED -> {
                 return true;
@@ -249,6 +260,21 @@ public class OptimizerMenu extends MenuBase<WarehouseOptimizerBlockEntity> {
             case TOO_MANY_ORDERS -> say(OptimizerScreenState.Message.TOO_MANY_ORDERS, 0, 0);
         }
         return false;
+    }
+
+    /** Stops the running order; a stop without a warehouse to ask says why, like a press of Optimise. */
+    private boolean cancelled() {
+        if (contentHolder.controller().isEmpty()) {
+            sayNotServed();
+            return false;
+        }
+        return contentHolder.cancel();
+    }
+
+    /** Why no warehouse serves this optimizer: facing away from the aisle it stands in, or no aisle at all. */
+    private void sayNotServed() {
+        say(contentHolder.misaligned() ? OptimizerScreenState.Message.MISALIGNED
+                : OptimizerScreenState.Message.NO_WAREHOUSE, 0, 0);
     }
 
     private void say(OptimizerScreenState.Message next, int first, int second) {
@@ -302,13 +328,24 @@ public class OptimizerMenu extends MenuBase<WarehouseOptimizerBlockEntity> {
             return;
         lastPushGameTime = now;
         pushPending = false;
-        WarehouseControllerBlockEntity controller = contentHolder.controller().orElse(null);
-        OptimizerScreenState state = contentHolder.screenState(controller, roomsFor(controller, now), message,
-                messageFirst, messageSecond);
+        OptimizerScreenState state = screenState(now);
         if (state.equals(lastState))
             return;
         lastState = state;
         PacketDistributor.sendToPlayer(serverPlayer, new OptimizerScreenPayload(containerId, state));
+    }
+
+    /**
+     * Server: what the screen of this menu is shown now, the state {@link #broadcastChanges} pushes: the rows, whether
+     * the warehouse serves the optimizer, its order and what the last action had to say.
+     */
+    public OptimizerScreenState screenState() {
+        return screenState(gameTime());
+    }
+
+    private OptimizerScreenState screenState(long now) {
+        WarehouseControllerBlockEntity controller = contentHolder.controller().orElse(null);
+        return contentHolder.screenState(controller, roomsFor(controller, now), message, messageFirst, messageSecond);
     }
 
     /**

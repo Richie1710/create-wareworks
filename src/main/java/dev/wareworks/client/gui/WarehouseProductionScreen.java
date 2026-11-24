@@ -10,9 +10,11 @@ import com.simibubi.create.foundation.gui.AllGuiTextures;
 import com.simibubi.create.foundation.gui.menu.AbstractSimiContainerScreen;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.packagemode.PackageModeGate;
 import dev.wareworks.content.selector.SelectorRecipeCheck;
 import dev.wareworks.content.selector.SelectorTexts;
 import dev.wareworks.content.station.PatternFilterCells;
+import dev.wareworks.content.station.PatternFluids;
 import dev.wareworks.content.station.ProductionMenu;
 import dev.wareworks.content.station.ProductionMenuLayout;
 import dev.wareworks.content.station.ProductionPatterns;
@@ -20,6 +22,7 @@ import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.SelectorHold;
 import dev.wareworks.content.station.StoppedProduct;
 import dev.wareworks.core.production.CrafterPatternCheck;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.SelectorMode;
@@ -36,12 +39,17 @@ import net.createmod.catnip.lang.LangNumberFormat;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions;
+import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
@@ -142,6 +150,9 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private static final int COLOR_FILTER_FRAME = COLOR_SCROLL_SELECTED;
     /** How large a filter cell's badge (the filter itself) is drawn in its corner. */
     private static final float FILTER_BADGE_SCALE = 0.5F;
+    /** The amount of a four-digit fluid cell ("1000") is drawn smaller, so it stays inside the cell (issue #55). */
+    private static final float FLUID_COUNT_SCALE = 0.6F;
+    private static final int COLOR_FLUID_FRAME = 0xFF4F8FD8;
     /** The badge lies above the item and below the amount ({@link #COUNT_SHIFT_Z}). */
     private static final int FILTER_BADGE_Z = 60;
 
@@ -271,6 +282,11 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             playUiSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.6F, 1.4F);
             return true;
         }
+        int fluidCell = fluidCellAt(mouseX, mouseY);
+        if (fluidCell != NONE) {
+            clickFluidCell(fluidCell, button);
+            return true;
+        }
         int cell = cellAt(mouseX, mouseY);
         if (cell != NONE) {
             setEntry(selectedPattern, cell, menu.getCarried());
@@ -331,6 +347,15 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (scrollY == 0)
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        int fluidCell = fluidCellAt(mouseX, mouseY);
+        if (fluidCell != NONE) {
+            Optional<FluidCell> fluid = state.fluid(selectedPattern, fluidCell);
+            if (fluid.isPresent()) {
+                send(ProductionPatternPayload.setFluid(menu.containerId, selectedPattern, fluidCell,
+                        fluid.get().fluid(), fluid.get().stepped((int) Math.signum(scrollY), fluidWheelStep())));
+                return true;
+            }
+        }
         int cell = cellAt(mouseX, mouseY);
         if (cell != NONE) {
             Optional<ProductionScreenState.EntryView> view = state.entry(selectedPattern, cell);
@@ -346,6 +371,38 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    /** Millibuckets one wheel notch changes a fluid cell by: 50, with Shift 250, with Ctrl 1000 (issue #55). */
+    public int fluidWheelStep() {
+        if (hasControlDown())
+            return FluidCell.STEP_LARGE;
+        return hasShiftDown() ? FluidCell.STEP_MEDIUM : FluidCell.STEP_SMALL;
+    }
+
+    /**
+     * A click on fluid cell {@code cell} of the selected pattern (issue #55, ADR-089): a left click with a filled bucket
+     * (or any item that holds a fluid) sets the cell to that fluid and keeps the amount when it is the same fluid, else
+     * takes the container's content; a right click, or a left click with an empty hand, clears the cell. Nothing is taken
+     * from the cursor: the cell is a ghost like every pattern cell.
+     */
+    private void clickFluidCell(int cell, int button) {
+        if (selectedPattern < 0 || selectedPattern >= menu.patternSlots())
+            return;
+        Optional<FluidCell> current = state.fluid(selectedPattern, cell);
+        if (button == 1 || (button == 0 && menu.getCarried().isEmpty())) {
+            if (current.isPresent())
+                send(ProductionPatternPayload.clearFluid(menu.containerId, selectedPattern, cell));
+            return;
+        }
+        if (button != 0)
+            return;
+        Optional<PatternFluids.Contained> held = PatternFluids.contained(menu.getCarried());
+        if (held.isEmpty())
+            return;
+        int amount = current.filter(existing -> existing.fluid().equals(held.get().fluid()))
+                .map(FluidCell::millibuckets).orElse(FluidCell.clampMb(held.get().millibuckets()));
+        send(ProductionPatternPayload.setFluid(menu.containerId, selectedPattern, cell, held.get().fluid(), amount));
     }
 
     /** The first free grid cell of the selected pattern, or {@link #NONE}. */
@@ -431,6 +488,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 graphics.renderOutline(cellX, cellY, ProductionMenuLayout.SLOT, ProductionMenuLayout.SLOT,
                         COLOR_FILTER_FRAME);
         }
+        renderFluidCells(graphics, mouseX, mouseY);
         // The arrow between the grid and the result: this is a pattern, not a crafting grid. A pattern the Crafter
         // Feeder refuses gets a red frame round grid and result and a red cross where the arrow was (issue #34).
         boolean refused = isRed(selectedPattern);
@@ -447,6 +505,56 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                     + ProductionMenuLayout.SLOT + 1;
             graphics.renderOutline(left, top, right - left, bottom - top, COLOR_REFUSED);
         }
+    }
+
+    /**
+     * The two fluid cells of the selected pattern (issue #55): the fluid's own sprite in its colour with the amount in
+     * millibuckets, in the column of the result cell above and below it. An unknown fluid is drawn as a red cross.
+     */
+    private void renderFluidCells(GuiGraphics graphics, int mouseX, int mouseY) {
+        int hovered = fluidCellAt(mouseX, mouseY);
+        for (int cell = 0; cell < ProductionPatterns.FLUID_CELLS; cell++) {
+            int cellX = leftPos + layout.fluidCellX(cell);
+            int cellY = topPos + layout.fluidCellY(cell);
+            AllGuiTextures.STOCK_KEEPER_REQUEST_SLOT.render(graphics, cellX, cellY);
+            if (hovered == cell)
+                graphics.fill(cellX, cellY, cellX + ProductionMenuLayout.SLOT, cellY + ProductionMenuLayout.SLOT,
+                        COLOR_CELL_HOVER);
+            Optional<FluidCell> fluid = state.fluid(selectedPattern, cell);
+            if (fluid.isEmpty())
+                continue;
+            renderFluid(graphics, fluid.get(), cellX + ITEM_INSET, cellY + ITEM_INSET);
+            graphics.renderOutline(cellX, cellY, ProductionMenuLayout.SLOT, ProductionMenuLayout.SLOT,
+                    COLOR_FLUID_FRAME);
+        }
+    }
+
+    /** One fluid sprite with its amount, drawn like an item cell's count (issue #55). */
+    private void renderFluid(GuiGraphics graphics, FluidCell cell, int x, int y) {
+        Optional<FluidStack> stack = PatternFluids.stackOf(cell.fluid(), cell.millibuckets());
+        if (stack.isEmpty()) {
+            graphics.drawString(font, "?", x + 5, y + 4, COLOR_REFUSED, false);
+        } else {
+            IClientFluidTypeExtensions extensions = IClientFluidTypeExtensions.of(stack.get().getFluid());
+            ResourceLocation still = extensions.getStillTexture(stack.get());
+            if (still != null && minecraft != null) {
+                TextureAtlasSprite sprite = minecraft.getTextureAtlas(InventoryMenu.BLOCK_ATLAS).apply(still);
+                int tint = extensions.getTintColor(stack.get());
+                float alpha = (tint >>> 24 & 0xFF) / 255.0F;
+                graphics.blit(x, y, 0, 16, 16, sprite, (tint >> 16 & 0xFF) / 255.0F, (tint >> 8 & 0xFF) / 255.0F,
+                        (tint & 0xFF) / 255.0F, alpha <= 0.0F ? 1.0F : alpha);
+            }
+        }
+        String text = Integer.toString(cell.millibuckets());
+        float scale = text.length() > 3 ? FLUID_COUNT_SCALE : COUNT_SCALE;
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(0, 0, COUNT_SHIFT_Z);
+        pose.scale(scale, scale, 1.0F);
+        int right = Math.round((x + ProductionMenuLayout.SLOT - 2 - ITEM_INSET) / scale) - font.width(text);
+        int bottom = Math.round((y + ProductionMenuLayout.SLOT - 2 - ITEM_INSET) / scale) - font.lineHeight;
+        graphics.drawString(font, text, right, bottom, COLOR_TEXT, true);
+        pose.popPose();
     }
 
     /** One tab per pattern slot, showing that pattern's result; only the visible rows of a scrolling strip. */
@@ -821,6 +929,10 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             tooltip.addAll(selectorRefusalLines(selectedPattern));
             return tooltip;
         }
+        int fluidCell = fluidCellAt(mouseX, mouseY);
+        if (fluidCell != NONE)
+            return fluidLines(state.fluid(selectedPattern, fluidCell), refusedAt(selectedPattern),
+                    PackageModeGate.enabledOnClient());
         int cell = cellAt(mouseX, mouseY);
         if (cell != NONE) {
             Optional<ProductionScreenState.EntryView> entry = state.entry(selectedPattern, cell);
@@ -855,6 +967,56 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                         .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         }
         return tooltip;
+    }
+
+    /**
+     * A fluid cell's tooltip (issue #55, ADR-089): the fluid's name, that it is a fluid ingredient and how much one run
+     * takes; how many runs one bucket serves, or in gold that the amount does not divide 1000 mB and a rest stays in the
+     * player's machine; that fluid reaches the station only in whole filled buckets; the reason in red when a Crafter
+     * Feeder skips the pattern or package mode makes nothing; and what a click, the wheel and a right click do. An empty
+     * cell says only what sets it. Public for the dev harness.
+     *
+     * @param refused the Crafter Feeder's refusal of the pattern, if it has one
+     */
+    public static List<Component> fluidLines(Optional<FluidCell> cell,
+            Optional<ProductionScreenState.PatternCheckView> refused, boolean packageMode) {
+        List<Component> lines = new ArrayList<>();
+        if (cell.isEmpty()) {
+            lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_CELL).copy()
+                    .withStyle(ChatFormatting.GRAY));
+            lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_SET_HINT).copy()
+                    .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+            return lines;
+        }
+        FluidCell fluid = cell.get();
+        Optional<FluidStack> stack = PatternFluids.stackOf(fluid.fluid(), fluid.millibuckets());
+        if (stack.isPresent()) {
+            lines.add(stack.get().getHoverName());
+        } else {
+            lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_UNKNOWN).copy()
+                    .withStyle(ChatFormatting.RED));
+            lines.add(Component.literal(fluid.fluid()).withStyle(ChatFormatting.DARK_GRAY));
+        }
+        lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_CELL).copy()
+                .withStyle(ChatFormatting.GRAY));
+        lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_AMOUNT,
+                LangNumberFormat.format(fluid.millibuckets())).copy().withStyle(ChatFormatting.WHITE));
+        if (fluid.dividesBucket())
+            lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_BUCKETS,
+                    LangNumberFormat.format(FluidCell.BUCKET_MB / fluid.millibuckets()))));
+        else
+            lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_REST).copy()
+                    .withStyle(ChatFormatting.GOLD));
+        lines.add(gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_WHOLE)));
+        refused.ifPresent(check -> lines.addAll(refusalLines(check)));
+        if (packageMode)
+            lines.add(WareworksLang.translateDirect(WareworksLang.GOGGLES_PACKAGE_MODE_NO_PRODUCTION).copy()
+                    .withStyle(ChatFormatting.RED));
+        lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_WHEEL_HINT).copy()
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_CLEAR_HINT).copy()
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        return lines;
     }
 
     /**
@@ -1145,6 +1307,15 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     private int cellAt(double mouseX, double mouseY) {
         for (int cell = 0; cell < ProductionMenuLayout.PATTERN_CELLS; cell++) {
             if (isOver(mouseX, mouseY, leftPos + layout.patternCellX(cell), topPos + layout.patternCellY(cell)))
+                return cell;
+        }
+        return NONE;
+    }
+
+    /** The fluid cell (0 or 1) under the mouse, or {@link #NONE} (issue #55). Public for the dev harness. */
+    public int fluidCellAt(double mouseX, double mouseY) {
+        for (int cell = 0; cell < ProductionPatterns.FLUID_CELLS; cell++) {
+            if (isOver(mouseX, mouseY, leftPos + layout.fluidCellX(cell), topPos + layout.fluidCellY(cell)))
                 return cell;
         }
         return NONE;

@@ -3,6 +3,7 @@ package dev.wareworks.content.controller;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,8 +38,10 @@ import dev.wareworks.core.job.JobPlanner;
 import dev.wareworks.core.job.JobType;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.PlanResult;
+import dev.wareworks.core.job.PlannedJob;
 import dev.wareworks.core.job.PlannerInput;
 import dev.wareworks.core.job.RefusalMemory;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.job.RerouteTarget;
 import dev.wareworks.core.job.ReservationLedger;
 import dev.wareworks.core.job.ReservationView;
@@ -163,6 +166,13 @@ final class CraneDispatch {
     @Nullable
     private NoJobReason lastReason;
     /**
+     * Why each input station's items got no job in the last planning run that surveyed it (issue #53): the reason its
+     * own goggles show while it holds items ({@link #storeReasonAt}). Updated by every run that reached the arrival
+     * stage, removed for an input a store job was just planned from, and cleared when nothing waits anywhere. Not saved:
+     * the first run after a load answers again.
+     */
+    private final Map<RackPosition, NoJobReason> storeReasons = new HashMap<>();
+    /**
      * Whether the planning run being built skipped at least one rack because the crane cannot drive to it. Set while
      * the input is built and read when the planner came back empty, so the goggles name the rails rather than the
      * stock (M21, ADR-033).
@@ -230,6 +240,28 @@ final class CraneDispatch {
         return Optional.ofNullable(lastReason);
     }
 
+    /** Why the items at input station {@code input} got no job in the last run that surveyed it (issue #53). */
+    Optional<NoJobReason> storeReasonAt(RackPosition input) {
+        return Optional.ofNullable(storeReasons.get(input));
+    }
+
+    /**
+     * Keeps what a planning run said about each input station it surveyed (issue #53). A store job planned from an
+     * input clears that input's reason: its items are on their way. Only the first round of a dispatch is kept: a later
+     * round ({@code assigned}) plans with the reach of the cranes still free, so "full" or "no free place for this
+     * item type" there may only mean that the place lies behind a crane already given a job (review fix, issue #53).
+     */
+    private void noteStoreReasons(PlanResult<ItemKey, RackPosition> result, boolean assigned) {
+        if (!assigned)
+            storeReasons.putAll(result.storeReasons());
+        result.job().map(PlannedJob::job).ifPresent(this::clearStoreReason);
+    }
+
+    private void clearStoreReason(TransportJob<ItemKey, RackPosition> job) {
+        if (job.type() == JobType.STORE)
+            storeReasons.remove(job.source());
+    }
+
     boolean isBackingOff(long now) {
         return now < backoffUntilTick;
     }
@@ -289,8 +321,10 @@ final class CraneDispatch {
         // answers disagree within one tick (M18 review). During a back-off nothing collects, so it is not built at all.
         List<RackPosition> collectSources = retrieveOnly ? List.of() : controller.collectSources();
         if (retrieveOnly ? !hasBackoffWork() : !hasWork(level, layout, collectSources)) {
-            if (!retrieveOnly)
+            if (!retrieveOnly) {
                 lastReason = NoJobReason.NO_WORK;
+                storeReasons.clear();
+            }
             return;
         }
         PlannerInput.Builder<ItemKey, RackPosition> builder = input(level, layout, dock.get(), collectSources)
@@ -309,10 +343,12 @@ final class CraneDispatch {
                 LOGGER.error("Warehouse controller at {} could not plan a job", controller.getBlockPos(), e);
             return;
         }
-        if (!retrieveOnly)
+        if (!retrieveOnly) {
             arrivalCursor = result.nextArrivalCursor();
+            noteStoreReasons(result, false);
+        }
         // One crane: no other crane can have held a job during this run, so "nothing found" means "nothing fits".
-        controller.onRelocationsExhausted(result.relocationsExhausted());
+        controller.onRelocationsExhausted(result.relocationReasons());
         if (result.job().isEmpty()) {
             noJob(result, retrieveOnly, now);
             return;
@@ -387,6 +423,7 @@ final class CraneDispatch {
         // of the aisle — including the input a bucket arriving would cure the request through.
         if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
                 || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
+                || result.reasons().contains(NoJobReason.NO_LOCATION_FOR_TYPE)
                 || result.reasons().contains(NoJobReason.PACKAGE_BAY_NEEDS_FILTER)
                 || result.reasons().contains(NoJobReason.PORT_FULL))
             backoffUntilTick = now + Math.max(1, WareworksConfig.fullBackoffTicks());
@@ -421,8 +458,10 @@ final class CraneDispatch {
         boolean retrieveOnly = isBackingOff(now);
         List<RackPosition> collectSources = retrieveOnly ? List.of() : controller.collectSources();
         if (retrieveOnly ? !hasBackoffWork() : !hasWork(level, layout, collectSources)) {
-            if (!retrieveOnly)
+            if (!retrieveOnly) {
                 lastReason = NoJobReason.NO_WORK;
+                storeReasons.clear();
+            }
             return;
         }
         boolean assigned = false;
@@ -488,13 +527,15 @@ final class CraneDispatch {
                 now);
         if (result == null)
             return Planned.NOTHING;
+        if (!retrieveOnly)
+            noteStoreReasons(result, assigned);
         // Only this run asks with the reach of every free crane, and only with every crane free is that the whole
         // warehouse; the re-plan below asks with one crane's reach and never ends a relocation. With another crane busy
         // the needs this run found nowhere for are asked once more with the whole warehouse's reach, or a warehouse that
         // always has one crane at work would never end an item that has nowhere better to go.
         if (!othersBusy)
-            controller.onRelocationsExhausted(result.relocationsExhausted());
-        else if (!result.relocationsExhausted().isEmpty())
+            controller.onRelocationsExhausted(result.relocationReasons());
+        else if (!result.relocationReasons().isEmpty())
             controller.onRelocationsExhausted(exhaustedEverywhere(level, layout, planning, result.relocationsExhausted(),
                     now));
         if (result.job().isEmpty()) {
@@ -525,8 +566,10 @@ final class CraneDispatch {
             }
             chosen = replanning;
         }
-        if (!retrieveOnly)
+        if (!retrieveOnly) {
             arrivalCursor = result.nextArrivalCursor();
+            clearStoreReason(job);
+        }
         jobPlanned(result, job, retrieveOnly, now);
         track(job);
         free.remove(chosen);
@@ -549,15 +592,15 @@ final class CraneDispatch {
      * relocation stage alone and only these needs, made only after a run that already searched them; a need whose
      * better place is merely behind the busy crane stays open and is searched again at the next dispatch.
      */
-    private Set<UUID> exhaustedEverywhere(Level level, WarehouseLayout layout, FreeCrane planning, Set<UUID> exhausted,
-            long now) {
+    private Map<UUID, RelocationReason> exhaustedEverywhere(Level level, WarehouseLayout layout, FreeCrane planning,
+            Set<UUID> exhausted, long now) {
         List<PlannerInput.RelocateNeed<ItemKey>> needs = new ArrayList<>();
         for (PlannerInput.RelocateNeed<ItemKey> need : controller.relocationNeeds()) {
             if (exhausted.contains(need.id()))
                 needs.add(need);
         }
         if (needs.isEmpty())
-            return Set.of();
+            return Map.of();
         List<Predicate<RackPosition>> reaches = new ArrayList<>();
         Optional<CraneTraffic> traffic = controller.traffic();
         for (StackerCraneBlockEntity crane : controller.cranes()) {
@@ -578,11 +621,11 @@ final class CraneDispatch {
         try {
             return planner.plan(input(level, layout, planning.crane(), List.of(), anyCrane)
                     .requests(List.of()).supplies(List.of()).inputs(List.of()).collectSources(List.of())
-                    .relocations(needs).build()).relocationsExhausted();
+                    .relocations(needs).build()).relocationReasons();
         } catch (RuntimeException e) {
             if (planningFailures.tryLog(now))
                 LOGGER.error("Warehouse controller at {} could not plan a job", controller.getBlockPos(), e);
-            return Set.of();
+            return Map.of();
         } finally {
             unreachableSkipped = skipped;
         }
@@ -995,6 +1038,21 @@ final class CraneDispatch {
             @Override
             public int liveFill(RackPosition bay, ItemKey emptyKey, int amount) {
                 return simulateFill(level, layout, bay, emptyKey, amount);
+            }
+
+            // Both answers are memoised per planner input: a blocked line asks again at every dispatch attempt, and
+            // each is an order scan (and the first a buffer read).
+            private final Map<RackPosition, Integer> held = new HashMap<>();
+            private final Map<RackPosition, List<UUID>> lines = new HashMap<>();
+
+            @Override
+            public int heldAtStation(RackPosition station) {
+                return held.computeIfAbsent(station, controller::fluidContainersHeldAt);
+            }
+
+            @Override
+            public java.util.Collection<UUID> fluidLinesAt(RackPosition station) {
+                return lines.computeIfAbsent(station, controller::openFluidLinesAt);
             }
         };
     }

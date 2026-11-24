@@ -107,6 +107,27 @@ class ProductionPlannerTest {
         return results;
     }
 
+    /** A supply of water in {@code fluidMb} millibuckets, in buckets of 1000 mB, into a buffer of {@code slots}. */
+    private static FluidSupply<String> waterOf(long fluidMb, int slots) {
+        return new FluidSupply<>() {
+            @Override
+            public Optional<Delivery<String>> delivery(String fluid) {
+                return "minecraft:water".equals(fluid)
+                        ? Optional.of(new Delivery<>("water_bucket", "bucket", 1000, fluidMb)) : Optional.empty();
+            }
+
+            @Override
+            public int bufferSlots() {
+                return slots;
+            }
+
+            @Override
+            public int stackSize(String key) {
+                return 64;
+            }
+        };
+    }
+
     // --- a plain single-level order is exactly what M11 answers -----------------------------------------------------
 
     /**
@@ -698,6 +719,23 @@ class ProductionPlannerTest {
                 TABLE, 1);
         refused(unmatched, PlanRefusal.NO_MATCHING_ITEM, anyPlank);
         seen.add(PlanRefusal.NO_MATCHING_ITEM);
+        // The three refusals of a fluid cell (issue #55, ADR-089), each naming what a player can walk to.
+        ProductionPattern<String> mud = new ProductionPattern<>(List.of(new ProductionEntry<>(LOG, 1)),
+                new ProductionEntry<>(TABLE, 1), Set.of(), List.of(new FluidCell("minecraft:water", 250)));
+        stock.clear();
+        stocked(LOG, 4);
+        stocked("bucket", 4);
+        refused(ProductionPlanner.plan(input(aisle(CRAFTER, mud)).withFluids(waterOf(0L, 9)), TABLE, 1),
+                PlanRefusal.FLUID_MISSING, "water_bucket");
+        seen.add(PlanRefusal.FLUID_MISSING);
+        stock.remove("bucket");
+        refused(ProductionPlanner.plan(input(aisle(CRAFTER, mud)).withFluids(waterOf(5000L, 9)), TABLE, 1),
+                PlanRefusal.NO_EMPTY_CONTAINER, "water_bucket");
+        seen.add(PlanRefusal.NO_EMPTY_CONTAINER);
+        stocked("bucket", 4);
+        refused(ProductionPlanner.plan(input(aisle(CRAFTER, mud)).withFluids(waterOf(5000L, 1)), TABLE, 1),
+                PlanRefusal.BUFFER_TOO_SMALL, TABLE);
+        seen.add(PlanRefusal.BUFFER_TOO_SMALL);
         assertEquals(EnumSet.allOf(PlanRefusal.class), seen, "every refusal has a case here");
         for (PlanRefusal refusal : PlanRefusal.values())
             assertTrue(refusal.langKey().startsWith("gui.production.plan.refusal."), refusal::langKey);

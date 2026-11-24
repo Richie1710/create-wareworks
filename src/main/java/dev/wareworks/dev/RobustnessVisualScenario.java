@@ -43,6 +43,8 @@ import dev.wareworks.content.station.TerminalDoorRow;
 import dev.wareworks.content.station.TerminalDoors;
 import dev.wareworks.content.station.TerminalPreferences;
 import dev.wareworks.content.station.TerminalRequestOutcome;
+import dev.wareworks.content.station.WarehouseOptimizerBlock;
+import dev.wareworks.content.station.WarehouseOptimizerBlockEntity;
 import dev.wareworks.content.station.WarehouseOutputBlock;
 import dev.wareworks.content.station.WarehouseOutputBlockEntity;
 import dev.wareworks.content.station.WarehouseInputBlock;
@@ -76,6 +78,8 @@ import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.crane.CranePose;
 import dev.wareworks.core.crane.CraneState;
 import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.optimizer.OptimizerOrder;
+import dev.wareworks.core.optimizer.OptimizerOrders;
 import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RequestQueue;
 import dev.wareworks.core.job.RetrievalRequest;
@@ -387,6 +391,8 @@ public final class RobustnessVisualScenario implements VisualScenario {
      * interface, which leaves the interface standing.
      */
     private volatile int bayBroken;
+    /** 1 while the fluid phase's own production station stands ({@link #FLUID_STATION}), else 0. */
+    private volatile int extraStations;
 
     /** The fluid census every step is asserted against, in millibuckets per fluid ({@link SceneFluidCensus}). */
     private volatile Map<FluidKey, Long> expectedFluid = Map.of();
@@ -457,8 +463,12 @@ public final class RobustnessVisualScenario implements VisualScenario {
         doorOrder(script);
         feederOrder(script);
         chunkHold(script);
+        mergeOrder(script);
         twoCranesInFlight(script);
         packageMode(script);
+        // Last of the controller phases, after package mode: a finished order with a container leaves that mode's drain
+        // rule an allowance for the empty bucket that came back while the mode was off, so no phase after it may read it.
+        fluidSupplyInFlight(script);
         brokenBlocks(script);
 
         script.client("robustness: every step passed",
@@ -1016,6 +1026,331 @@ public final class RobustnessVisualScenario implements VisualScenario {
                         (server, context) -> refill(server, context, bayTailFill()))
                 .serverUntil("robustness: wait until the crane carries items again", this::craneCarries,
                         JOB_TIMEOUT_TICKS);
+    }
+
+    // --- fluid supply in flight (issue #55, ADR-089) -----------------------------------------------------------------
+
+    /** The product of the fluid pattern: an item no other phase moves. */
+    private static final ItemKey FLUID_PRODUCT = ItemKey.of(Items.OBSIDIAN);
+    /** The pattern slot of the fluid pattern. */
+    private static final int FLUID_PATTERN_SLOT = 0;
+    /**
+     * The station of the fluid phase, above the input: a station without a feeder, because a Crafter Feeder refuses a
+     * pattern with a fluid cell and the warehouse then never offers it. It is placed for the phase and broken again.
+     */
+    private static final RackPosition FLUID_STATION = RackPosition.of(0, 1, Side.RIGHT);
+
+    /** The production order of the fluid phase. */
+    private volatile UUID fluidOrder;
+
+    /**
+     * <b>A filled bucket on its way to a production station survives a chunk round trip and a save, quit and rejoin</b>
+     * (issue #55, ADR-089). The feeder's station gets a pattern with one fluid cell (1000 mB of lava, no item), the bay
+     * is given the lava and one empty bucket is stored. The terminal orders the product: the controller plans a fluid
+     * line, the crane fills the bucket at the bay and carries it to the station, and once it carries the <b>filled</b>
+     * bucket the motor stops. The aisle is unloaded and loaded again, then the world is saved, left and joined again:
+     * each time the crane must still carry the same filled bucket for the same supply line, and both censuses must hold.
+     * With the motor on again the bucket arrives in the station's buffer, the player's machine takes it out and returns
+     * the product and the empty bucket through the input, and the order completes. The phase then clears the pattern
+     * and breaks its station, so the phases after it see the warehouse they always saw (a cancelled order would leave a
+     * package mode drain allowance for its product and its bucket behind).
+     */
+    private void fluidSupplyInFlight(VisualScript script) {
+        script.server("robustness: place the production station of the fluid phase", (server, context) -> {
+                    extraStations = 1;
+                    BranchLayout layout = layout(context.origin());
+                    server.overworld().setBlockAndUpdate(layout.rackPos(FLUID_STATION),
+                            WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState().setValue(
+                                    WarehouseProductionBlock.FACING,
+                                    layout.sideDirection(FLUID_STATION.side()).getOpposite()));
+                })
+                .serverUntil("robustness: wait until the controller knows the second station",
+                        (server, context) -> controller(server, context).productionStations().size() == 2
+                                && !controller(server, context).isMembershipDirty()
+                                && controller(server, context).status() == ControllerStatus.READY, JOB_TIMEOUT_TICKS)
+                .server("robustness: give the bay lava and store one empty bucket for the fluid supply", (server, context) -> {
+                    census(server, "before the fluid supply phase");
+                    FluidBayBlockEntity bay = fluidBay(server, context);
+                    if (bay.fill(BAY_FLUID.toStack(FluidType.BUCKET_VOLUME), false) != FluidType.BUCKET_VOLUME)
+                        throw new VisualTestException("the fluid bay refused the lava of the fluid supply phase");
+                    expectedFluid = SceneFluidCensus.plus(expectedFluid, BAY_FLUID, FluidType.BUCKET_VOLUME);
+                    refill(server, context, List.of(EMPTY_BUCKET.toStack(1)));
+                })
+                .serverUntil("robustness: wait until the empty bucket is stored", this::craneIdleAndInputEmpty,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census before the fluid order",
+                        (server, context) -> census(server, "lava in the bay and an empty bucket in stock"))
+                .server("robustness: write the fluid pattern and order its product", this::startFluidOrder)
+                .serverUntil("robustness: wait until the crane carries the filled bucket to the station, then stop "
+                        + "the motor", (server, context) -> stopWhenCarryingForFill(server, context, FILLED_BUCKET),
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: the bay filled the bucket; move the camera far away", (server, context) -> {
+                    expected = SceneItemCensus.filled(expected, EMPTY_BUCKET, FILLED_BUCKET, 1);
+                    census(server, "the bay filled the bucket of the fluid supply");
+                    dockBeforeUnload = crane(server, context);
+                    moveAway(server, context);
+                })
+                .serverUntil("robustness: wait until the aisle chunks with the fluid supply really unload",
+                        this::dockUnloaded, UNLOAD_TIMEOUT_TICKS)
+                .waitTicks(UNLOADED_TICKS)
+                .server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded again", this::sceneLoaded, CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the fluid supply trip was read from the save again", (server, context) -> {
+                    assertDockWasReloaded(server, context);
+                    requireFluidTrip(server, context, "after the chunk round trip");
+                })
+                .server("robustness: census after the chunk round trip during the fluid supply",
+                        (server, context) -> census(server, "chunk unload and reload while a filled bucket was on its "
+                                + "way to a station"))
+                .server("robustness: save the world while the filled bucket is on its way to the station",
+                        (server, context) -> {
+                            requireFluidTrip(server, context, "before the save");
+                            server.saveEverything(true, true, true);
+                        });
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: check that the fluid supply trip came back after the rejoin",
+                        (server, context) -> requireFluidTrip(server, context, "after save, quit and rejoin"))
+                .server("robustness: census after save, quit and rejoin during the fluid supply",
+                        (server, context) -> census(server, "save, quit and rejoin while a filled bucket was on its "
+                                + "way to a station"))
+                .server("robustness: start the motor again", this::powerOn)
+                .serverUntil("robustness: wait until the filled bucket lies in the station's buffer",
+                        (server, context) -> fluidStation(server, context).bufferedItems().count(FILLED_BUCKET) == 1
+                                && craneIdleAndEmpty(server, context), JOB_TIMEOUT_TICKS)
+                .server("robustness: census with the bucket in the station", (server, context) -> {
+                    census(server, "the filled bucket arrived in the station's buffer");
+                    LOGGER.info(PREFIX + "robustness: PASS the filled bucket reached the station after a chunk round "
+                            + "trip and a rejoin, census {}, fluid {} mB", SceneItemCensus.describe(expected),
+                            SceneFluidCensus.describe(expectedFluid));
+                })
+                .server("robustness: the player's machine takes the bucket, makes the product and returns the empty "
+                        + "bucket", this::machineWorksOnTheBucket)
+                .serverUntil("robustness: wait until the order is complete and the product is in the terminal",
+                        (server, context) -> controller(server, context).productionOrders().stream().anyMatch(
+                                order -> order.id().equals(fluidOrder) && order.state() == ProductionOrderState.COMPLETE)
+                                && terminal(server, context).bufferedItems().count(FLUID_PRODUCT) == 1
+                                && craneIdleAndInputEmpty(server, context), JOB_TIMEOUT_TICKS)
+                .server("robustness: the player takes the product out and the pattern goes",
+                        this::takeFluidProductAndClear)
+                .server("robustness: census after the fluid supply phase",
+                        (server, context) -> census(server, "the fluid supply phase ended and the pattern is gone"))
+                .server("robustness: break the station of the fluid phase", (server, context) -> {
+                    extraStations = 0;
+                    server.overworld().setBlockAndUpdate(layout(context.origin()).rackPos(FLUID_STATION),
+                            Blocks.AIR.defaultBlockState());
+                })
+                .serverUntil("robustness: wait until the controller forgot the second station",
+                        (server, context) -> controller(server, context).productionStations().size() == 1
+                                && !controller(server, context).isMembershipDirty()
+                                && controller(server, context).status() == ControllerStatus.READY, JOB_TIMEOUT_TICKS)
+                .server("robustness: census with the warehouse as before",
+                        (server, context) -> census(server, "the station of the fluid phase is gone again"));
+    }
+
+    private void startFluidOrder(MinecraftServer server, VisualContext context) {
+        WarehouseProductionBlockEntity station = fluidStation(server, context);
+        if (station.editFluidCell(FLUID_PATTERN_SLOT, 0, "minecraft:lava", FluidType.BUCKET_VOLUME)
+                != WarehouseProductionBlockEntity.EditOutcome.CHANGED
+                || !station.setPatternEntry(FLUID_PATTERN_SLOT, ProductionPatterns.RESULT_ENTRY, FLUID_PRODUCT, 1))
+            throw new VisualTestException("the fluid pattern could not be written into the station");
+        RequestResult result = controller(server, context).request(terminal(server, context).getBlockPos(),
+                FLUID_PRODUCT, 1);
+        if (!result.isAccepted() || result.producing() != 1)
+            throw new VisualTestException("the fluid order was not produced in full: " + result);
+        fluidOrder = controller(server, context).productionOrders().stream()
+                .filter(order -> order.isOpen() && order.result().equals(FLUID_PRODUCT)).map(ProductionOrder::id)
+                .findFirst().orElseThrow(() -> new VisualTestException("no production order for the fluid product"));
+        LOGGER.info(PREFIX + "robustness: ordered one {} through a fluid cell of lava (order {})", FLUID_PRODUCT,
+                fluidOrder);
+    }
+
+    /** The crane carries the filled bucket of this order's fluid line, and the order is still open. */
+    private void requireFluidTrip(MinecraftServer server, VisualContext context, String when) {
+        if (!carriesForFill(server, context, FILLED_BUCKET))
+            throw new VisualTestException(when + " the crane does not carry the filled bucket of the fluid supply: "
+                    + crane(server, context).currentJob());
+        if (controller(server, context).productionOrders().stream().noneMatch(
+                order -> order.id().equals(fluidOrder) && order.isOpen()))
+            throw new VisualTestException(when + " the fluid order is gone: "
+                    + controller(server, context).productionOrders());
+    }
+
+    /**
+     * The player's machine: the filled bucket leaves the station through its extract-only handler (the lava goes with
+     * it, out of the census), and what the machine made and the empty bucket come back through the warehouse input, which
+     * is what completes the order.
+     */
+    private void machineWorksOnTheBucket(MinecraftServer server, VisualContext context) {
+        WarehouseProductionBlockEntity station = fluidStation(server, context);
+        IItemHandler buffer = station.externalHandler();
+        int taken = 0;
+        for (int slot = 0; slot < buffer.getSlots(); slot++) {
+            if (FILLED_BUCKET.matches(buffer.getStackInSlot(slot)))
+                taken += buffer.extractItem(slot, 1, false).getCount();
+        }
+        if (taken != 1)
+            throw new VisualTestException("the station held " + taken + " filled buckets, not one");
+        expected = SceneItemCensus.plus(expected, FILLED_BUCKET, -1);
+        expectedFluid = SceneFluidCensus.plus(expectedFluid, BAY_FLUID, -FluidType.BUCKET_VOLUME);
+        census(server, "the player's machine took the lava bucket out of the station");
+        refill(server, context, List.of(FLUID_PRODUCT.toStack(1), EMPTY_BUCKET.toStack(1)));
+    }
+
+    private void takeFluidProductAndClear(MinecraftServer server, VisualContext context) {
+        WarehouseTerminalBlockEntity terminal = terminal(server, context);
+        IItemHandler buffer = terminal.externalHandler();
+        int taken = 0;
+        for (int slot = 0; slot < buffer.getSlots(); slot++) {
+            if (FLUID_PRODUCT.matches(buffer.getStackInSlot(slot)))
+                taken += buffer.extractItem(slot, 1, false).getCount();
+        }
+        if (taken != 1)
+            throw new VisualTestException("the terminal held " + taken + " of the fluid product, not one");
+        expected = SceneItemCensus.plus(expected, FLUID_PRODUCT, -1);
+        WarehouseProductionBlockEntity station = fluidStation(server, context);
+        station.editFluidCell(FLUID_PATTERN_SLOT, 0, null, 0);
+        station.setPatternEntry(FLUID_PATTERN_SLOT, ProductionPatterns.RESULT_ENTRY, FLUID_PRODUCT, 0);
+        census(server, "the player took the product of the fluid pattern out of the terminal");
+    }
+
+    private static WarehouseProductionBlockEntity fluidStation(MinecraftServer server, VisualContext context) {
+        BlockPos pos = layout(context.origin()).rackPos(FLUID_STATION);
+        WarehouseProductionBlockEntity station = WareworksBlockEntityTypes.WAREHOUSE_PRODUCTION
+                .getNullable(server.overworld(), pos);
+        if (station == null)
+            throw new VisualTestException("the production station of the fluid phase at " + pos + " is gone");
+        return station;
+    }
+
+    // --- merge mode (issue #57, ADR-088) -----------------------------------------------------------------------------
+
+    /** The optimizer of the merge phase: the rack position beside the dock that nothing else uses. */
+    private static final RackPosition MERGE_OPTIMIZER = RackPosition.of(0, 0, Side.LEFT);
+    /** The two chests the merge item is spread over: the smaller is emptied into the larger, which is its home. */
+    private static final RackPosition MERGE_SMALL = RackPosition.of(2, 0, Side.LEFT);
+    private static final RackPosition MERGE_HOME = RackPosition.of(5, 0, Side.LEFT);
+    /** An item no other phase moves. */
+    private static final ItemKey MERGE_ITEM = ItemKey.of(Items.PRISMARINE_SHARD);
+    private static final int MERGE_SMALL_COUNT = 30;
+    private static final int MERGE_HOME_COUNT = 50;
+
+    /**
+     * <b>A merge order survives a save, quit and rejoin</b> (issue #57, ADR-088): prismarine shards lie in two chests
+     * (30 and 50), an optimizer is asked to merge them, and the world is saved while the crane carries the 30 to the
+     * chest holding 50. After the rejoin the controller must still hold the order <i>as a merge order</i> (the mode is
+     * saved only for a merge, so an optimise order would be a different, silent failure), the crane's trip lands, the
+     * order finishes, the small chest is empty and the census is exact at every step. The optimizer is taken out again
+     * so the phases after this one see the warehouse they always saw.
+     */
+    private void mergeOrder(VisualScript script) {
+        script.server("robustness: place an optimizer and spread prismarine over two chests", this::buildMergeScene)
+                .serverUntil("robustness: wait until the controller indexed the prismarine in two places",
+                        this::mergeSceneReady, SCENE_READY_TIMEOUT_TICKS)
+                .server("robustness: baseline census with the prismarine", (server, context) -> {
+                    expected = SceneItemCensus.take(server.overworld(), censusBox);
+                    census(server, "the merge scene before the order");
+                })
+                .server("robustness: ask the optimizer to merge the prismarine", this::startMerge)
+                .serverUntil("robustness: wait until the crane carries the merge trip", this::mergeCarries,
+                        JOB_TIMEOUT_TICKS)
+                .server("robustness: census while the merge trip is carried",
+                        (server, context) -> census(server, "a merge trip under way"))
+                .server("robustness: save the world in the middle of the merge trip",
+                        (server, context) -> server.saveEverything(true, true, true));
+        VisualWorld.reload(script, worldProfile());
+        script.server("robustness: move the camera back to the aisle", RobustnessVisualScenario::moveToBuildSite)
+                .serverUntil("robustness: wait until the aisle is loaded after the reload", this::sceneLoaded,
+                        CHUNK_TIMEOUT_TICKS)
+                .server("robustness: the merge order came back as a merge order", (server, context) -> {
+                    OptimizerOrder<ItemKey, RackPosition> order = mergeOrderOf(server, context);
+                    if (order.mode() != OptimizerOrder.Mode.MERGE)
+                        throw new VisualTestException("the merge order came back as " + order);
+                    LOGGER.info(PREFIX + "robustness PASS: the merge order was saved and read back as MERGE: {}", order);
+                })
+                .server("robustness: census after save, quit and rejoin during a merge trip",
+                        (server, context) -> census(server, "save, quit and rejoin during a merge trip"))
+                .serverUntil("robustness: wait until the merge finished", this::mergeFinished, JOB_TIMEOUT_TICKS)
+                .server("robustness: the prismarine lies in its home and the small chest is empty", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    if (chestCount(level, context.origin(), MERGE_SMALL) != 0
+                            || chestCount(level, context.origin(), MERGE_HOME) != MERGE_SMALL_COUNT + MERGE_HOME_COUNT)
+                        throw new VisualTestException("after the merge the chests hold "
+                                + chestCount(level, context.origin(), MERGE_SMALL) + " and "
+                                + chestCount(level, context.origin(), MERGE_HOME) + " prismarine");
+                    LOGGER.info(PREFIX + "robustness PASS: the merge trip landed after the rejoin, the small chest is "
+                            + "empty");
+                    census(server, "the merge finished after the rejoin");
+                })
+                .server("robustness: take the optimizer out again", (server, context) -> {
+                    server.overworld().destroyBlock(layout(context.origin()).rackPos(MERGE_OPTIMIZER), false);
+                });
+    }
+
+    private void buildMergeScene(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BranchLayout layout = layout(context.origin());
+        level.setBlockAndUpdate(layout.rackPos(MERGE_OPTIMIZER), WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState()
+                .setValue(WarehouseOptimizerBlock.FACING, layout.sideDirection(MERGE_OPTIMIZER.side()).getOpposite()));
+        putIntoChest(level, context.origin(), MERGE_SMALL, MERGE_SMALL_COUNT);
+        putIntoChest(level, context.origin(), MERGE_HOME, MERGE_HOME_COUNT);
+    }
+
+    private static void putIntoChest(ServerLevel level, BlockPos dock, RackPosition rack, int count) {
+        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, chestPos(dock, rack), null);
+        if (handler == null || !ItemHandlerHelper.insertItem(handler, MERGE_ITEM.toStack(count), false).isEmpty())
+            throw new VisualTestException("the chest behind " + rack + " did not take " + count + " prismarine");
+    }
+
+    private static BlockPos chestPos(BlockPos dock, RackPosition rack) {
+        BranchLayout layout = layout(dock);
+        return layout.rackPos(rack).relative(layout.sideDirection(rack.side()));
+    }
+
+    private static long chestCount(ServerLevel level, BlockPos dock, RackPosition rack) {
+        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, chestPos(dock, rack), null);
+        long count = 0;
+        for (int slot = 0; handler != null && slot < handler.getSlots(); slot++) {
+            ItemStack stack = handler.getStackInSlot(slot);
+            if (MERGE_ITEM.matches(stack))
+                count += stack.getCount();
+        }
+        return count;
+    }
+
+    private boolean mergeSceneReady(MinecraftServer server, VisualContext context) {
+        WarehouseControllerBlockEntity controller = controller(server, context);
+        return sceneReady(server, context) && craneIdleAndInputEmpty(server, context)
+                && controller.countOf(MERGE_ITEM) == MERGE_SMALL_COUNT + MERGE_HOME_COUNT
+                && controller.optimizerPlaces(List.of(MERGE_ITEM)).equals(List.of(2))
+                && controller.locationAt(layout(context.origin()).rackPos(MERGE_OPTIMIZER)).isPresent();
+    }
+
+    private void startMerge(MinecraftServer server, VisualContext context) {
+        WarehouseOptimizerBlockEntity optimizer = WareworksBlockEntityTypes.WAREHOUSE_OPTIMIZER
+                .getNullable(server.overworld(), layout(context.origin()).rackPos(MERGE_OPTIMIZER));
+        if (optimizer == null
+                || !optimizer.optimise(List.of(MERGE_ITEM), OptimizerOrder.Mode.MERGE)
+                        .equals(Optional.of(OptimizerOrders.Start.STARTED)))
+            throw new VisualTestException("the merge order did not start");
+    }
+
+    private boolean mergeCarries(MinecraftServer server, VisualContext context) {
+        StackerCraneBlockEntity crane = crane(server, context);
+        return crane.heldItems().count(MERGE_ITEM) > 0
+                && crane.currentJob().map(job -> job.type() == JobType.RELOCATE).orElse(false);
+    }
+
+    private boolean mergeFinished(MinecraftServer server, VisualContext context) {
+        return craneIdleAndInputEmpty(server, context)
+                && mergeOrderOf(server, context).state() == OptimizerOrder.State.FINISHED;
+    }
+
+    private OptimizerOrder<ItemKey, RackPosition> mergeOrderOf(MinecraftServer server, VisualContext context) {
+        return controller(server, context).optimizerOrder(layout(context.origin()).rackPos(MERGE_OPTIMIZER))
+                .orElseThrow(() -> new VisualTestException("the warehouse keeps no order of the merge optimizer"));
     }
 
     // --- package mode (issue #40, ADR-086) ---------------------------------------------------------------------------
@@ -1943,7 +2278,7 @@ public final class RobustnessVisualScenario implements VisualScenario {
                 && !controller.isMembershipDirty() && controller.pendingSnapshotCount() == 0
                 // The input and the one the feeder's Crafter outputs into (issue #34).
                 && controller.storageLocations().size() == storage && controller.inputStations().size() == 2
-                && controller.productionStations().size() == 1
+                && controller.productionStations().size() == 1 + extraStations
                 // The terminal and the package door (M27).
                 && controller.outputStations().size() == 2 && crane.isControllerLinked()
                 && crane.aisleLength() == RAILS;

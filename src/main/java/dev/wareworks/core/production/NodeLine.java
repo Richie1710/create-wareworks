@@ -17,14 +17,36 @@ import java.util.Optional;
  * @param key    the concrete item
  * @param amount items of it the step needs, at least 1
  * @param choice the filter key of the choice this line pays, empty for an exact ingredient
+ * @param fluid  the fluid of a <b>fluid line</b> (issue #55, ADR-089): then {@code key} is the filled container, {@code
+ *               amount} counts containers and the line pays one {@link FluidCell} of the pattern; empty for every item
+ *               line
  * @param <K>    item key type
  */
-public record NodeLine<K>(K key, long amount, Optional<K> choice) {
+public record NodeLine<K>(K key, long amount, Optional<K> choice, Optional<String> fluid) {
     public NodeLine {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(choice, "choice");
+        Objects.requireNonNull(fluid, "fluid");
         if (amount < 1L)
             throw new IllegalArgumentException("amount must be at least 1: " + amount);
+        if (fluid.isPresent() && choice.isPresent())
+            throw new IllegalArgumentException("a fluid line pays no choice");
+    }
+
+    /** A line of an item ingredient: what every line was before ADR-089. */
+    public NodeLine(K key, long amount, Optional<K> choice) {
+        this(key, amount, choice, Optional.empty());
+    }
+
+    /** A fluid line (issue #55): {@code containers} filled containers {@code container} that deliver {@code fluid}. */
+    public static <K> NodeLine<K> fluid(K container, long containers, String fluid) {
+        return new NodeLine<>(container, containers, Optional.empty(),
+                Optional.of(Objects.requireNonNull(fluid, "fluid")));
+    }
+
+    /** Whether this is a fluid line (issue #55). */
+    public boolean isFluid() {
+        return fluid.isPresent();
     }
 
     /** A line of an exact ingredient. */
@@ -42,6 +64,8 @@ public record NodeLine<K>(K key, long amount, Optional<K> choice) {
         Objects.requireNonNull(pattern, "pattern");
         if (pattern.hasChoices())
             throw new IllegalArgumentException("a pattern with choices has no lines of its own; plan them");
+        if (pattern.hasFluids())
+            throw new IllegalArgumentException("a pattern with fluid cells has no lines of its own; plan them");
         List<NodeLine<K>> lines = new ArrayList<>(pattern.ingredients().size());
         for (ProductionEntry<K> ingredient : pattern.ingredients())
             lines.add(exact(ingredient.key(), (long) ingredient.count() * runs));

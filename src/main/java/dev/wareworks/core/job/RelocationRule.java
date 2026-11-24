@@ -49,4 +49,15 @@ public final class RelocationRule {
     public static boolean isBetter(int sourcePriority, int sourceFilterRank, int targetPriority, int targetFilterRank) {
         return targetPriority > sourcePriority && targetFilterRank <= sourceFilterRank;
     }
+
+    /**
+     * Merge mode (issue #57, ADR-088, amending ADR-079 D2): an item's home may take a source's stock when its priority
+     * is <b>at least</b> the source's (never a lower one) and its filter is no worse a match. Equal priorities qualify,
+     * which is the whole point: an item split over bays of one priority is gathered. {@link #isBetter} stays strict, so
+     * optimising still never moves sideways.
+     */
+    public static boolean isMergeTarget(int sourcePriority, int sourceFilterRank, int homePriority,
+            int homeFilterRank) {
+        return homePriority >= sourcePriority && homeFilterRank <= sourceFilterRank;
+    }
 }

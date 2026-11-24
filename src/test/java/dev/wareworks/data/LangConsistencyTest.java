@@ -346,6 +346,27 @@ class LangConsistencyTest {
     }
 
     /**
+     * Every row a <b>Warehouse Input</b> draws to say why its items wait fits a goggle tooltip in both languages (issue
+     * #53): the head, each store reason the input can show ({@code NoJobReason#refusesStoring}) as a row of its own, and
+     * the one-type hint. The same bound as the rows above; the reason is the same text the controller's planning line
+     * draws, so this also keeps those reasons within a row.
+     */
+    @Test
+    void theInputWaitingRowsFitAGoggleTooltip() throws IOException {
+        int budget = (GOGGLE_ROW_PIXELS - GOGGLE_INDENT_PIXELS) / GOGGLE_PIXELS_PER_CHARACTER;
+        for (Map.Entry<String, Path> lang : Map.of("en_us", GENERATED_EN_US, "de_de", HAND_WRITTEN_DE_DE).entrySet()) {
+            Map<String, String> texts = readFlatJson(lang.getValue());
+            for (String relativeKey : WareworksLangKeys.INPUT_WAITING_KEYS) {
+                String key = "wareworks." + relativeKey;
+                String text = texts.get(key);
+                assertTrue(text != null, lang.getKey() + " has no text for " + key);
+                assertTrue(text.length() <= budget, lang.getKey() + ": " + key + " needs " + text.length()
+                        + " of the " + budget + " characters a goggle row holds: '" + text + "'");
+            }
+        }
+    }
+
+    /**
      * The list the test above measures is <b>complete</b>: every goggle row a rack bay owns is in it (M28, issue #20).
      * <p>
      * Without this, the width gate silently stops covering a bay the moment a row is added to it — the one failure
@@ -509,6 +530,15 @@ class LangConsistencyTest {
                 PACKAGE_ADDRESS_KEY, "gui.goggles.port_package_no_address", "gui.goggles.port_packager_linked",
                 "gui.goggles.port_box_waiting", "gui.goggles.input_package_unpacking",
                 "gui.goggles.input_packages_opened", "gui.goggles.input_package_refused");
+        /**
+         * The rows of an input that say why its items wait (issue #53): the head, the store reasons
+         * ({@code NoJobReason#refusesStoring}, spelled out: this suite runs without Minecraft) and the one-type hint.
+         */
+        private static final List<String> INPUT_WAITING_KEYS = List.of("gui.goggles.input_not_stored",
+                "gui.goggles.input_one_type_hint", "gui.goggles.no_job_reason.warehouse_full",
+                "gui.goggles.no_job_reason.no_matching_filter", "gui.goggles.no_job_reason.no_location_for_type",
+                "gui.goggles.no_job_reason.package_bay_needs_filter", "gui.goggles.no_job_reason.port_full",
+                "gui.goggles.no_job_reason.at_maximum", "gui.goggles.at_maximum_overflow_hint");
         /** The header row of a rack bay, whose one argument is the block's own name (M28, issue #20). */
         private static final String RACK_BAY_HEADER_KEY = "gui.goggles.rack_bay";
         /** The one rack bay row whose argument is a count rather than an item name. */

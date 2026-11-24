@@ -120,6 +120,9 @@ final class ScreenInput {
             int.class);
     private static final Method OPTIMIZER_STATUS_LINE = method(WarehouseOptimizerScreen.class, "statusLine");
     private static final Field OPTIMIZER_BUTTON = field(WarehouseOptimizerScreen.class, "optimiseButton");
+    private static final Field OPTIMIZER_MERGE_BUTTON = field(WarehouseOptimizerScreen.class, "mergeButton");
+    private static final Method OPTIMIZER_OVER_PLACES = method(WarehouseOptimizerScreen.class, "isOverPlaces",
+            double.class, double.class, int.class);
     /**
      * Create's Schematicannon screen (issue #45): the toggle that shows the placement settings, the "Skip missing
      * Blocks" option among them (built only once they are shown), and the Play and Stop buttons.
@@ -664,6 +667,21 @@ final class ScreenInput {
     }
 
     /**
+     * The centre of fluid cell {@code cell} (0 or 1, issue #55) of the production screen, checked with the screen's own
+     * hit test.
+     */
+    static Point productionFluidCell(WarehouseProductionScreen screen, int cell) {
+        ProductionMenuLayout layout = (ProductionMenuLayout) get(PRODUCTION_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + layout.fluidCellX(cell) + ProductionMenuLayout.SLOT / 2.0,
+                screen.getGuiTop() + layout.fluidCellY(cell) + ProductionMenuLayout.SLOT / 2.0);
+        int hit = screen.fluidCellAt(point.x(), point.y());
+        if (hit != cell)
+            throw new VisualTestException("the production screen's hit test puts " + point + " on fluid cell " + hit
+                    + ", not " + cell);
+        return point;
+    }
+
+    /**
      * The centre of the tab of pattern slot {@code pattern} of the production screen, checked with the screen's own hit
      * test. A click there selects the slot; a cursor resting there draws the slot's tooltip, which names why a Crafter
      * Feeder skips it (issue #34). With a scrolling strip (issue #35) the tab sits where the screen's current scroll
@@ -869,6 +887,45 @@ final class ScreenInput {
                 || (Boolean) invoke(OPTIMIZER_OVER_LIST_CELL, screen, point.x(), point.y()))
             throw new VisualTestException("the Optimise button at " + point + " overlaps the cancel mark or the list "
                     + "cell");
+        return point;
+    }
+
+    /**
+     * The centre of the optimizer's Merge button (issue #57), checked against the button itself and against the
+     * Optimise button and the cancel mark beside it.
+     */
+    static Point optimizerMergeButton(WarehouseOptimizerScreen screen) {
+        IconButton button = (IconButton) get(OPTIMIZER_MERGE_BUTTON, screen);
+        Point point = centre(button);
+        int[] drawn = screen.mergeCentre();
+        if (Math.abs(point.x() - drawn[0]) > 1.0 || Math.abs(point.y() - drawn[1]) > 1.0)
+            throw new VisualTestException("the Merge button stands at " + point + " but the layout puts it at ("
+                    + drawn[0] + ", " + drawn[1] + ")");
+        if (!button.visible || !button.active || !button.isMouseOver(point.x(), point.y()))
+            throw new VisualTestException("the Merge button does not take a click at " + point);
+        if (((IconButton) get(OPTIMIZER_BUTTON, screen)).isMouseOver(point.x(), point.y())
+                || (Boolean) invoke(OPTIMIZER_OVER_CANCEL, screen, point.x(), point.y()))
+            throw new VisualTestException("the Merge button at " + point + " overlaps the Optimise button or the "
+                    + "cancel mark");
+        return point;
+    }
+
+    /**
+     * The centre of the places number of row {@code row} in the optimizer's screen (issue #57), the row's own Merge,
+     * checked with the screen's own hit tests for the row, the places number, the cell and the pip.
+     */
+    static Point optimizerPlaces(WarehouseOptimizerScreen screen, int row) {
+        int[] centre = screen.placesCentre(row).orElseThrow(() -> new VisualTestException(
+                "optimizer row " + row + " is not on screen (scroll " + screen.scroll() + ")"));
+        Point point = new Point(centre[0], centre[1]);
+        requireOptimizerRow(screen, point, row);
+        if (!(Boolean) invoke(OPTIMIZER_OVER_PLACES, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the optimizer screen's hit test does not put " + point + " on the places "
+                    + "number of row " + row);
+        if ((Boolean) invoke(OPTIMIZER_OVER_CELL, screen, point.x(), point.y(), row)
+                || (Boolean) invoke(OPTIMIZER_OVER_STATUS, screen, point.x(), point.y(), row))
+            throw new VisualTestException("the places number of row " + row + " at " + point + " overlaps the cell "
+                    + "or the pip");
         return point;
     }
 

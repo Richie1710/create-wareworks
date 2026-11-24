@@ -211,7 +211,8 @@ public final class SequentialPlans<K, L> {
      */
     private ProductionPlanInput<K, L> remaining() {
         return new ProductionPlanInput<>(base.patterns(), PlanBudget.of(this::available), base.limits(),
-                freeOrderSlots(), base.orderSlots(), base.pausedResults(), base.headroom(), remainingChoices());
+                freeOrderSlots(), base.orderSlots(), base.pausedResults(), base.headroom(), remainingChoices(),
+                base.fluids());
     }
 
     /**

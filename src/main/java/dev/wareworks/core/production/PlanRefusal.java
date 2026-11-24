@@ -104,7 +104,20 @@ public enum PlanRefusal {
      * Attribute Filter". The sibling of {@link #MISSING_INGREDIENT}; when an allowed item could be made but its own chain
      * fails, that deeper refusal is reported instead ("Oak Log is missing"). Not structural.
      */
-    NO_MATCHING_ITEM;
+    NO_MATCHING_ITEM,
+    /**
+     * A fluid cell's fluid cannot be delivered (issue #55, ADR-089): the bays hold less of it than the plan needs, it is
+     * unknown, or no container is filled with it. Names the filled container, or the item the plan makes when there is
+     * none. Appended last: refusals travel by name, so no older name moves.
+     */
+    FLUID_MISSING,
+    /** A fluid is there but there is no empty container to fill with it (issue #55). Names the filled container. */
+    NO_EMPTY_CONTAINER,
+    /**
+     * The station's buffer cannot hold the item stacks plus the containers of one run (issue #55): a filled bucket stacks
+     * to 1, so it takes a slot of the {@code productionBufferSlots}. Names the item the plan makes.
+     */
+    BUFFER_TOO_SMALL;
 
     private static final String LANG_PREFIX = "gui.production.plan.refusal.";
 

@@ -29,8 +29,13 @@ public final class OptimizerMenuLayout {
     public static final int ROW_HEIGHT = SLOT;
     /** Free space left and right. */
     public static final int MARGIN = 7;
-    /** Window width: the same as the terminal, the production station and the keeper, so all frames match. */
-    public static final int WIDTH = 12 * SLOT + 2 * MARGIN;
+    /** Width of the places column: in how many places the warehouse holds the item (issue #57). */
+    public static final int PLACES_WIDTH = 26;
+    /**
+     * Window width: the terminal's, the production station's and the keeper's plus the places column, so the item name
+     * keeps the room it had.
+     */
+    public static final int WIDTH = 12 * SLOT + 2 * MARGIN + PLACES_WIDTH;
     /** Height of the title row. */
     public static final int TITLE_HEIGHT = 10;
     /** Height of a single line of text (the column header, the inventory label). */
@@ -124,7 +129,12 @@ public final class OptimizerMenuLayout {
 
     /** How wide the item name may be drawn before it is cut. */
     public int nameWidth() {
-        return numbersX() - nameX() - GAP;
+        return placesX() - nameX() - GAP;
+    }
+
+    /** Left edge of the places column, left of the three number fields. */
+    public int placesX() {
+        return numbersX() - PLACES_WIDTH;
     }
 
     /** Left edge of the first of the three number fields. */
@@ -157,6 +167,11 @@ public final class OptimizerMenuLayout {
         return WIDTH - MARGIN - SLOT;
     }
 
+    /** Left edge of the Merge button, left of Optimise (issue #57). */
+    public int mergeX() {
+        return optimiseX() - SLOT - 2;
+    }
+
     /** Left edge of the status text. */
     public int statusTextX() {
         return listCellX() + SLOT + GAP;
@@ -164,12 +179,12 @@ public final class OptimizerMenuLayout {
 
     /** How wide the status text may be while no cancel mark is shown. */
     public int statusTextWidth() {
-        return optimiseX() - GAP - statusTextX();
+        return mergeX() - GAP - statusTextX();
     }
 
     /** Left edge of the cancel mark, at the right end of the status text. */
     public int cancelX() {
-        return optimiseX() - GAP - CANCEL_WIDTH;
+        return mergeX() - GAP - CANCEL_WIDTH;
     }
 
     /** How wide the status text may be while the cancel mark is shown beside it. */

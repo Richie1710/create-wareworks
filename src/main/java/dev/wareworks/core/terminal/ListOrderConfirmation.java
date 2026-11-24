@@ -229,7 +229,7 @@ public record ListOrderConfirmation<K>(List<Line<K>> lines, int entriesDropped) 
         ProductionPlanInput<K, L> whatIf = new ProductionPlanInput<>(base.patterns(),
                 PlanBudget.of(candidate -> made.contains(candidate) ? plans.available(candidate) : UNLIMITED),
                 base.limits(), base.freeOrderSlots(), base.orderSlots(), base.pausedResults(), base.headroom(),
-                base.choices());
+                base.choices(), base.fluids());
         ProductionPlanResult<K, L> result = ProductionPlanner.plan(whatIf, key, rest);
         if (result.plan().isEmpty())
             return own;

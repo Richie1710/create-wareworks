@@ -24,6 +24,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.address.StorageAddress;
 import dev.wareworks.core.inventory.StockView;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.job.RequestKind;
 import dev.wareworks.core.job.RetrievalRequest;
 import dev.wareworks.core.job.TransportJob;
@@ -140,6 +141,10 @@ final class ControllerPersistence {
     private static final String TRIPS = "Trips";
     private static final String MOVED = "Moved";
     private static final String ENTRIES = "Entries";
+    /** Why an ended optimizer entry moved nothing (more), by name (issue #53); absent while it has none. */
+    private static final String END_REASON = "EndReason";
+    /** An order's mode (issue #57), written only for a merge order: absent reads as optimise. */
+    private static final String ORDER_MODE = "Mode";
     private static final String IN_FLIGHT = "InFlight";
     private static final String TRIP_JOB = "Job";
     private static final String TRIP_ENTRY = "Entry";
@@ -178,6 +183,7 @@ final class ControllerPersistence {
     private static final String DELIVERED = "Delivered";
     /** The filter a supply line pays (ADR-082); absent on every exact line. */
     private static final String CHOICE = "Choice";
+    private static final String FLUID = "Fluid";
     private static final String REQUEST = "Request";
     /** Marks an order the warehouse started by itself to refill a stock rule (M15 part 2). */
     private static final String RESTOCK = "Restock";
@@ -661,6 +667,9 @@ final class ControllerPersistence {
                         if (!(choiceTag instanceof CompoundTag compound && compound.isEmpty()))
                             lineTag.put(CHOICE, choiceTag);
                     }
+                    // Only on a fluid line (issue #55, ADR-089), so every other line saves what it always did. An older
+                    // build ignores it and reads the line as an item line of the filled container (documented).
+                    line.fluid().ifPresent(fluid -> lineTag.putString(FLUID, fluid));
                     lines.add(lineTag);
                 }
                 if (!complete || lines.isEmpty())
@@ -730,13 +739,21 @@ final class ControllerPersistence {
             CompoundTag lineTag = lineTags.getCompound(i);
             int required = lineTag.getInt(REQUIRED);
             Optional<ItemKey> key = ItemKey.load(registries, lineTag.get(ITEM));
+            // A fluid line whose container cannot be read (its mod was removed) can never be supplied, and an order that
+            // lost one would hand the machine its items without its fluid: the whole order is skipped (issue #55).
+            if (key.isEmpty() && lineTag.contains(FLUID, Tag.TAG_STRING))
+                return Optional.empty();
             if (!lineTag.hasUUID(ID) || key.isEmpty() || required < 1)
                 continue;
             int delivered = Mth.clamp(lineTag.getInt(DELIVERED), 0, required);
             // No choice means an exact ingredient, which is every line saved before ADR-082.
             Optional<ItemKey> choice = lineTag.contains(CHOICE) ? ItemKey.load(registries, lineTag.get(CHOICE))
                     : Optional.empty();
-            lines.add(new SupplyLine<>(lineTag.getUUID(ID), key.get(), required, delivered, choice));
+            // No Fluid means an item line, which is every line saved before ADR-089. An id the registry does not know
+            // stays as it is: the line is never supplied and the order ends by its timeout, never by a crash.
+            Optional<String> fluid = lineTag.contains(FLUID, Tag.TAG_STRING)
+                    ? Optional.of(lineTag.getString(FLUID)).filter(id -> !id.isBlank()) : Optional.empty();
+            lines.add(new SupplyLine<>(lineTag.getUUID(ID), key.get(), required, delivered, choice, fluid));
         }
         if (lines.isEmpty())
             return Optional.empty(); // an order without ingredients could never finish and promises nothing
@@ -1013,6 +1030,7 @@ final class ControllerPersistence {
                     entryTag.put(ITEM, keyTag);
                     entryTag.putString(STATE, entry.state().name());
                     entryTag.putLong(MOVED, entry.moved());
+                    entry.endReason().ifPresent(reason -> entryTag.putString(END_REASON, reason.name()));
                     entries.add(entryTag);
                 }
                 if (entries.isEmpty())
@@ -1030,6 +1048,8 @@ final class ControllerPersistence {
                 entry.putInt(TRIPS, order.tripsLeft());
                 entry.putLong(MOVED, order.moved());
                 entry.put(ENTRIES, entries);
+                if (order.mode() == OptimizerOrder.Mode.MERGE)
+                    entry.putString(ORDER_MODE, order.mode().name());
                 if (!inFlight.isEmpty())
                     entry.put(IN_FLIGHT, inFlight);
                 list.add(entry);
@@ -1077,8 +1097,10 @@ final class ControllerPersistence {
                     OptimizerOrder.EntryState.byName(entryTag.getString(STATE));
             if (!entryTag.hasUUID(ID) || key.isEmpty() || entryState.isEmpty())
                 continue;
+            // A reason this build does not know, or none (saved before issue #53), reads as none.
+            RelocationReason reason = RelocationReason.byName(entryTag.getString(END_REASON)).orElse(null);
             entries.add(new OptimizerOrder.Entry<>(entryTag.getUUID(ID), key.get(), entryState.get(),
-                    entryTag.getLong(MOVED)));
+                    entryTag.getLong(MOVED), reason));
         }
         if (entries.isEmpty())
             return Optional.empty();
@@ -1090,7 +1112,8 @@ final class ControllerPersistence {
                 inFlight.put(trip.getUUID(TRIP_JOB), trip.getUUID(TRIP_ENTRY));
         }
         return Optional.of(new OptimizerOrder<>(rack.get(), state.get(), entries, entry.getInt(TRIPS),
-                entry.getLong(MOVED), inFlight));
+                entry.getLong(MOVED), inFlight,
+                OptimizerOrder.Mode.byName(entry.getString(ORDER_MODE)).orElse(OptimizerOrder.Mode.OPTIMISE)));
     }
 
     /**

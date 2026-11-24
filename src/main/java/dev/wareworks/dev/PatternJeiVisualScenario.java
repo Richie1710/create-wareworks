@@ -16,6 +16,7 @@ import dev.wareworks.client.gui.WarehouseProductionScreen;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.PatternFilterCells;
 import dev.wareworks.content.station.ProductionPatterns;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
@@ -47,9 +48,9 @@ import net.neoforged.fml.ModList;
  * <p>
  * A station on its own, with no aisle: laying a pattern reads stock only to choose among candidates. Tab by tab, with a
  * real click on the tab and on the "+" ({@link JeiVisualScenario.JeiScreens}): a crafting recipe (the Chest), Create's
- * saw (Andesite Alloy to Shafts, {@link #SAWN}), and
- * the "+" of a recipe with a fluid (Chocolate Glazed Berries at the spout), which must be greyed out, lay nothing on a
- * click and say why in both languages, and the Torch. A tag ingredient is laid as an "is tagged" Attribute Filter cell
+ * saw (Andesite Alloy to Shafts, {@link #SAWN}), the "+" of a recipe with a fluid (Chocolate Glazed Berries at the
+ * spout), which since issue #55 (ADR-089) lays its berries as an item cell and its chocolate as a fluid cell of 250 mB
+ * in both languages' screens, and the Torch. A tag ingredient is laid as an "is tagged" Attribute Filter cell
  * (ADR-082): the Chest's eight {@code #minecraft:planks} cells and the Torch's {@code #c:rods/wooden} stick; the filter
  * cell's tooltip is shot in both languages. The Torch's coal-or-charcoal list and the saw's one item stay exact cells.
  * JEI's every-tick check must lay nothing on any recipe, and the tab selected at the click is the one written: the
@@ -177,7 +178,8 @@ public final class PatternJeiVisualScenario implements VisualScenario {
                         + "plugin), ")
                 + (tagCells ? "a tag ingredient laid as an 'is tagged' filter cell and an item list as an exact cell"
                         : "tag ingredients laid as exact cells (JEI before " + GRID_MAP_JEI + ")")
-                + (createPlugin ? ", a fluid recipe greyed out" : "") + ", English and German";
+                + (createPlugin ? ", a fluid recipe laid as an item cell and a fluid cell" : "")
+                + ", English and German";
         script.client("patternjei: every check passed", context -> LOGGER.info(PREFIX
                 + "patternjei: ALL CHECKS PASSED (" + summary + ")"));
     }
@@ -388,25 +390,43 @@ public final class PatternJeiVisualScenario implements VisualScenario {
 
     private void fluid(VisualScript script, String suffix) {
         selectTab(script, 2);
-        showRecipes(script, "the recipe with a fluid", () -> BuiltInRegistries.ITEM.get(GLAZED), FILLING, false);
-        checkNoLay(script, 2);
-        script.client("patternjei: click the greyed-out +", context -> ScreenInput.click(context.minecraft(),
-                        plus(context).hitTested(context.minecraft().screen, false)))
-                .waitTicks(NO_LAY_TICKS)
-                .client("patternjei: rest the cursor on the greyed-out +", context -> ScreenInput.hover(
-                        context.minecraft(), plus(context).hitTested(context.minecraft().screen, false)))
-                .waitTicks(SETTLE_TICKS)
-                .shot("patternjei-fluid-" + suffix)
-                .client("patternjei: close JEI", context -> ScreenInput.key(context.minecraft(),
-                        GLFW.GLFW_KEY_ESCAPE))
-                .until("patternjei: the station's screen is back",
-                        context -> context.minecraft().screen instanceof WarehouseProductionScreen,
-                        SCREEN_TIMEOUT_TICKS)
-                .client("patternjei: CHECK the greyed-out + laid nothing", context -> {
-                    if (screen(context).state().result(2).isPresent())
-                        throw new VisualTestException("the recipe with a fluid was laid");
-                    LOGGER.info(PREFIX + "patternjei: CHECK PASS the recipe with a fluid is greyed out and lays nothing");
-                });
+        if (suffix.equals("en")) {
+            showRecipes(script, "the recipe with a fluid", () -> BuiltInRegistries.ITEM.get(GLAZED), FILLING, true);
+            checkNoLay(script, 2);
+            script.client("patternjei: rest the cursor on the + of the recipe with a fluid",
+                            context -> ScreenInput.hover(context.minecraft(),
+                                    plus(context).hitTested(context.minecraft().screen, true)))
+                    .waitTicks(SETTLE_TICKS)
+                    .shot("patternjei-fluid-recipe");
+            clickPlus(script, "the recipe with a fluid");
+            script.until("patternjei: the recipe with a fluid arrives in tab 3",
+                            context -> screen(context).state().result(2).isPresent(), SCREEN_TIMEOUT_TICKS)
+                    .client("patternjei: CHECK the fluid recipe's pattern", context -> {
+                        ProductionScreenState state = screen(context).state();
+                        Optional<ProductionScreenState.EntryView> in = state.entry(2, 0);
+                        Optional<ProductionScreenState.EntryView> out = state.result(2);
+                        Optional<FluidCell> fluid = state.fluid(2, 0);
+                        if (in.isEmpty() || out.isEmpty() || !in.get().key().equals(ItemKey.of(Items.SWEET_BERRIES))
+                                || in.get().filter() || in.get().count() != 1
+                                || !out.get().key().equals(ItemKey.of(BuiltInRegistries.ITEM.get(GLAZED))))
+                            throw new VisualTestException("the fluid recipe's item cells are " + in + " -> " + out);
+                        if (fluid.isEmpty() || !fluid.get().fluid().equals("create:chocolate")
+                                || fluid.get().millibuckets() != 250 || state.fluid(2, 1).isPresent())
+                            throw new VisualTestException("the fluid recipe's fluid cells are " + fluid + " and "
+                                    + state.fluid(2, 1));
+                        LOGGER.info(PREFIX + "patternjei: CHECK PASS the spout recipe lays {} x{} and {} -> {}",
+                                in.get().key(), in.get().count(), fluid.get(), out.get().key());
+                    });
+            script.client("patternjei: park the mouse", PatternJeiVisualScenario::parkMouse).waitTicks(SETTLE_TICKS)
+                    .shot("patternjei-fluid-laid-" + suffix);
+            return;
+        }
+        script.client("patternjei: CHECK the fluid cell is still there in German", context -> {
+            if (screen(context).state().fluid(2, 0).filter(cell -> cell.millibuckets() == 250).isEmpty())
+                throw new VisualTestException("the fluid cell is gone after the language switch");
+            LOGGER.info(PREFIX + "patternjei: CHECK PASS the fluid cell survives the switch to German");
+        }).client("patternjei: park the mouse", PatternJeiVisualScenario::parkMouse).waitTicks(SETTLE_TICKS)
+                .shot("patternjei-fluid-laid-" + suffix);
     }
 
     // --- steps -------------------------------------------------------------------------------------------------------

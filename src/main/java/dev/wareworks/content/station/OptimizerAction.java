@@ -18,7 +18,11 @@ public enum OptimizerAction {
     /** Start a fresh order for one row's item alone. */
     OPTIMISE_ROW,
     /** Stop the running order; a trip under way is finished. */
-    CANCEL;
+    CANCEL,
+    /** Start a fresh merge order for every listed item (issue #57, ADR-088). */
+    MERGE,
+    /** Start a fresh merge order for one row's item alone (issue #57). */
+    MERGE_ROW;
 
     /** The action with this name, or empty for {@code null} or an unknown name. */
     public static Optional<OptimizerAction> byName(String name) {

@@ -33,11 +33,21 @@ public enum FilterMatch {
      * remembered refusal. A {@code RETRIEVE} reroute is the one exception: putting items back where they came from is
      * not choosing where new items live, so there they are ranked last instead of dropped (§8).
      */
-    REJECTED;
+    REJECTED,
+    /**
+     * The location takes one item type at a time and holds, or awaits, <b>another</b> one, while its filter would allow
+     * this key (issue #53): a rack bay or bulk bay of cobblestone asked to store dirt. To the planner it is exactly
+     * {@link #REJECTED} — skipped before the estimate and any live call, ranked last on a {@code RETRIEVE} reroute — and
+     * it is told apart only so the reason a player reads names the real cause:
+     * {@link NoJobReason#NO_LOCATION_FOR_TYPE} ("no free place for this item type") instead of
+     * {@link NoJobReason#NO_MATCHING_FILTER}, whose cure (another filter) would not help. A location whose filter rejects
+     * the key as well answers {@link #REJECTED}: the filter is then the reason.
+     */
+    TAKEN_BY_OTHER_TYPE;
 
     /** Whether the planner may store the key at this location. */
     public boolean allowsStoring() {
-        return this != REJECTED;
+        return this != REJECTED && this != TAKEN_BY_OTHER_TYPE;
     }
 
     /** Whether a filter explicitly selects the key (the ranking bonus of a dedicated location). */
@@ -47,13 +57,13 @@ public enum FilterMatch {
 
     /**
      * The first sort key of {@link JobPlanner}'s storage ranking: dedicated locations (0) before locations that merely
-     * accept the item (1) before rejecting ones (2, reachable only on a retrieve reroute). Lower is better.
+     * accept the item (1) before rejecting ones and ones taken by another item type (2, reachable only on a retrieve reroute). Lower is better.
      */
     public int storeRank() {
         return switch (this) {
             case DEDICATED -> 0;
             case ALLOWED, UNFILTERED -> 1;
-            case REJECTED -> 2;
+            case REJECTED, TAKEN_BY_OTHER_TYPE -> 2;
         };
     }
 }

@@ -189,6 +189,15 @@ public class RackBayBlockEntity extends SmartBlockEntity
      * saved: the tier is the block id.
      */
     private boolean changingTier;
+    /**
+     * Client only, never saved or synced: the stack {@code client.render.RackBayRenderer} last handed to the item
+     * renderer for this bay, and when ({@code Util#getNanos}), so the visual harness can check that a bay really drew
+     * what {@code RackBayRenderer#displayedItem} decides (issue #49) rather than only that it decided it. A reference
+     * and a long, written per drawn frame without allocating.
+     */
+    @Nullable
+    private ItemStack lastDrawnItem;
+    private long lastDrawnNanos = Long.MIN_VALUE;
 
     public RackBayBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -364,6 +373,43 @@ public class RackBayBlockEntity extends SmartBlockEntity
     @Override
     public int storePriority() {
         return storeFilterBehaviour.priority();
+    }
+
+    /**
+     * The store filter stack itself, <b>not a copy</b>, for the one caller that runs per bay per frame
+     * ({@code client.render.RackBayRenderer}, issue #49: an empty bay shows its filter). {@link #storeFilter()} copies,
+     * which the renderer of the mod's most mass-placed block must not do per frame. The caller only reads it and never
+     * modifies or keeps it; on the client it is what the last update packet carried ({@code StorageFilterBehaviour#write}
+     * writes the filter on every client packet, so it is there after placing, after a rejoin and after a chunk reload).
+     */
+    public ItemStack storeFilterView() {
+        return storeFilterBehaviour.getFilter();
+    }
+
+    /**
+     * Records that the renderer just drew {@code drawn} for this bay at {@code nanos}; client render thread only. See
+     * {@link #lastDrawnItem}.
+     */
+    public void recordDrawn(ItemStack drawn, long nanos) {
+        lastDrawnItem = drawn;
+        lastDrawnNanos = nanos;
+    }
+
+    /** The stack last drawn for this bay, or {@code null} if nothing was drawn since {@link #forgetDrawn()}. */
+    @Nullable
+    public ItemStack lastDrawnItem() {
+        return lastDrawnItem;
+    }
+
+    /** When {@link #lastDrawnItem()} was drawn ({@code Util#getNanos}), {@link Long#MIN_VALUE} if never. */
+    public long lastDrawnNanos() {
+        return lastDrawnNanos;
+    }
+
+    /** Forgets the last drawn stack, so a later check sees only what is drawn from now on. */
+    public void forgetDrawn() {
+        lastDrawnItem = null;
+        lastDrawnNanos = Long.MIN_VALUE;
     }
 
     /** Whether a player gave this bay a store filter at all. */

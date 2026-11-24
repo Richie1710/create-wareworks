@@ -62,11 +62,12 @@ class CrafterFeederTextWidthTest {
     /** The tooltip lines of a refused pattern, without arguments. */
     private static final List<String> TOOLTIP_LINES = List.of("gui.production.check.cell_not_one",
             "gui.production.check.not_a_recipe", "gui.production.check.skipped",
-            "gui.production.check.filter_not_checkable");
+            "gui.production.check.filter_not_checkable", "gui.production.check.fluid_cell");
     private static final String RESULT_DIFFERS = "gui.production.check.result_differs";
     /** Goggle rows without an item in them; their only argument, if any, is a count. */
     private static final List<String> GOGGLE_ROWS = List.of("gui.goggles.crafter_feeder",
             "gui.goggles.production_feeder", "gui.goggles.production_refused",
+            "gui.goggles.production_fluid_patterns",
             "gui.crafter_feeder.status.idle", "gui.crafter_feeder.status.feeding",
             "gui.crafter_feeder.status.no_station", "gui.crafter_feeder.status.two_stations",
             "gui.crafter_feeder.status.no_warehouse", "gui.crafter_feeder.status.no_crafter",

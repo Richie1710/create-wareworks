@@ -11,6 +11,7 @@ import com.simibubi.create.infrastructure.config.AllConfigs;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.storage.RackBayBlockEntity;
 import net.createmod.catnip.render.SuperByteBuffer;
+import net.minecraft.Util;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
@@ -34,6 +35,12 @@ import net.minecraft.world.level.Level;
  * are. So the shape of the load says how full the bay is from across the warehouse, and the item says what is in it from
  * the aisle. Nothing here reads the count: the fill level already answers "how much", and a second answer drawn on top
  * of it would only be a worse one.
+ * <p>
+ * <b>An empty bay shows its filter</b> (issue #49): the same item in the same place, so a rack wall that is set up but
+ * not yet filled reads as "this bay is for X". Stock always wins over the filter, and an empty bay without a filter
+ * draws nothing ({@link RackBayDisplay}). A Create filter item (List, Attribute or Package Filter) is drawn as that
+ * item, as Create's own filter slot draws it. Before the fix a bay returned as soon as it held nothing, so its filter
+ * was invisible until the first item was stored, while the warehouse interface drew its filter all along.
  * <p>
  * <b>The view distance is the whole point of the design and is not negotiable.</b> Registering a block entity renderer
  * puts <i>every</i> block of that type into its chunk section's per-frame render list, whether anything is drawn or not
@@ -139,13 +146,10 @@ public class RackBayRenderer extends SafeBlockEntityRenderer<RackBayBlockEntity>
     @Override
     protected void renderSafe(RackBayBlockEntity bay, float partialTicks, PoseStack ms, MultiBufferSource buffer,
                               int light, int overlay) {
-        ItemKey stored = bay.storedKeyOrNull();
-        if (stored == null)
-            return;
         Level level = bay.getLevel();
         if (level == null)
             return;
-        ItemStack display = displayStack(stored);
+        ItemStack display = displayedItem(bay);
         if (display.isEmpty())
             return;
         Direction facing = bay.facing();
@@ -176,9 +180,28 @@ public class RackBayRenderer extends SafeBlockEntityRenderer<RackBayBlockEntity>
         ms.scale(CraneModelLayout.ITEM_SCALE, CraneModelLayout.ITEM_SCALE, CraneModelLayout.ITEM_SCALE);
         // No pitch for a flat item: the fixed transform already stands a generated model up in the x/y plane, which is
         // the plane of the aisle face after the rotation above. The crane lays one down; a bay is read face-on.
+        // Recorded for the visual harness, which checks that this draw happened, not only what displayedItem decides.
+        bay.recordDrawn(display, Util.getNanos());
         itemRenderer.render(display, ItemDisplayContext.FIXED, false, ms, buffer, itemLight(bay, facing, light),
                 OverlayTexture.NO_OVERLAY, model);
         ms.popPose();
+    }
+
+    /**
+     * The stack this renderer draws for {@code bay}, by {@link RackBayDisplay#choose} (issue #49): the stored item
+     * type, else the store filter item of an empty bay, else {@link ItemStack#EMPTY}. Allocates nothing: the stored
+     * type comes from {@link #displayStacks}, the filter is the behaviour's own stack
+     * ({@code RackBayBlockEntity#storeFilterView}), which is only read here. Public so the visual harness can check what
+     * a bay really shows ({@code dev.wareworks.dev.BlocksVisualScenario}) instead of only taking a picture of it.
+     */
+    public ItemStack displayedItem(RackBayBlockEntity bay) {
+        ItemKey stored = bay.storedKeyOrNull();
+        ItemStack filter = bay.storeFilterView();
+        return switch (RackBayDisplay.choose(stored != null, !filter.isEmpty())) {
+            case STORED -> displayStack(stored);
+            case FILTER -> filter;
+            case NOTHING -> ItemStack.EMPTY;
+        };
     }
 
     /** The cached one-item stack of {@code key}, built once and reused; see {@link #displayStacks}. */

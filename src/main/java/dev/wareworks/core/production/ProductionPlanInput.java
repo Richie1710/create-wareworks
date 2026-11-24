@@ -44,12 +44,15 @@ import java.util.function.ToLongFunction;
  * @param choices       which keys may pay a choice ingredient (a filter cell, ADR-082), built by the content layer for
  *                      the access of this click; {@link IngredientChoices#none()} where nobody passed any, so a pattern
  *                      with choices cannot be paid there
+ * @param fluids        what the warehouse can deliver of fluid (issue #55, {@link FluidSupply}); {@link FluidSupply#none()}
+ *                      where nobody passed any, so a pattern with a fluid cell is refused there
  * @param <K>           item key type
  * @param <L>           location type
  */
 public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, PlanBudget<K> budget, PlanLimits limits,
                                         int freeOrderSlots, int orderSlots, Predicate<? super K> pausedResults,
-                                        ToLongFunction<? super K> headroom, IngredientChoices<K> choices) {
+                                        ToLongFunction<? super K> headroom, IngredientChoices<K> choices,
+                                        FluidSupply<K> fluids) {
     /** What {@link #headroom()} answers for an item no rule caps: as much room as anyone could ask for. */
     public static final long UNLIMITED_ROOM = Long.MAX_VALUE;
 
@@ -61,6 +64,8 @@ public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, Pla
         Objects.requireNonNull(headroom, "headroom");
         if (choices == null)
             choices = IngredientChoices.none();
+        if (fluids == null)
+            fluids = FluidSupply.none();
         freeOrderSlots = Math.max(0, freeOrderSlots);
         orderSlots = Math.max(freeOrderSlots, orderSlots);
     }
@@ -71,6 +76,14 @@ public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, Pla
             ToLongFunction<? super K> headroom) {
         this(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults, headroom,
                 IngredientChoices.none());
+    }
+
+    /** An input without fluid (issue #55): what every input was before ADR-089. */
+    public ProductionPlanInput(List<StationPattern<K, L>> patterns, PlanBudget<K> budget, PlanLimits limits,
+            int freeOrderSlots, int orderSlots, Predicate<? super K> pausedResults,
+            ToLongFunction<? super K> headroom, IngredientChoices<K> choices) {
+        this(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults, headroom, choices,
+                FluidSupply.none());
     }
 
     /**
@@ -95,7 +108,7 @@ public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, Pla
     /** This input with the items the warehouse has stopped making. */
     public ProductionPlanInput<K, L> withPaused(Predicate<? super K> paused) {
         return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, paused, headroom,
-                choices);
+                choices, fluids);
     }
 
     /** This input with a fixed set of paused items. */
@@ -107,13 +120,19 @@ public record ProductionPlanInput<K, L>(List<StationPattern<K, L>> patterns, Pla
     /** This input with the room every item's own maximum leaves. */
     public ProductionPlanInput<K, L> withHeadroom(ToLongFunction<? super K> room) {
         return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults, room,
-                choices);
+                choices, fluids);
     }
 
     /** This input with the keys that may pay a choice ingredient (ADR-082). */
     public ProductionPlanInput<K, L> withChoices(IngredientChoices<K> next) {
         return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults,
-                headroom, Objects.requireNonNull(next, "choices"));
+                headroom, Objects.requireNonNull(next, "choices"), fluids);
+    }
+
+    /** This input with {@code supply} as what the warehouse can deliver of fluid (issue #55). */
+    public ProductionPlanInput<K, L> withFluids(FluidSupply<K> supply) {
+        return new ProductionPlanInput<>(patterns, budget, limits, freeOrderSlots, orderSlots, pausedResults,
+                headroom, choices, Objects.requireNonNull(supply, "fluids"));
     }
 
     /** Whether the warehouse has stopped making {@code key}. */

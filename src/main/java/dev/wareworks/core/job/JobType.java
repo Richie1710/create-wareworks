@@ -64,9 +64,15 @@ public enum JobType {
      * {@link LocationKind#OUTPUT} (the station that asked), and its leftovers go back into storage like a retrieve's —
      * never to a port. A dedicated bay outranks every shelf for a filled container, so the filled container is never put
      * down on the way: that is why the trip does not stock the filled container and fetch it again.
+     * <p>
+     * <b>A fluid ingredient of a production order</b> (issue #55, ADR-089) is a fill trip whose station is the
+     * {@link LocationKind#PRODUCTION} station of the order and whose request id is the order's fluid <b>line</b>: the
+     * filled containers drop into the station's item buffer like any ingredient and are credited to that line. Only a
+     * planned fluid line ever sends a fill trip there ({@code JobPlanner#planFluidSupply}); a terminal's fill request
+     * still ends at an output.
      */
     FILL(LocationKind.STORAGE, LocationKind.STORAGE, LocationKind.STORAGE,
-            Set.of(LocationKind.STORAGE, LocationKind.OUTPUT)),
+            Set.of(LocationKind.STORAGE, LocationKind.OUTPUT, LocationKind.PRODUCTION)),
     /**
      * Storage location → a <b>better</b> storage location (issue #46, ADR-079): stock a Warehouse Optimizer asked to
      * move from a low storage priority up to a higher one, one trip at a time and only while the crane has nothing else

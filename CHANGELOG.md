@@ -7,6 +7,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0-beta] - 2026-11-24
+
+### Added
+
+- **Fluid ingredients in production patterns** ([#55](https://github.com/Richie1710/create-wareworks/issues/55)). A
+  pattern now has two fluid cells beside its items: click one with a filled bucket to set the fluid, the wheel sets the
+  millibuckets one run takes (50 mB a notch, Shift 250, Ctrl 1000, at most 1000 mB, the size of a Basin's tank), a
+  right-click clears it. Ordered at the terminal, the crane brings the fluid as **whole filled buckets**: it takes
+  empty buckets out of stock, fills them at a fluid bay and carries them to the station, at most two per station, and
+  the buckets count against the station's buffer slots. The warehouse names what is missing ("Not enough fluid for …",
+  "No empty container for …", "Buffer too small for …").
+  - Your own machine turns the bucket into fluid, **without a Mechanical Arm**: an extracting brass funnel filtered to
+    the filled bucket, an Item Drain, a pump and pipes into a Basin under a Mixer. A new Ponder scene, **Fluid in a
+    Production Pattern**, shows the principle and its warnings, and the README has the details: a Mechanical Arm that
+    can also reach the Basin puts buckets into its item slots, a depot is no way out for the empty bucket, and an
+    amount that does not divide 1000 mB leaves a rest in your machine (the cell's tooltip says so).
+  - JEI's "+" lays a recipe's fluid inputs as fluid cells.
+  - Limits: a pattern cannot make a fluid, a Crafter Feeder refuses a pattern with a fluid cell, package mode leaves
+    the cells inert and an automatic stock-rule restock skips such a pattern. Filled buckets left in the station's
+    buffer after a cancel are not taken out by the crane and count against the cap of two; the station's goggles say
+    so while no order is open.
+  - The Basin's goggles say that the Selector does not check heat, and the station's goggles count the patterns with a
+    fluid.
+
+### Changed
+
+- **A local Recipe Selector at a Basin accepts its fluid recipes** ([#55](https://github.com/Richie1710/create-wareworks/issues/55)).
+  A fluid recipe is accepted when the pattern's fluid cells are the recipe's fluids with the same amounts; a pattern
+  without them is drawn red ("the recipe takes other fluids or amounts than the pattern's fluid cells"; before: every
+  fluid recipe was refused),
+  and the Ender Recipe Selector refuses a station with fluid cells.
+- **Server and players have to update together** again: the production station's screen data and the lay packet of
+  JEI's "+" carry the fluid cells.
+- **Going back to an older Wareworks loses fluid cells.** An older version ignores them, so a pattern that has only
+  fluid cells is empty after the next save there, and an open order's fluid line is read as an item line of the
+  bucket. Patterns without a fluid cell are saved exactly as before.
+
+## [0.26.0-beta] - 2026-11-24
+
+### Added
+
+- **Warehouse Optimizer: merge an item kept in several places into its home**
+  ([#57](https://github.com/Richie1710/create-wareworks/issues/57)). A new Merge button beside Optimise (and a click on
+  a row's new places number) has the cranes gather each listed item into one place, on request and with idle cranes
+  only, capped by the same trips setting as Optimise. Only a place whose whole stock fits its home is emptied, the
+  smallest holder first (a big one takes several trips, as many as the trips setting allows); nothing is moved into a
+  lower priority, into a filter that fits worse or into a fluid bay. Each row shows in how many places the warehouse
+  holds the item before you press. Where an item belongs is one rule now, used by the merge and by normal storing, so a
+  crane never spreads a merged item again: a place whose store filter names the item is its home; without one it is the
+  place that already holds the most of it, on the highest priority that holds it at all, and a tie goes to the place's
+  order in the aisle, not to the nearer one.
+
+### Changed
+
+- **Storing prefers the place that already holds most of an item** ([#57](https://github.com/Richie1710/create-wareworks/issues/57)).
+  Among places of equal priority and suitability, the crane now stores into the one holding the most of the item (a
+  tie: the first in the aisle) instead of the nearest, so a merged item is not spread again.
+- **Server and players have to update together** again: the optimizer's screen data changed (the places number and the
+  order's mode).
+- **A stock rule's maximum says what to do about the items it keeps out**
+  ([#54](https://github.com/Richie1710/create-wareworks/issues/54)). A maximum only stops further storing, so the
+  surplus waits in the Warehouse Input on purpose, and nothing said how to send it away. The input's "Not stored" goggle
+  line for a maximum and the Stock Keeper's "At maximum" goggle line now add: an accepting Warehouse Output with a
+  negative rank (an overflow) takes the surplus. The Stock Keeper's tooltip has a line on what a maximum does, its row
+  tooltip repeats the hint under "At the maximum", the Stock Rules Ponder scene points to the "An Overflow for a
+  Warehouse" scene, and the README FAQ has "My input fills up at a maximum", with the other way: only a minimum, and the extra storage at a lower
+  priority.
+
+### Fixed
+
+- **The Recipe Selector Ponder scene shows how items get to the machine and back**
+  ([#56](https://github.com/Richie1710/create-wareworks/issues/56)). The saw and the Basin stood right behind the
+  Production Station and the products simply appeared in the return input, as if the station fed the machine. A
+  station never pushes items: the scene now builds the transport as a player has to, a hopper under the station onto a
+  belt into the saw, which pushes into the Warehouse Input, and for the Basin the same hopper filling it and a belt with
+  a funnel into the input, and says that the station pushes nothing itself.
+
+## [0.25.0-beta] - 2026-11-23
+
+### Added
+
+- **A FAQ in the README**: why the same item can sit in several bays, what the Warehouse Optimizer does and does not
+  do, and why items can wait in the input.
+
+### Changed
+
+- **The Warehouse Optimizer says why an item does not move** ([#53](https://github.com/Richie1710/create-wareworks/issues/53)).
+  An item with no better place used to end as "Nothing to move", even next to the stock it holds. Its row's dot now
+  turns gold and its tooltip names the reason, decided by the warehouse itself: "All places have the same priority"
+  (for example every place at the default 0), "No place with a higher priority", "No free room at a higher priority", "Higher
+  places' filters do not fit", that all of it is requested or reserved, or that its places cannot be reached now, each
+  with what to do about it. "Nothing to move" stays for an item the warehouse holds none of. The optimizer still only
+  moves items up in priority and does not merge an item kept in two places.
+- **A Warehouse Input says why its items wait** ([#53](https://github.com/Richie1710/create-wareworks/issues/53)).
+  When every rack bay already holds another item type, a new type waits in the input, and the goggles called that "no
+  storage location takes these items", as if a filter were at fault. The controller's planning line now reads "no free
+  place for this item type", and the input's own goggles show "Not stored:" with the reason and, for this one, the
+  cure: each rack bay holds one item type, so add bays or a chest. Where a filter really refuses the item, the old
+  reason stays.
+- **Server and players have to update together** again: the optimizer's screen data changed.
+
+### Fixed
+
+- **An empty Rack Bay now shows its filter** ([#49](https://github.com/Richie1710/create-wareworks/issues/49)). A bay
+  of any tier with a store filter but nothing stored drew nothing, so the filter only became visible once the first
+  item was stored. It now shows the filter item where the stored item would stand, so a rack wall that is set up but
+  not yet filled reads as "this bay is for X"; a List, Attribute or Package Filter is shown as that filter item. A bay
+  with stock keeps showing its stock, and an empty bay without a filter still shows nothing.
+- **Two cranes no longer store the same item into two empty places**
+  ([#51](https://github.com/Richie1710/create-wareworks/issues/51)). With several cranes on one warehouse, a crane
+  storing an item did not count an empty rack bay or chest another crane was already carrying that item to as holding
+  it, so with inputs at both ends of the aisle the same item could open a second place. A place another crane is filling
+  with the item now counts as holding it and is filled first. A warehouse with one crane is unchanged.
+- **A Warehouse Optimizer facing away from the aisle now says so**
+  ([#52](https://github.com/Richie1710/create-wareworks/issues/52)). Placed with its front turned away from the aisle,
+  the optimizer is not a member of the warehouse, yet its screen looked linked and showed the normal hint, and Optimise
+  silently did nothing. Its screen and goggles now count it as served only as a member: the status line reads "Not in a
+  warehouse: face the aisle" (or "Not part of a warehouse" outside any aisle), and pressing Optimise or the stop
+  mark answers with that reason instead of nothing. Turned towards the aisle, it works as before.
+
 ## [0.24.0-beta] - 2026-11-22
 
 ### Added
@@ -1698,7 +1818,10 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.24.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.27.0-beta...HEAD
+[0.27.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.26.0-beta...v0.27.0-beta
+[0.26.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.25.0-beta...v0.26.0-beta
+[0.25.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.24.0-beta...v0.25.0-beta
 [0.24.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.23.0-beta...v0.24.0-beta
 [0.23.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.22.0-beta...v0.23.0-beta
 [0.22.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.21.0-beta...v0.22.0-beta

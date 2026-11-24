@@ -7,11 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
+
+import dev.wareworks.core.job.RelocationReason;
 
 /**
  * The Warehouse Optimizer orders of one warehouse (issue #46, ADR-079): one order per optimizer, a trip cap, entries
@@ -105,22 +108,28 @@ class OptimizerOrdersTest {
         assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(1), IRON), new OptimizerOrders.OpenEntry<>(id(2), GOLD)),
                 orders.openEntries(), "one need per item, the oldest order's entry");
 
-        assertTrue(orders.endExhausted(Set.of(id(1))));
+        assertTrue(orders.endExhausted(Map.of(id(1), RelocationReason.SAME_PRIORITY)));
         assertEquals(OptimizerOrder.EntryState.NOTHING_TO_MOVE, order(NORTH).entryFor(IRON).orElseThrow().state());
+        assertEquals(Optional.of(RelocationReason.SAME_PRIORITY), order(NORTH).entryFor(IRON).orElseThrow().endReason(),
+                "the entry keeps why it ended (issue #53)");
+        assertEquals(Optional.of(RelocationReason.SAME_PRIORITY), order(SOUTH).entryFor(IRON).orElseThrow().endReason(),
+                "in every order that lists the item");
         assertEquals(OptimizerOrder.State.RUNNING, order(NORTH).state(), "gold is still open");
         assertEquals(OptimizerOrder.State.FINISHED, order(SOUTH).state(), "nothing more fits for south's iron either");
         assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(2), GOLD)), orders.openEntries());
 
-        assertTrue(orders.endKey(GOLD));
+        assertTrue(orders.endKey(GOLD, RelocationReason.NONE_IN_STOCK));
         assertFalse(orders.hasPending());
-        assertFalse(orders.endKey(GOLD), "an ended item ends once");
+        assertFalse(orders.endKey(GOLD, RelocationReason.SPOKEN_FOR), "an ended item ends once");
+        assertEquals(Optional.of(RelocationReason.NONE_IN_STOCK), order(NORTH).entryFor(GOLD).orElseThrow().endReason(),
+                "and keeps the first reason");
     }
 
     @Test
     void anEntryWithATripIsDone() {
         orders.start(NORTH, List.of(IRON, GOLD), 32);
         orders.onAssigned(id(100), IRON);
-        orders.endKey(IRON);
+        orders.endKey(IRON, RelocationReason.NO_ROOM_HIGHER);
         assertEquals(OptimizerOrder.EntryState.DONE, order(NORTH).entryFor(IRON).orElseThrow().state(),
                 "its trip is still on its way, so something moved");
     }
@@ -222,5 +231,52 @@ class OptimizerOrdersTest {
         assertEquals(OptimizerLimits.MIN_TRIPS, OptimizerLimits.clampTrips(Integer.MIN_VALUE));
         assertEquals(OptimizerLimits.MAX_TRIPS, OptimizerLimits.clampTrips(Integer.MAX_VALUE));
         assertEquals(OptimizerLimits.DEFAULT_TRIPS, OptimizerLimits.clampTrips(OptimizerLimits.DEFAULT_TRIPS));
+    }
+
+    // --- merge mode (issue #57, ADR-088) ----------------------------------------------------------------------------
+
+    @Test
+    void anOrderKeepsItsModeThroughEveryChange() {
+        orders.start(NORTH, List.of(IRON, GOLD), 4, OptimizerOrder.Mode.MERGE);
+        assertEquals(OptimizerOrder.Mode.MERGE, order(NORTH).mode());
+        assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(1), IRON, OptimizerOrder.Mode.MERGE),
+                new OptimizerOrders.OpenEntry<>(id(2), GOLD, OptimizerOrder.Mode.MERGE)), orders.openEntries());
+        orders.onAssigned(id(50), IRON);
+        orders.onDelivered(id(50), 10);
+        orders.onJobEnded(id(50));
+        orders.endKey(GOLD, RelocationReason.ALREADY_ONE_PLACE);
+        assertEquals(OptimizerOrder.Mode.MERGE, order(NORTH).mode());
+        orders.cancel(NORTH);
+        assertEquals(OptimizerOrder.Mode.MERGE, order(NORTH).mode());
+        orders.start(NORTH, List.of(IRON), 4);
+        assertEquals(OptimizerOrder.Mode.OPTIMISE, order(NORTH).mode(), "the plain start is an optimise order");
+    }
+
+    @Test
+    void aSearchEndsOnlyTheEntriesOfItsOwnMode() {
+        orders.start(NORTH, List.of(IRON), 8);
+        orders.start(SOUTH, List.of(IRON), 8, OptimizerOrder.Mode.MERGE);
+        // The oldest order's entry is the one searched; both modes want iron.
+        assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(1), IRON)), orders.openEntries());
+
+        assertTrue(orders.endExhausted(Map.of(id(1), RelocationReason.SAME_PRIORITY)));
+
+        assertEquals(OptimizerOrder.EntryState.NOTHING_TO_MOVE, order(NORTH).entries().getFirst().state());
+        assertEquals(OptimizerOrder.EntryState.OPEN, order(SOUTH).entries().getFirst().state(),
+                "what an optimise search found says nothing about a merge");
+        assertEquals(List.of(new OptimizerOrders.OpenEntry<>(id(2), IRON, OptimizerOrder.Mode.MERGE)),
+                orders.openEntries(), "the merge entry is searched next");
+        assertTrue(orders.endExhausted(Map.of(id(2), RelocationReason.ALREADY_ONE_PLACE)));
+        assertEquals(RelocationReason.ALREADY_ONE_PLACE, order(SOUTH).entries().getFirst().reason());
+        assertFalse(orders.hasPending());
+    }
+
+    @Test
+    void aTripIsCreditedToTheOrderThePlannerSearched() {
+        orders.start(NORTH, List.of(IRON), 8, OptimizerOrder.Mode.MERGE);
+        orders.start(SOUTH, List.of(IRON), 8);
+        assertTrue(orders.onAssigned(id(70), IRON));
+        assertEquals(7, order(NORTH).tripsLeft());
+        assertEquals(8, order(SOUTH).tripsLeft());
     }
 }

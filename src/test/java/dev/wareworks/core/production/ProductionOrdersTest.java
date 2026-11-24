@@ -177,6 +177,22 @@ class ProductionOrdersTest {
         assertEquals(4L, orders.get(second.id()).orElseThrow().produced());
     }
 
+    /**
+     * A fluid line is filled by a fluid bay and never takes its filled container out of the racks, so it must not
+     * count as a promise of that container: real filled buckets in stock stay available (issue #55 review).
+     */
+    @Test
+    void aFluidLineIsNoPromiseOfItsFilledContainer() {
+        ProductionOrder<String, String> order = ProductionOrder.start(UUID.randomUUID(), STATION_A,
+                ProductionPattern.of(LOG, 1, PLANK, 4), 2,
+                java.util.List.of(NodeLine.exact(LOG, 2L), NodeLine.fluid("water_bucket", 2L, "minecraft:water")),
+                lineIds, START, TIMEOUT, 0L, null, 0L);
+        assertTrue(orders.add(order));
+        assertEquals(2L, orders.outstandingIngredient(LOG));
+        assertEquals(0L, orders.outstandingIngredient("water_bucket"), "the bay fills it, the racks owe nothing");
+        assertEquals(java.util.Set.of(LOG), orders.outstandingIngredientsByKey().keySet());
+    }
+
     /** Ingredients the open orders still owe, per key, in one pass (the producible computation asks for many keys). */
     @Test
     void outstandingIngredientsAreAlsoAnsweredPerKeyInOnePass() {

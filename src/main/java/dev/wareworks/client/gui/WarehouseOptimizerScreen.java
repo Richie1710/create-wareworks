@@ -16,6 +16,7 @@ import dev.wareworks.content.station.OptimizerAction;
 import dev.wareworks.content.station.OptimizerMenu;
 import dev.wareworks.content.station.OptimizerMenuLayout;
 import dev.wareworks.content.station.OptimizerScreenState;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.stock.PriorityBreakdown;
 import dev.wareworks.core.terminal.CountFormat;
 import dev.wareworks.network.OptimizerActionPayload;
@@ -83,6 +84,7 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
     private OptimizerScreenState state = OptimizerScreenState.NONE;
     private OptimizerMenuLayout layout;
     private IconButton optimiseButton;
+    private IconButton mergeButton;
     private int scroll;
 
     public WarehouseOptimizerScreen(OptimizerMenu menu, Inventory inventory, Component title) {
@@ -103,6 +105,14 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
         optimiseButton.getToolTip().add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_OPTIMISE_NOW).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         addRenderableWidget(optimiseButton);
+        mergeButton = new IconButton(leftPos + layout.mergeX(), topPos + layout.statusRowY(), AllIcons.I_FILL);
+        mergeButton.withCallback(() -> send(OptimizerActionPayload.of(menu.containerId, OptimizerAction.MERGE)));
+        mergeButton.getToolTip().add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_MERGE));
+        mergeButton.getToolTip().add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_MERGE_HINT).copy()
+                .withStyle(ChatFormatting.GRAY));
+        mergeButton.getToolTip().add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_MERGE_NOW).copy()
+                .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
+        addRenderableWidget(mergeButton);
         if (menu.optimizer() == null && minecraft != null && minecraft.player != null)
             minecraft.player.closeContainer(); // the block entity is gone: nothing to edit
     }
@@ -132,6 +142,12 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             if (isOverStatus(mouseX, mouseY, row) && state.row(row).flatMap(OptimizerScreenState.RowView::key)
                     .isPresent()) {
                 send(OptimizerActionPayload.ofRow(menu.containerId, OptimizerAction.OPTIMISE_ROW, row));
+                return true;
+            }
+            // The places number is the row's own Merge: it gathers this item into its home place (issue #57).
+            if (isOverPlaces(mouseX, mouseY, row) && state.row(row).flatMap(OptimizerScreenState.RowView::key)
+                    .isPresent()) {
+                send(OptimizerActionPayload.ofRow(menu.containerId, OptimizerAction.MERGE_ROW, row));
                 return true;
             }
             if (isOverCell(mouseX, mouseY, row)) {
@@ -245,6 +261,7 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             view.flatMap(OptimizerScreenState.RowView::key)
                     .ifPresent(key -> renderItem(graphics, key.toStack(), cellX + ITEM_INSET, rowY + ITEM_INSET));
             renderName(graphics, view, rowY);
+            renderPlaces(graphics, view, rowY, hoveredRow == row && isOverPlaces(mouseX, mouseY, row));
             for (int field = 0; field < OptimizerMenuLayout.NUMBER_FIELDS; field++)
                 renderNumber(graphics, view, field, rowY, hoveredRow == row && hoveredField == field);
             renderStatusPip(graphics, view, rowY, hoveredRow == row && isOverStatus(mouseX, mouseY, row));
@@ -267,6 +284,24 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
                 .orElseGet(() -> WareworksLang.translateDirect(WareworksLang.OPTIMIZER_EMPTY_ROW));
         boolean empty = view.flatMap(OptimizerScreenState.RowView::key).isEmpty();
         graphics.drawString(font, fitTo(name, layout.nameWidth()), x, y, empty ? COLOR_OFF : COLOR_TEXT, false);
+    }
+
+    /** The places number of a row: in how many places the item lies; gold from two on, since those can be merged. */
+    private void renderPlaces(GuiGraphics graphics, Optional<OptimizerScreenState.RowView> view, int rowY,
+            boolean hovered) {
+        int x = leftPos + layout.placesX();
+        int top = rowY + 2;
+        int bottom = rowY + OptimizerMenuLayout.SLOT - 2;
+        graphics.fill(x + 1, top, x + OptimizerMenuLayout.PLACES_WIDTH - 1, bottom, COLOR_FIELD);
+        if (hovered)
+            graphics.fill(x + 1, top, x + OptimizerMenuLayout.PLACES_WIDTH - 1, bottom, COLOR_FIELD_HOVER);
+        boolean filled = view.flatMap(OptimizerScreenState.RowView::key).isPresent() && state.linked();
+        int places = filled ? view.get().places() : 0;
+        String text = filled ? String.valueOf(places) : OFF;
+        int textX = x + OptimizerMenuLayout.PLACES_WIDTH - OptimizerMenuLayout.NUMBER_PADDING - font.width(text);
+        int textY = rowY + (OptimizerMenuLayout.SLOT - font.lineHeight) / 2;
+        graphics.drawString(font, text, textX, textY, !filled ? COLOR_OFF : places > 1 ? COLOR_WARNING : COLOR_TEXT,
+                false);
     }
 
     private void renderNumber(GuiGraphics graphics, Optional<OptimizerScreenState.RowView> view, int field, int rowY,
@@ -326,7 +361,9 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             graphics.fill(x + PIP_SIZE - 1, y, x + PIP_SIZE, y + PIP_SIZE, outline);
             return;
         }
-        graphics.fill(x, y, x + PIP_SIZE, y + PIP_SIZE, pipColor(pip));
+        // An item the warehouse said why it cannot move (issue #53) is gold: there is a reason to read on hover.
+        boolean explained = view.get().reason().filter(reason -> reason != RelocationReason.NONE_IN_STOCK).isPresent();
+        graphics.fill(x, y, x + PIP_SIZE, y + PIP_SIZE, explained ? COLOR_WARNING : pipColor(pip));
         if (hovered)
             graphics.fill(x, y, x + PIP_SIZE, y + PIP_SIZE, COLOR_CELL_HOVER);
     }
@@ -368,6 +405,9 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
         int headerY = y + layout.headerY();
         graphics.drawString(font, WareworksLang.translateDirect(WareworksLang.OPTIMIZER_ITEMS),
                 x + OptimizerMenuLayout.MARGIN, headerY, COLOR_DIM, false);
+        Component places = WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PLACES_SHORT);
+        graphics.drawString(font, places, x + layout.placesX() + OptimizerMenuLayout.PLACES_WIDTH
+                - OptimizerMenuLayout.NUMBER_PADDING - font.width(places), headerY, COLOR_DIM, false);
         columnHeader(graphics, WareworksLang.OPTIMIZER_BEST_SHORT, OptimizerMenuLayout.FIELD_BEST, headerY);
         columnHeader(graphics, WareworksLang.OPTIMIZER_BELOW_SHORT, OptimizerMenuLayout.FIELD_BELOW, headerY);
         columnHeader(graphics, WareworksLang.OPTIMIZER_MOVABLE_SHORT, OptimizerMenuLayout.FIELD_MOVABLE, headerY);
@@ -402,7 +442,8 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             return WareworksLang.translateDirect(state.message().langKey(), LangNumberFormat.format(state.first()),
                     LangNumberFormat.format(state.second()));
         if (!state.linked())
-            return WareworksLang.translateDirect(WareworksLang.OPTIMIZER_NO_WAREHOUSE);
+            return WareworksLang.translateDirect(state.misaligned() ? WareworksLang.OPTIMIZER_MISALIGNED
+                    : WareworksLang.OPTIMIZER_NO_WAREHOUSE);
         OptimizerScreenState.OrderLine order = state.order();
         String moved = LangNumberFormat.format(order.moved());
         return switch (order.state()) {
@@ -458,6 +499,12 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             return tooltip;
         Optional<OptimizerScreenState.RowView> view = state.row(row);
         boolean filled = view.flatMap(OptimizerScreenState.RowView::key).isPresent();
+        if (isOverPlaces(mouseX, mouseY, row)) {
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PLACES));
+            tooltip.add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PLACES_HINT).copy()
+                    .withStyle(ChatFormatting.GRAY));
+            return tooltip;
+        }
         int field = numberFieldAt(mouseX);
         if (field != NONE) {
             tooltip.add(WareworksLang.translateDirect(fieldTitleKey(field)));
@@ -472,8 +519,7 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             return tooltip;
         }
         if (isOverStatus(mouseX, mouseY, row) && filled) {
-            OptimizerScreenState.Pip pip = view.get().pip();
-            tooltip.add(WareworksLang.translateDirect(pip.langKey()).copy().withStyle(pipFormat(pip)));
+            addStatusLines(tooltip, view.get(), state.order().merge());
             tooltip.add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PIP_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             return tooltip;
@@ -485,8 +531,7 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
             tooltip.addAll(getTooltipFromItem(minecraft, shown.key().orElseThrow().toStack()));
             if (state.linked())
                 addBreakdownLines(tooltip, shown.breakdown());
-            tooltip.add(WareworksLang.translateDirect(shown.pip().langKey()).copy()
-                    .withStyle(pipFormat(shown.pip())));
+            addStatusLines(tooltip, shown, state.order().merge());
         }
         tooltip.add(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_ITEM_HINT).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
@@ -516,6 +561,18 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
                 LangNumberFormat.format(breakdown.movable())
                         + (breakdown.movableUnknown() ? UNKNOWN_MARK : "")).copy()
                 .withStyle(ChatFormatting.AQUA));
+    }
+
+    /**
+     * What a row's mark says: the mark's sentence, or for an item with nothing to move the reason the server gave
+     * (issue #53) in gold, with what a player can do about it below.
+     */
+    private static void addStatusLines(List<Component> tooltip, OptimizerScreenState.RowView view, boolean merge) {
+        boolean explained = view.reason().filter(reason -> reason != RelocationReason.NONE_IN_STOCK).isPresent();
+        tooltip.add(WareworksLang.translateDirect(view.statusKey(merge)).copy()
+                .withStyle(explained ? ChatFormatting.GOLD : pipFormat(view.pip())));
+        view.reason().flatMap(OptimizerScreenState::reasonHintKey).ifPresent(hint -> tooltip.add(
+                WareworksLang.translateDirect(hint).copy().withStyle(ChatFormatting.GRAY)));
     }
 
     private static ChatFormatting pipFormat(OptimizerScreenState.Pip pip) {
@@ -586,6 +643,17 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
                 && mouseY < y + OptimizerMenuLayout.SLOT;
     }
 
+    /** Whether the mouse is over the places number of {@code row}, which merges that row's item alone. */
+    private boolean isOverPlaces(double mouseX, double mouseY, int row) {
+        int line = row - scroll;
+        if (line < 0 || line >= layout.visibleRows())
+            return false;
+        int x = leftPos + layout.placesX();
+        int y = topPos + layout.rowY(line);
+        return mouseX >= x && mouseX < x + OptimizerMenuLayout.PLACES_WIDTH && mouseY >= y
+                && mouseY < y + OptimizerMenuLayout.SLOT;
+    }
+
     /** Whether the mouse is over the list cell, which takes a clipboard's items. */
     private boolean isOverListCell(double mouseX, double mouseY) {
         int x = leftPos + layout.listCellX();
@@ -639,6 +707,21 @@ public class WarehouseOptimizerScreen extends AbstractSimiContainerScreen<Optimi
     /** Where the Optimise button is drawn (dev harness). */
     public int[] optimiseCentre() {
         return new int[] { leftPos + layout.optimiseX() + OptimizerMenuLayout.SLOT / 2,
+                topPos + layout.statusRowY() + OptimizerMenuLayout.SLOT / 2 };
+    }
+
+    /** Where the places number of {@code row} is drawn (dev harness); empty while it is scrolled away. */
+    public Optional<int[]> placesCentre(int row) {
+        int line = row - scroll;
+        if (line < 0 || line >= layout.visibleRows())
+            return Optional.empty();
+        return Optional.of(new int[] { leftPos + layout.placesX() + OptimizerMenuLayout.PLACES_WIDTH / 2,
+                topPos + layout.rowY(line) + OptimizerMenuLayout.SLOT / 2 });
+    }
+
+    /** Where the Merge button is drawn (dev harness). */
+    public int[] mergeCentre() {
+        return new int[] { leftPos + layout.mergeX() + OptimizerMenuLayout.SLOT / 2,
                 topPos + layout.statusRowY() + OptimizerMenuLayout.SLOT / 2 };
     }
 

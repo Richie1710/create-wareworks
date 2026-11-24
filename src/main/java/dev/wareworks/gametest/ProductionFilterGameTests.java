@@ -905,6 +905,7 @@ public final class ProductionFilterGameTests {
                     buffer.writeBoolean(false);
                     buffer.writeBoolean(true);
                     buffer.writeUtf("Not A Recipe!");
+                    buffer.writeVarInt(0); // no fluid cells (issue #55: the last section of the lay)
                     ProductionPatternLayPayload read = ProductionPatternLayPayload.STREAM_CODEC.decode(buffer);
                     helper.assertValueEqual(buffer.readableBytes(), 0, "read to the end");
                     helper.assertValueEqual(read.tags(), Collections.nCopies(9, Optional.<ResourceLocation>empty()),

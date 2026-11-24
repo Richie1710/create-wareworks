@@ -2,7 +2,9 @@ package dev.wareworks.content.station;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -20,6 +22,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.crafting.IngredientPicker;
 import dev.wareworks.core.production.CrafterGrid;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.SelectorMode;
@@ -208,9 +211,24 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
      */
     public static Optional<Boolean> submitPattern(@Nullable Player player, int containerId, int pattern, int entry,
             Optional<ItemKey> key, int count) {
+        return submitPattern(player, containerId, pattern, entry, key, count, Optional.empty());
+    }
+
+    /**
+     * {@link #submitPattern(Player, int, int, int, Optional, int)} with the fluid of a fluid cell (issue #55, ADR-089):
+     * an {@code entry} of {@code ProductionPatterns#FLUID_ENTRY_BASE} or the next one is a fluid cell, set to
+     * {@code fluid} with {@code count} millibuckets per run, or cleared when {@code fluid} is empty; {@code key} is
+     * ignored there. Any other entry ignores {@code fluid}.
+     */
+    public static Optional<Boolean> submitPattern(@Nullable Player player, int containerId, int pattern, int entry,
+            Optional<ItemKey> key, int count, Optional<String> fluid) {
         ProductionMenu menu = resolve(player, containerId);
         if (menu == null)
             return Optional.empty();
+        if (entry >= ProductionPatterns.FLUID_ENTRY_BASE
+                && entry < ProductionPatterns.FLUID_ENTRY_BASE + ProductionPatterns.FLUID_CELLS)
+            return Optional.of(menu.editFluid(player, pattern, entry - ProductionPatterns.FLUID_ENTRY_BASE,
+                    fluid.orElse(null), count));
         return Optional.of(menu.edit(player, pattern, entry, key.orElse(null), count));
     }
 
@@ -261,6 +279,20 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
         return changed;
     }
 
+    /** Server: writes one fluid cell (issue #55); a refusal is said over the hotbar like a refused filter. */
+    private boolean editFluid(Player player, int pattern, int cell, @Nullable String fluid, int count) {
+        if (!mayEdit(player))
+            return false;
+        WarehouseProductionBlockEntity.EditOutcome outcome = contentHolder.editFluidCell(pattern, cell, fluid, count);
+        String refusal = outcome.langKey();
+        if (refusal != null)
+            player.displayClientMessage(WareworksLang.translateDirect(refusal), true);
+        boolean changed = outcome == WarehouseProductionBlockEntity.EditOutcome.CHANGED;
+        if (changed)
+            markDirty();
+        return changed;
+    }
+
     /**
      * Server: the lay of a {@code ProductionPatternLayPayload}, resolved like every edit, and at most one per tick: it
      * reads the buffer and asks the aisle about the candidates it compares, as a lay at a terminal does.
@@ -286,13 +318,32 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
     public LayResult lay(Player player, ProductionPatternLayPayload payload) {
         if (!mayEdit(player) || payload.pattern() < 0 || payload.pattern() >= contentHolder.patterns().size())
             return LayResult.NOT_A_RECIPE;
+        // The fluid cells of a machine recipe (issue #55, ADR-089): only fluids this server has, flowing ones as their
+        // source, the same fluid merged. A crafting recipe has none, and a client that names some there is ignored.
+        List<FluidCell> fluids = new ArrayList<>(FluidCell.MAX_PER_PATTERN);
+        if (!payload.crafting()) {
+            Map<String, Integer> wanted = new LinkedHashMap<>();
+            for (FluidCell cell : payload.fluids()) {
+                Optional<String> valid = PatternFluids.validId(cell.fluid());
+                if (valid.isEmpty())
+                    return LayResult.UNKNOWN_FLUID;
+                wanted.merge(valid.get(), cell.millibuckets(), Integer::sum);
+            }
+            // Two cells of one fluid add up; more than a cell may hold is no recipe (the viewer greys it out), not a
+            // silent clamp.
+            for (int mb : wanted.values()) {
+                if (mb > FluidCell.MAX_MB)
+                    return LayResult.NOT_A_RECIPE;
+            }
+            wanted.forEach((fluid, mb) -> fluids.add(FluidCell.sanitized(fluid, mb)));
+        }
         CraftGrid<ItemKey> picked = IngredientPicker.pick(payload.cells(), TerminalCraftLay.supply(bufferHandler,
                 bufferSlots, WarehouseRegistry.findController(contentHolder.getLevel(), contentHolder.getBlockPos())));
         List<ItemKey> cells = new ArrayList<>(CraftGrid.SIZE);
         for (int cell = 0; cell < CraftGrid.SIZE; cell++)
             cells.add(picked.cell(cell).orElse(null));
         CrafterGrid<ItemKey> grid = CrafterGrid.ofNullable(cells);
-        if (grid.isEmpty())
+        if (grid.isEmpty() && fluids.isEmpty())
             return LayResult.NOT_A_RECIPE;
         ItemKey result;
         int resultCount;
@@ -333,7 +384,7 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
             }
         }
         contentHolder.writePattern(payload.pattern(), CrafterGrid.ofNullable(written), filterCells, counts, result,
-                resultCount);
+                resultCount, fluids);
         markDirty();
         return LayResult.LAID;
     }
@@ -348,7 +399,9 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
 
     /** What became of a recipe viewer's lay. */
     public enum LayResult {
-        LAID, NOT_A_RECIPE, MAKES_ITS_INGREDIENT
+        LAID, NOT_A_RECIPE, MAKES_ITS_INGREDIENT,
+        /** A fluid cell names a fluid this server does not have (appended, issue #55). */
+        UNKNOWN_FLUID
     }
 
     /**
@@ -510,7 +563,7 @@ public class ProductionMenu extends MenuBase<WarehouseProductionBlockEntity> {
                 patterns.keyAt(slot, index).ifPresent(key -> entries.add(new ProductionScreenState.EntryView(index,
                         key, patterns.countAt(slot, index), patterns.isFilterAt(slot, index))));
             }
-            views.add(new ProductionScreenState.PatternView(entries));
+            views.add(new ProductionScreenState.PatternView(entries, patterns.fluidCells(slot)));
         }
         List<ProductionScreenState.OrderView> orders = List.of();
         List<StoppedProduct> stopped = List.of();

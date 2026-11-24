@@ -122,6 +122,9 @@ public final class OptimizerBlockGameTests {
             // Without a warehouse Optimise starts nothing, and the screen says that no warehouse serves it.
             helper.assertValueEqual(OptimizerMenu.submit(player, menu.containerId, OptimizerAction.OPTIMISE, 0,
                     Optional.empty()), Optional.of(false), "no warehouse, no order");
+            helper.assertValueEqual(menu.screenState().message(), OptimizerScreenState.Message.NO_WAREHOUSE,
+                    "the press says that no warehouse serves it (issue #52)");
+            helper.assertFalse(menu.screenState().misaligned(), "standing in no aisle, it faces away from none");
             OptimizerScreenState state = optimizer.screenState(null, Map.of(), OptimizerScreenState.Message.NONE,
                     0, 0);
             helper.assertFalse(state.linked(), "no controller serves it");
@@ -235,8 +238,8 @@ public final class OptimizerBlockGameTests {
                 .thenWaitUntil(() -> helper.assertTrue(aisle.controller().optimizerOrder(
                         aisle.absoluteRackPos(OPTIMIZER_RACK)).isEmpty(), "the order left with its optimizer"))
                 // Placed again by a player standing behind the rack, it faces away from the aisle: misaligned, so no
-                // member, although its screen still finds the warehouse. Breaking a block that is no member forgets
-                // nothing, so an order it started would outlive it with nobody left to cancel it.
+                // member, although the registry still finds the warehouse at its position. Breaking a block that is
+                // no member forgets nothing, so an order it started would outlive it with nobody left to cancel it.
                 .thenExecute(() -> helper.setBlock(aisle.rackPos(OPTIMIZER_RACK),
                         WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState()
                                 .setValue(WarehouseOptimizerBlock.FACING, aisle.sideDirection(OPTIMIZER_RACK))))
@@ -253,12 +256,75 @@ public final class OptimizerBlockGameTests {
                     helper.assertTrue(controller.locationAt(aisle.absoluteRackPos(OPTIMIZER_RACK)).isEmpty(),
                             "a misaligned optimizer is no member");
                     WarehouseOptimizerBlockEntity optimizer = aisle.optimizerAt(OPTIMIZER_RACK);
-                    helper.assertTrue(optimizer.controller().isPresent(), "its screen still finds the warehouse");
+                    helper.assertTrue(WarehouseRegistry.findController(helper.getLevel(),
+                            aisle.absoluteRackPos(OPTIMIZER_RACK)).isPresent(),
+                            "the registry still finds the warehouse");
+                    // Issue #52: but the optimizer counts as served only as a member, so its screen says so.
+                    helper.assertTrue(optimizer.controller().isEmpty(), "no warehouse serves a non-member");
+                    helper.assertTrue(optimizer.misaligned(), "and it knows it faces away from the aisle");
                     optimizer.editRow(0, IRON);
                     helper.assertValueEqual(optimizer.optimise(optimizer.rows().keys()), Optional.empty(),
                             "but it starts no order");
                     helper.assertTrue(controller.optimizerOrder(aisle.absoluteRackPos(OPTIMIZER_RACK)).isEmpty(),
                             "and the warehouse keeps none for it");
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Issue #52: an optimizer placed facing away from a stocked aisle stands at a rack position of that aisle, so the
+     * registry finds the warehouse, but it is no member. Optimise pressed through the menu (the path a player's click
+     * takes) must say why nothing happens, the screen must not look served, and no order may be created.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void optimizerFacingAwaySaysWhy(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS).build(false);
+        aisle.storage(LOW, new ItemStack(Items.IRON_INGOT, IRON_STORED));
+        aisle.storage(HIGH);
+        helper.setBlock(aisle.rackPos(OPTIMIZER_RACK), WareworksBlocks.WAREHOUSE_OPTIMIZER.getDefaultState()
+                .setValue(WarehouseOptimizerBlock.FACING, aisle.sideDirection(OPTIMIZER_RACK)));
+        BlockPos optimizerPos = aisle.absoluteRackPos(OPTIMIZER_RACK);
+
+        helper.startSequence()
+                .thenWaitUntil(() -> {
+                    aisle.assertReady(2, 0, 0);
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(controller.countOf(IRON), (long) IRON_STORED, "iron indexed");
+                    helper.assertFalse(controller.isMembershipDirty(), "membership processed");
+                })
+                .thenExecute(() -> aisle.setStorePriority(HIGH, HIGH_PRIORITY))
+                .thenWaitUntil(() -> helper.assertTrue(aisle.controller().isStoragePrioritised(HIGH),
+                        "the controller read the priority"))
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    WarehouseOptimizerBlockEntity optimizer = aisle.optimizerAt(OPTIMIZER_RACK);
+                    helper.assertValueEqual(WarehouseRegistry.assignmentOf(helper.getLevel(), optimizerPos, optimizer)
+                            .state(), AisleAssignment.State.MISALIGNED, "the optimizer faces away from the aisle");
+                    helper.assertTrue(controller.locationAt(optimizerPos).isEmpty(), "so it is no member");
+                    helper.assertTrue(WarehouseRegistry.findController(helper.getLevel(), optimizerPos).isPresent(),
+                            "although the registry finds the warehouse at its position (the case of issue #52)");
+
+                    Player player = playerAt(helper, aisle.rackPos(OPTIMIZER_RACK));
+                    OptimizerMenu menu = openMenu(player, optimizer);
+                    helper.assertValueEqual(setItem(player, menu.containerId, 0, IRON), Optional.of(true),
+                            "iron is listed");
+                    OptimizerScreenState before = menu.screenState();
+                    helper.assertFalse(before.linked(), "the screen must not look served by the warehouse");
+                    helper.assertValueEqual(OptimizerMenu.submit(player, menu.containerId, OptimizerAction.OPTIMISE, 0,
+                            Optional.empty()), Optional.of(false), "Optimise starts nothing");
+                    OptimizerScreenState after = menu.screenState();
+                    helper.assertTrue(after.message() != OptimizerScreenState.Message.NONE,
+                            "the press must say why nothing happens");
+                    helper.assertValueEqual(after.message(), OptimizerScreenState.Message.MISALIGNED,
+                            "the reason: not part of a warehouse, face the aisle");
+                    helper.assertTrue(after.misaligned(), "the status line names the misalignment as well");
+                    helper.assertTrue(controller.optimizerOrder(optimizerPos).isEmpty(), "no order was created");
+                    helper.assertValueEqual(OptimizerMenu.submit(player, menu.containerId, OptimizerAction.OPTIMISE_ROW,
+                            0, Optional.empty()), Optional.of(false), "Optimise on the row starts nothing either");
+                    helper.assertValueEqual(menu.screenState().message(), OptimizerScreenState.Message.MISALIGNED,
+                            "and says why as well");
+                    helper.assertTrue(controller.optimizerOrder(optimizerPos).isEmpty(), "still no order");
+                    player.containerMenu = player.inventoryMenu;
                 })
                 .thenSucceed();
     }

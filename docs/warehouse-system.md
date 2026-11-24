@@ -383,7 +383,7 @@ Classes: `content.storage.WarehouseInterfaceBlock`, `WarehouseInterfaceBlockEnti
   * **"One type" also means "nothing of another type on its way here".** `committedTo(rack, key)` reads the stock index *and* the reservation ledger (`ReservationView#reservedCapacity(rack)` against `(rack, key)`), both reads the planner already makes. Without the ledger half, an **empty** one-type location with a cobblestone job in flight would accept a dirt job planned in the same window and two item types would be travelling into a location whose premise is one — not item loss, because the loser is rerouted (§8), but a wasted and inexplicable trip.
   * **It is a gate, not a ranking key.** `JobPlanner`'s `holdsOnlyTypeOf` (§7.4) merely *prefers* a location free of other item types and compares the **item**; this refuses a second **key** outright, because ADR-021 never re-shuffles and a location mixed once would stay mixed for the world's life.
   * **Cost, named rather than discovered.** An `AisleFilters` entry is dropped only for a location with no filter, no priority, any item type and storing allowed — which is what makes a wall of plain interfaces free. A bay is never neutral, so a 1 056-position warehouse of bays keeps 1 056 small entries where the same warehouse of interfaces keeps none.
-  * **Consequence for the reason ladder.** A warehouse whose locations all refuse the incoming item reports `NO_MATCHING_FILTER`, not `WAREHOUSE_FULL` — what a store-filter rejection has always meant, and the wording the bay's own goggle lines have to agree with. Both M28 gates answer `FilterMatch.REJECTED` **before** the filter is evaluated, so that reason now also covers a bay committed to another item type and a bay the column rule took out of service, and **neither of those is a filter**. The line the goggles show was therefore reworded in the M28 review, from "no storage location has a filter that accepts these items" to **"no storage location takes these items, whatever room it has"** — true of all three causes and still distinct from `WAREHOUSE_FULL`'s "no storage location accepts these items", which is about room. A reason of its own (`NO_LOCATION_FOR_TYPE`) stays the follow-up the design named; the wording is what a player reads, and it no longer names a cause that is not there.
+  * **Consequence for the reason ladder.** A warehouse whose locations all refuse the incoming item reports `NO_MATCHING_FILTER`, not `WAREHOUSE_FULL` — what a store-filter rejection has always meant, and the wording the bay's own goggle lines have to agree with. Both M28 gates answer `FilterMatch.REJECTED` **before** the filter is evaluated, so that reason now also covers a bay committed to another item type and a bay the column rule took out of service, and **neither of those is a filter**. The line the goggles show was therefore reworded in the M28 review, from "no storage location has a filter that accepts these items" to **"no storage location takes these items, whatever room it has"** — true of all three causes and still distinct from `WAREHOUSE_FULL`'s "no storage location accepts these items", which is about room. **Issue #53 (ADR-087) built that reason of its own:** a one-type location committed to another key now answers `FilterMatch.TAKEN_BY_OTHER_TYPE` — still refused before the estimate and any live call, still ranked last on a `RETRIEVE` reroute, exactly like `REJECTED` — when its own filter would allow the key, and `REJECTED` when the filter rejects it too (`AisleFilters#match` asks the filter behind the gate only to name the cause; a bay without a filter answers that with one field read). The store survey notes such a skip apart from a filter rejection, and an input whose items met it reports **`NO_LOCATION_FOR_TYPE`** ("no free place for this item type"), declared right after `NO_MATCHING_FILTER`, winning over it when both happened (a free place of the right kind is what was missing) and arming the same back-off. `NO_MATCHING_FILTER` stays where a filter really rejects, and where an empty bay was taken out of service by the column rule.
   * **Tests**: the seam itself has no world behaviour until the bay exists, so it is proved by the suite staying green (JUnit and all 437 GameTests) and by teeth: defaulting `acceptsStoring()` to `false` fails **122** of the 437 GameTests, defaulting `holdsOneTypeOnly()` to `true` fails **11** with the predicted message (a second key refused, `NO_MATCHING_FILTER` where `WAREHOUSE_FULL` was expected). The bay's own tests are `gametest.RackBayGameTests`.
   * **What the two rules really buy, measured with the bay in place (M28 step 10).** `acceptsStoring()` is load-bearing: forcing it to `true` fails four GameTests, `anoverloadedbaystoresnothingbutstaysretrievable` among them. `holdsOneTypeOnly()` is **not**, and that is worth knowing rather than re-deriving: forcing it to `false` leaves the whole suite green, because a location that already holds another item type estimates **zero** room for the incoming one (`InventorySnapshot#insertable` over a bay's single slot) and the planner's capacity gate drops it one step later anyway. The rule's value is therefore the ladder position — no filter evaluation, no estimate, no live call, no `RefusalMemory` entry for a bay that is about to become free — and not a different outcome. The **ledger half** of `committedTo` cannot be reached at all today: dispatch plans only while the dock `canAcceptJob()` (idle, empty head) and the ledger is rebuilt from that same dock's job every interval, so there is no tick in which an empty bay carries a reservation while a second job is being planned. `baytwojobsonetype` therefore asserts the invariant it defends on every tick — the capacity reserved at a bay is accounted for by one key, and no job carries a second type towards it — and both branches were probed to confirm they really run against a live reservation and a live job. A second crane per controller, or a queue of planned jobs, is the change that would make the ledger half matter, and that test is what would go red.
 * **Tests**: `gametest.WarehouseInterfaceGameTests` (`interfacechestsnapshot`, `interfacenoinventory`, `interfaceinventoryremoved`, `interfacebarrelandvault`, `interfacerotation`, `interfaceplacement`, `interfacegoggleobserver`, `interfacesummarysyncisbounded`, `interfacesummarymalformedtags`, `interfacebreak`); `InventorySummaryTest` (JUnit). The two hint tests assert the dirty flag directly after the content change, so they fail when the `onNeighborChange` hint is disabled. `interfacegoggleobserver` covers the ray pick with a mock player (goggles, spectator, non-observable block, silent change). Not covered by a GameTest: an attached position in an unloaded chunk (GameTest areas are force-loaded, and an unloaded chunk directly next to a test structure cannot be set up reliably; the branch is a plain `level.isLoaded` guard).
@@ -5576,7 +5576,7 @@ factory far away: the recipe travels as a slip in the package.
   and gets a new one), a station that already has the other tier, a machine that already has a selector, and the
   machine's top face. A Mixer or Press click points at the Basin below it.
 * **The pattern check.** At a selector station every pattern is checked against the machine's real recipes: one
-  output, no chance outputs, no fluids, whole runs, Create's `allowStonecuttingOnSaw` and its automation filter. A
+  output, no chance outputs, no fluid results (a fluid ingredient needs matching fluid cells, §3.13), whole runs, Create's `allowStonecuttingOnSaw` and its automation filter. A
   pattern that fails (also one with List or Attribute Filter cells) is drawn red with the reason in the station's
   screen and never ordered there.
 * **Switching off and breaking.** The selector row of the station's screen switches the selector (or the slips) off
@@ -5607,7 +5607,7 @@ factory far away: the recipe travels as a slip in the package.
 * **Layouts that work:** saw facing up fed by a chute or hopper from the station, output into the return input; a
   basin under a Mixer or Press with a funnel into the return input; a far factory with an unpacking Packager, a chest,
   a chute and the saw, the products packed and sent back to a Packager behind the return input. **Layouts that do
-  not:** a press on a belt, Deployers, fluid recipes, two stations on one machine, two selectors on one machine, a
+  not:** a press on a belt, Deployers, fluid results, fluid recipes at the Ender tier, two stations on one machine, two selectors on one machine, a
   Crafter Feeder at a selector station, a long belt between the unpack target and the machine (not inspected).
 * **Where it shows.** The terminal's order rows and tooltips, the station screen's selector row (machine, setting,
   switches, holds and the Resume affordance) and the goggles of the station and of the selector (setting, set-backs,
@@ -7607,7 +7607,8 @@ and no fluid bay; where nothing fits, the crane holds and retries as for any job
 crane's ordinary transfers, so the item-conservation invariant needs no new rule.
 
 **When it is planned** (§7.1): as a last planner stage, only when no request, supply, store or collect found a job,
-without moving the arrival round robin's cursor and without a reason of its own, so the goggles keep saying what the
+without moving the arrival round robin's cursor and without a planning reason of its own (an entry's own reason, issue
+#53, goes to the optimizer's row, below), so the goggles keep saying what the
 real work is doing. It runs during a "warehouse full" back-off too, because it is no arrival, and re-arms that
 back-off itself. Sources are tried worst first (lowest priority, then travel), targets best first. With several
 cranes the nearest free crane that reaches both ends takes the trip (§7.8).
@@ -7626,11 +7627,29 @@ keyed by the optimizer's rack position):
   the warehouse has when every crane is free, and ends if that finds nothing either; one whose better place is only
   behind the busy crane stays open. It then ends in every running order that lists it.
 * Only an optimizer the warehouse records as a member starts an order: a misaligned one (turned away from the aisle)
-  is refused, because removing a member is what forgets its order.
+  is refused, because removing a member is what forgets its order. Its screen and goggles count it as served only as
+  a member (`WarehouseOptimizerBlockEntity#controller`, issue #52): the status line reads "Not in a warehouse: face
+  the aisle" for a misaligned one and "Not part of a warehouse" outside any aisle, and a press of Optimise or of
+  the stop mark answers with that reason (`OptimizerScreenState.Message#MISALIGNED` / `#NO_WAREHOUSE`).
 * The order ends when every entry has, when its trips run out, when the player cancels or when the optimizer is
   removed. A trip under way is always finished: a crane's job is never taken back. Nothing polls and nothing retries;
   an order means "what fits now".
 * Finished orders are kept, so the pips and the status row can still say what the last one did.
+* **Why an entry ended (issue #53, ADR-087).** Every ended entry keeps a `core.job.RelocationReason`, decided on the
+  server and never guessed on the client: by the controller when nothing of the item may move at all (`NONE_IN_STOCK`
+  when the index holds none, `SPOKEN_FOR` otherwise), and by the planner's relocation stage from the very sources it
+  searched (`JobPlanner#whyNothingBetter`, reported in `PlanResult#relocationReasons`): no source left (`NONE_IN_STOCK`,
+  `SPOKEN_FOR`, or `NOT_REACHABLE` when it lies only in unavailable or refusing places); no available storage location
+  above the lowest source priority but an unavailable one (unloaded chunk, broken rail: `NOT_REACHABLE` too); none
+  above it at all (`SAME_PRIORITY` when every one has that priority — the default 0 everywhere — and
+  `NO_HIGHER_PRIORITY` otherwise); a higher location that `RelocationRule` would accept, or would accept as a plain
+  place once the other item type in it is gone, and none had room (`NO_ROOM_HIGHER`); otherwise every higher
+  location's filter rejects the item or fits it worse, or package mode keeps the item out of it
+  (`FILTER_DOES_NOT_FIT`). A dedicated source is therefore never told "no room" for a one-type bay of another item. The diagnosis reads priorities and filters only, spends no live call and runs once
+  per search that ended empty. A `NOTHING_TO_MOVE` row carries the reason to the screen (`OptimizerScreenState.RowView#reason`):
+  its dot turns gold and its tooltip reads the reason and what to do about it ("All places have the same priority" /
+  "Give better places a higher priority"); "Nothing to move" stays for `NONE_IN_STOCK` only. The reason is saved with
+  the entry under `EndReason` (by name; an entry saved without one reads as none).
 
 **The numbers are computed only while the screen is open** (`WarehouseControllerBlockEntity#optimizerView`, returning
 one `core.stock.PriorityBreakdown` per item). The counts per priority come from the stock index and the cached
@@ -7642,6 +7661,23 @@ its best-ranked target first (the better filter match, then the higher priority)
 item. It is an estimate: the crane may move a little less (a stale snapshot, a place it cannot reach) or, where the
 planner prefers a place that already holds the item, a little more. `OptimizerMenu` pushes the counts every 10 ticks and repeats the walk at most every
 40 ticks, sooner when the list changes or the order puts items down. An optimizer nobody looks at costs nothing.
+
+**Merge mode and the home of an item** ([issue #57](https://github.com/Richie1710/create-wareworks/issues/57), **ADR-088**,
+amending ADR-079 D2). Optimise only moves up, so an item kept in several places of one priority stays split. Merge
+gathers it, on request and for the listed items only, with the same idle-crane rule and the same
+`optimizer.tripsPerRequest` cap (a second button beside Optimise; a click on a row's places number merges that item
+alone; `OptimizerOrder.Mode.MERGE`, saved as `Mode: "MERGE"` only when set). Where an item belongs is one rule, `core.job.ItemHome`,
+read by the store ranking and by the merge: (1) a place whose store filter names the item is its home; (2) otherwise the
+place that already holds the most of it on the highest priority that holds it at all, a tie to the place's index order
+in the aisle (never the travel time). `JobPlanner#planMerge` takes the smallest other holder as the source, never into a
+lower priority and never into a filter that fits worse (`RelocationRule#isMergeTarget`: equal priority qualifies, which
+`isBetter` does not allow), only a source whose whole stock fits the home's room, one trip at most a carry at a time,
+and it leaves fluid bays and places package mode keeps the item out of alone. Every trip goes from a source to the one
+home, so the number of places falls and nothing is moved twice. The new reasons are `ALREADY_ONE_PLACE`, `HOME_FULL`
+(the home has no room for the smallest source) and `HOME_WORSE` (every other place has a higher priority or a better
+filter than the home). The screen has a fourth number, **places** (a small `#` column): in how many places the item lies,
+unloaded ones included, a shared inventory counted once and fluid bays left out
+(`WarehouseControllerBlockEntity#optimizerPlaces`).
 
 **Goggles**: the header "Warehouse Optimizer:", the aisle assignment, "Items: n" or "No items set", "Not part of a
 warehouse" outside one, and "Optimising: n moved, k trips left" while its order runs. Observer-driven and throttled
@@ -7672,7 +7708,8 @@ order.
 * `content.station`: `WarehouseOptimizerBlock` / `BlockEntity`, `OptimizerRows`, `OptimizerMenu`,
   `OptimizerMenuLayout`, `OptimizerScreenState`, `OptimizerGoggleSummary`, `OptimizerAction`.
 * `client.gui`: `WarehouseOptimizerScreen`, `ClientOptimizers`, `OptimizerScreenUpdates`.
-* `network`: `OptimizerActionPayload`, `OptimizerScreenPayload` (network version 22).
+* `network`: `OptimizerActionPayload`, `OptimizerScreenPayload` (network version 30 since issue #57).
+* Merge mode (issue #57): `core.job.ItemHome`, `JobPlannerMergeTest`, `ItemHomeTest`, GameTests `OptimizerMergeGameTests`.
 * JUnit: `RelocationRuleTest`, `JobPlannerRelocateTest`, `OptimizerOrdersTest`, `RelocationStockTest`,
   `PriorityBreakdownTest`, `OptimizerTextWidthTest`, and additions to `ReservationLedgerTest`, `TransportJobTest`,
   `CraneRosterTest` and `AisleMembershipTest`.
@@ -8052,6 +8089,58 @@ Proof: GameTests `PackageModeGameTests`, `PackageModeLockoutGameTests`, `Package
 that world's `serverconfig`, real clicks, a census that counts every box as itself); the robustness run's package-mode
 phase; the Ponder scene `warehouse/package_mode`.
 
+### 3.13 Fluid cells in production patterns ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55), ADR-089)
+
+A production pattern may name up to **two fluid ingredients** next to its items (`core.production.FluidCell`: a fluid
+id and 1..1000 mB per run; two different fluids at most). The warehouse never moves fluid by itself: it moves **filled
+buckets**, exactly as the terminal's fluid orders do (§3.9), and the player's own machine turns a bucket into fluid.
+
+* **Planning.** `ProductionPlanner.payFluids` plans the fluid lines **before** the item lines, in whole containers of the
+  fluid's own bucket (`ControllerFluidSupply`, sized by `FillRecipes`; `ceil(runs × mB / container mB)`). The fluid comes
+  from the fluid bays' stock minus what the fill ledger already owes, the empty buckets from the item budget. A shortfall
+  is never expanded into a child step; it ends the plan with `FLUID_MISSING`, `NO_EMPTY_CONTAINER` or
+  `BUFFER_TOO_SMALL`, each naming the filled container or the item being made. The item stacks plus at most two
+  containers must fit `productionBufferSlots`; the binary search over the runs clamps an order to what fits.
+* **Supply.** A fluid line is a `SupplyLine` whose key is the filled bucket and whose `fluid` field is the fluid id. The
+  controller's `supplyNeeds()` lists fluid lines first and only for orders the Recipe Selector's gate admits;
+  `JobPlanner.planFluidSupply` serves one with an ordinary `FILL` job that now may end at a production station
+  (`JobType.FILL`). `fillLedger()` adds a synthetic FILL entry per open fluid line (rebuilt on every call, never saved),
+  so a terminal fill and a production order do not owe the same bucket twice. **At most two filled containers per
+  station** are in flight, counting the buffer (`fluidContainersHeldAt`) and the trips already reserved
+  (`FillSupply.heldAtStation`, `MAX_AT_STATION`). The crane drops the bucket into the station's buffer through the
+  existing insert path; the station's own item capability stays extract-only.
+* **Conservation.** A filled bucket is a carrier of its fluid: the item census counts the bucket as an item and the
+  fluid census counts the fluid inside it (§8, `FluidContainers`). A container the crane carries when its
+  order is cancelled or its station breaks is rerouted to a bay of its fluid and drained there. A container already in
+  the buffer stays: nothing lets a crane take items out of a production buffer, so it waits for the player's machine and
+  counts against the cap of two. Restock skips patterns with fluid cells.
+* **Persistence.** The station saves a fluid cell in a list of its own per slot (`FluidCells`, only while the slot has
+  one) and the controller a `Fluid` tag on a supply line (only for a fluid line); a pattern without a fluid is saved
+  byte for byte as before. Untrusted data never throws: unknown ids load as cells that can never be supplied, amounts are
+  clamped, and an order line whose container item cannot be read drops the whole order.
+* **Where it is refused.** `CrafterPatternCheck.FLUID_CELL` (a Crafter cannot take a fluid), package mode (inert, with
+  its red reason), the Ender Recipe Selector (`SelectorRecipeCheck.Verdict.FLUID_FAR`); a local selector at a Basin
+  accepts the recipe when `FluidNeeds` pairs the recipe's fluids one-to-one with the pattern's cells and equal amounts
+  (`FLUID_MISMATCH` otherwise). Heat is not checked.
+* **The player's machine** (no Mechanical Arm; verified on Create 6.0.10 by the visual scenario `fluidpattern`): an
+  extracting brass funnel filtered to the filled bucket on the station, an Item Drain under the funnel, a pump and pipes
+  into the Basin (every pipe with exactly two connections: an open pipe end pours away half of every transfer), a Mixer two blocks above
+  the Basin, a second filtered funnel for the other ingredients above the Basin, and the Basin's spout (its `FACING`)
+  into a Warehouse Input one level below; Create picks the spout side itself (`BasinBlockEntity#updateSpoutput`) and
+  only takes a side whose block has no collision shape, so a block placed on the spout side, a Recipe Selector
+  included, turns the spout down and the mud stays in the Basin. **What cannot be prevented, only documented:** a Mechanical Arm that can also
+  reach the Basin puts filled buckets into its item inventory; a depot as the empty bucket's way out jams after the
+  first bucket; the drain pushes the empty bucket out of the side its item last moved towards, which the funnel that
+  dropped it does not decide (north in the spike, east in the scenario), so a sink stands on every free side; the Item Drain (1500 mB) holds a third 1000 mB bucket until the machine has used fluid, and blocks
+  everything behind it; an amount that does not divide 1000 mB leaves a rest in drain and Basin that is neither
+  credited nor tracked. The empty bucket leaves through the return input or any real sink (a funnel over a chest, a
+  belt) and comes back as ordinary stock.
+* **Tests.** `FluidCellTest`, `ProductionPlannerFluidTest`, `JobPlannerFluidSupplyTest`, `FluidNeedsTest`,
+  `PatternLayTest`, `SelectorVerdictOrdinalTest`; GameTests `FluidPatternGameTests`, `FluidSupplyGameTests`, the
+  two-crane test in `MultiCraneGameTests`; the visual scenario `fluidpattern` (a real pattern, a real order, the whole
+  machine, item and fluid census exact on every tick, a rejoin mid order, the Recipe Selector on the Basin); the
+  robustness phase "fluid supply in flight".
+
 ## 4. Discovery and membership (no permanent world searches)
 
 * **`WarehouseRegistry`** (server-side, per `ServerLevel` via catnip `WorldAttached`, in-memory) maps controller position to `AisleBounds`. A controller registers in `onLoad()` (bounds become known after its first tick) and whenever its geometry changes. It unregisters in `invalidate()`/`remove()` (Create's `setRemoved` is final).
@@ -8246,7 +8335,8 @@ Dispatch runs only when a crane exists, is idle, has no held items and has speed
    * Item = first non-empty slot. Amount = `min(buffered count of item, carryLimit(item))`.
    * Candidates: locations accepting the item (live simulate insert > 0), ranked by (a) already contains the item (consolidation), then (b) travel time `crane → input → location`. (M3 refinement, §7.4: between (a) and (b), locations that are empty or hold only the item's type rank before locations holding other item types. M8, §3.1: a location whose filter **selects** the item ranks before all of them, and a rejecting one is dropped. M16, §3.1 and ADR-028: directly above travel time comes the **storage priority** a player gave the location, higher first. M17, §3.2.3 and ADR-029: the aisle's **accepting warehouse ports** are candidates of the *same* list, ordered above everything else by their target class — a diversion outranks every location, an overflow loses to every location that may take the item — so the full order is target class → filter → consolidation → item-type grouping → priority (a port's strength) → travel time → index order.)
    * Amount = `min(amount, liveInsertable(target) − reservedCapacity(target))`. A port's amount is bounded by the buffer and the carry limit but **not** by a stock rule's headroom (§3.2.3).
-   * No target: set status `WAREHOUSE_FULL` and back off `fullBackoffTicks` (default 40). An accepting port that was the only place left and is full reports `PORT_FULL` and backs off the same way (§3.2.3).
+   * No target: set status `WAREHOUSE_FULL` and back off `fullBackoffTicks` (default 40). An accepting port that was the only place left and is full reports `PORT_FULL` and backs off the same way (§3.2.3). Items whose only fitting places are one-type locations holding another item type report `NO_LOCATION_FOR_TYPE`, items no filter takes `NO_MATCHING_FILTER` (§3.1, issue #53); both back off the same way.
+   * **Each input's own answer** (issue #53): the reason its survey gave is kept per input (`PlanResult#storeReasons`, `CraneDispatch#storeReasonAt`, updated by the first planning round of each dispatch that surveys the input — a later round of the same dispatch plans with only the cranes still free, so its "full" may mean nothing more than a place behind a crane just given a job, and it only clears — cleared for an input a store job was just planned from and when nothing waits anywhere, not saved). `WarehouseControllerBlockEntity#storeRefusalAt` hands a store reason (`NoJobReason#refusesStoring`) to the Warehouse Input, whose goggles show "Not stored:" and the reason as a row of its own while it holds items, and for `NO_LOCATION_FOR_TYPE` the cure "Each rack bay holds one item type: add bays or a chest". It travels in `StationGoggleSummary` by name, only while present.
    * For a **collecting port** of the same walk it is the **COLLECT** branch (M18, §3.2.4): item = the first key of the port's last read that its filter allows and a stock rule still leaves headroom for, amount = `min(read count, headroom, carryLimit(item), liveExtractable(port))`, and the targets are ranked by the same `selectStorage` — a port is never offered as the target. At most `MAX_COLLECT_CANDIDATES` (12) collect sources are examined per run, and the cursor is left at the first one that was skipped, so the next run reaches it.
 3. Create the job, reserve (STORE and COLLECT reserve capacity at the target, RETRIEVE reserves stock at the source), assign to the crane.
 
@@ -8508,6 +8598,11 @@ several do:
   stock index, and skipped by the goggles' "incoming" summary.
 * **Room at a delivery target** (`reservedInbound`): what other jobs already carry to or have reserved at a target is
   subtracted, so the second crane never sets off towards room the first is about to fill.
+* **Room reserved for the same item counts as holding it** (issue #51): the store ranking's consolidation key asks the
+  ledger as well as the index (`reservedCapacity(location, key) > 0`). The index shows an empty location empty until a
+  crane has delivered into it, so while crane 1 carried an item to an empty location, crane 2 storing the same item saw
+  that location tie with every other empty one, and travel time from an input at the other end opened a second
+  location for one item. Room reserved for another item attracts nothing. The relocation targets share the ranking.
 * **One crane per port at a time**: only one crane collects from a collecting port, and only one brings a retrieve to a
   warehouse port, until it has delivered — a port's room is measured live, and two trips sized by the same room would
   bring twice what it takes. A terminal and a production station take any number of cranes.
@@ -8522,8 +8617,9 @@ crane's. The dock's goggles show the remaining trip ("About 14 s left"), worked 
 job and speeds (`core.crane.RemainingTrip`); while another crane holds it up the line adds "not counting the wait",
 because the estimate never contains traffic. The controller's crane list shows the same number per crane.
 
-**Tests**: `MultiCraneGameTests` (26 GameTests: joining, the cap, both ends at once, waiting, moving aside, the nearest
-crane and its tie-break, a comb and a ring, the four "never promise the same" cases, production on both cranes, the
+**Tests**: `MultiCraneGameTests` (33 GameTests: joining, the cap, both ends at once, waiting, moving aside, the nearest
+crane and its tie-break, a comb and a ring, the four "never promise the same" cases, one item into one location
+(`twocranesstoreoneitemintoonelocation`, issue #51), production on both cranes, the
 failure cases of §8.2, a save mid-flight, a deterministic trace, the goggles), and the JUnit tests of ADR-075.
 
 ## 8. Robustness rules (item conservation)

@@ -838,8 +838,8 @@ numbers of one rule, so keep the keeper's screen open on a second monitor if you
     "Rules: … " and "Rules paused: …", the terminal's badge tooltip and its **confirmation panel**, and both Ponder
     scenes. Nothing may show a raw key, run out of its box or be cut off — German is the longer language and the
     screenshot runs only ever render English, so this is the only place clipping shows up. The longest lines to watch are
-    the panel's reserved-ingredient sentence and, in the scenes, `warehouse_stock_rules.text_7` and `text_5` (119 and
-    115 characters in German, the two longest the milestone added).
+    the panel's reserved-ingredient sentence and, in the scenes, `warehouse_stock_rules.text_8`, `text_7` and `text_5` (119,
+    123 and 115 characters in German, the three longest the milestone added).
 
     The plural wart this check used to excuse is **fixed** (M15 Definition of Done): `gui.keeper.paused_lost` now reads
     "Ingredient items not recovered: %1$s" / "Nicht zurückgeholte Zutaten: %1$s", a label-and-number line that is right
@@ -1048,7 +1048,7 @@ settings, **read** the result and **believe** what the warehouse did.
     changes with the direction ("Angeforderter Gegenstand" / "Aufgenommener Gegenstand"), the port's goggle lines
     ("Anschluss: Überlauf (-1)", "Nimmt auf: Jeden Gegenstand", "Abgegeben: 24", "Aktiv", "Wartet auf ein Signal"), the
     controller's "Aufnehmende Anschlüsse: 2", the aisle display's "Anschlüsse: 2 aufnehmend", the crane's "Gibt ab", the
-    planning reason "ein aufnehmender Anschluss war der letzte mögliche Platz ..." and the output's Shift tooltip, which
+    planning reason "ein aufnehmender Anschluss war der einzige mögliche Platz ..." and the output's Shift tooltip, which
     names the overflow in its one sentence (since issue #22; the direction box is the Ponder scene's job). Nothing may show a raw key, run out of its box
     or be cut off — German is the longer language and the screenshot runs only ever render English, so this is the only
     place clipping shows up. The longest lines to watch are the new tooltip paragraphs and the planning reason.
@@ -4136,3 +4136,76 @@ you get tired of waiting, and put it back before judging check 160.
 515. **An operator edits the file on a running server.** Change `[packageMode] enabled` in the world's server config
      while the server runs and let a second player join: both players still see the mode the server runs in (the switch
      takes effect at the next start), never the edited value.
+
+## BX. An empty rack bay shows its filter ([issue #49](https://github.com/Richie1710/create-wareworks/issues/49))
+
+516. **Does a filtered but empty bay say what it is for?** Place a wooden, an andesite and a brass rack bay and click an
+    item (say an iron ingot) into each filter slot without storing anything: each bay shows that item at the front,
+    where the stored item stands once it is filled. Then store a different stack in a bay with a List Filter that lets
+    it in: the bay shows the stored item, not the filter. Clear a filter on an empty bay: it shows nothing. Repeat with
+    a List, an Attribute and a Package Filter as the filter: the bay shows the filter item itself. Leave the world and
+    rejoin, and walk more than a few chunks away and back: the filter items are still there. **Does the filter in front
+    of an empty bay ever get mistaken for stock?**
+
+## BY. Saying why nothing happens ([issue #53](https://github.com/Richie1710/create-wareworks/issues/53))
+
+517. **Does an optimizer row say why?** Build a short aisle of wooden rack bays, all at the default priority, put iron
+    into one and list iron and an item you do not have in a Warehouse Optimizer. Press Optimise: the iron's dot turns
+    gold, and its tooltip reads "All places have the same priority" with "Give better places a higher priority" below;
+    the item you do not have keeps the grey dot and "Nothing to move". Give the iron's bay priority 5 and press again:
+    "No place with a higher priority". Switch the game to German and read the same rows. **Does the reason tell you what
+    to do?**
+518. **Does a waiting input say why?** Fill every rack bay of a small aisle with a different item type and feed one
+    more type into the input. Look at the input with Engineer's Goggles: "Not stored:", then "no free place for this
+    item type", then "Each rack bay holds one item type: add bays or a chest". The controller's planning line says the
+    same reason. Set a filter for another item on one bay: where a filter is what refuses the item, the input says "no
+    storage location takes these items, whatever room it has". In German the rows fit the goggle box. **Would you know
+    what to build next?**
+519. **Does Merge gather an item?** Build an aisle with three wooden rack bays at one priority, put 20, 30 and 50 iron
+    into them and list iron in a Warehouse Optimizer. The row's number reads 3. Press Merge (the button beside Optimise):
+    the crane carries the 20, then the 30 into the bay holding 50, and the number reads 1; the two emptied bays are free
+    for another item. Press Merge again: the dot's tooltip reads "All of it lies in one place". Give one of the two
+    smaller bays a filter for iron first: now that bay is the home and the others are emptied into it. Give a bay with iron
+    a higher priority than the filter bay: its iron stays ("Other places rank above its home"). **Is it clear where the
+    iron went and why?**
+520. **Does storing follow the home?** After 519, feed more iron into the input: it goes to the bay that holds the most,
+    not to the nearest one. A click on a row's number merges that item alone; in German the number's tooltip and the
+    Merge button's texts read well and fit the window at GUI scale 4.
+
+## BZ. Fluid in a production pattern ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55))
+
+521. **Does a fluid cell feel right?** Open a Warehouse Production station and look at a pattern's screen: two fluid
+    cells sit beside the result cell. Click one with a filled water bucket: it shows water and "1000 mB" and the bucket
+    stays in your hand. Scroll: the amount changes by 50, with Shift by 250, with Ctrl by 1000, between 1 and 1000.
+    Hover it: the tooltip names the fluid, how many runs one bucket serves, and for 300 mB a gold line that a rest stays
+    in your machine. Right-click clears it. Leave the world and rejoin: the cell is still there. **Is it clear that
+    nothing was taken from your bucket and what the number means?**
+522. **Does the whole machine run without an arm?** Build this layout for real (the Ponder scene shows the principle
+    in a simplified form; these are the positions the `fluidpattern` scenario tests; README, "A pattern can
+    name a fluid"): an extracting brass funnel at the station filtered to a water bucket, an Item Drain under it, a
+    pump and pipes into a Basin from below (no pipe touching the drain), a Mixer two blocks above the Basin, a filtered
+    funnel with dirt above the Basin, the Basin's spout (its facing) into a Warehouse Input one level below, and a
+    funnel over a chest on every free side of the drain as the empty bucket's way out. Write the pattern dirt + 250 mB water -> mud, store a fluid bay of
+    water, empty buckets and dirt, order eight mud at the terminal. **Do two buckets arrive, does the drain empty them
+    one after the other, do the empty buckets end up in the chest and the mud in the terminal?**
+523. **Do the warnings hold?** Put a Mechanical Arm that reaches both the station and the Basin: a filled bucket ends
+    in the Basin's item slots (the warehouse cannot prevent it; the README says so). Use a depot as the way out of the
+    empty bucket: the second bucket jams in the drain. Use 300 mB: a rest of fluid stays in the drain and the Basin.
+    **Do the README and the Ponder scene "Fluid in a Production Pattern" warn about exactly these three things?**
+    Then cancel an order while two filled buckets stand in the station's buffer: with goggles on the station the line
+    "Filled containers left in the buffer: 2 (take them out)" shows, and the next order of that fluid waits until you
+    take them out. **Is the stuck pair visible and does taking them out free the line?**
+524. **What does the warehouse say when something is missing?** Order the mud with no empty bucket in stock, then with
+    no water in the bays, then with a one-slot buffer: each time the order is refused in the terminal with a reason that
+    names the filled bucket or the product. **Does the reason tell you what to stock?**
+525. **Does the Recipe Selector accept it?** Place a Recipe Selector on the Basin, link it to the station and bind the
+    Input: the pattern is not drawn red. Remove the fluid cell: the pattern is drawn red with "the recipe takes other
+    fluids or amounts than the pattern's fluid cells". Add a lit Blaze Burner under a heated recipe: the selector does
+    not check heat, the Basin's goggles say so. With an Ender Recipe Selector the station's fluid pattern is red too.
+    **Is every state explained in the station's screen?**
+526. **JEI and German.** With JEI installed, open the mud recipe (Mixer) in JEI and press "+" in the station's screen:
+    dirt and water 250 mB are laid; the same on a recipe with a fluid result or three fluids stays greyed out with a
+    reason. Switch the game to German: the cell's tooltip, the goggles line "Muster mit Flüssigkeit" and the refusals
+    read as German sentences and fit the window at GUI scale 4. **Does everything fit?**
+527. **Does going back lose only the fluid?** Open a world saved with a fluid pattern in the previous release (0.26.0): the
+    pattern's items and result are there, the fluid cell is gone. **Is that what the CHANGELOG warned about?**

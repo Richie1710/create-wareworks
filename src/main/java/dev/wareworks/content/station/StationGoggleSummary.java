@@ -6,6 +6,7 @@ import dev.wareworks.content.controller.AisleAssignment;
 import dev.wareworks.content.controller.RequestRejection;
 import dev.wareworks.content.item.ItemTypeSummaries;
 import dev.wareworks.core.inventory.InventorySummary;
+import dev.wareworks.core.job.NoJobReason;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.item.Item;
@@ -40,11 +41,16 @@ import net.minecraft.world.item.Item;
  *                       {@link PackageUnpackSummary}, server-only knowledge again, and
  *                       {@link PackageUnpackSummary#NONE} — written as nothing at all — for every station no package
  *                       was ever offered to
+ * @param filling        whether an open request of the station is filled at the fluid bays (M31)
+ * @param notStored      why a <b>warehouse input</b>'s items were not stored in the last planning run that looked at it
+ *                       (issue #53, {@code WarehouseControllerBlockEntity#storeRefusalAt}): server-only knowledge, written
+ *                       by name and only while present, so no other station's packet grows by a byte
  */
 public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<Item> buffer, int openRequests,
                                    long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection,
                                    long exportedItems, boolean portArmed, PortCollectSummary collect,
-                                   PackageUnpackSummary packages, boolean filling) {
+                                   PackageUnpackSummary packages, boolean filling,
+                                   Optional<NoJobReason> notStored) {
     public static final StationGoggleSummary NONE = new StationGoggleSummary(AisleAssignment.NONE,
             InventorySummary.empty(), 0, 0L, 0L, Optional.empty(), 0L, false, PortCollectSummary.NONE,
             PackageUnpackSummary.NONE);
@@ -60,6 +66,7 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
     private static final String COLLECT = "Collect";
     private static final String PACKAGES = "Packages";
     private static final String FILLING = "Filling";
+    private static final String NOT_STORED = "NotStored";
 
     public StationGoggleSummary {
         if (assignment == null)
@@ -72,6 +79,8 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
             collect = PortCollectSummary.NONE;
         if (packages == null)
             packages = PackageUnpackSummary.NONE;
+        if (notStored == null)
+            notStored = Optional.empty();
         openRequests = Math.max(0, openRequests);
         requestedItems = Math.max(0L, requestedItems);
         deliveredItems = Math.max(0L, deliveredItems);
@@ -83,38 +92,45 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
             long requestedItems, long deliveredItems, Optional<RequestRejection> lastRejection, long exportedItems,
             boolean portArmed, PortCollectSummary collect, PackageUnpackSummary packages) {
         this(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection, exportedItems, portArmed,
-                collect, packages, false);
+                collect, packages, false, Optional.empty());
+    }
+
+    /** This summary saying why the input's items were not stored (issue #53), or that nothing says so. */
+    public StationGoggleSummary withNotStored(Optional<NoJobReason> notStored) {
+        return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
+                exportedItems, portArmed, collect, packages, filling, notStored);
     }
 
     /** This summary saying whether an open request of the station is filled at the fluid bays (M31, issue #21). */
     public StationGoggleSummary withFilling(boolean filling) {
         return filling == this.filling ? this : new StationGoggleSummary(assignment, buffer, openRequests,
-                requestedItems, deliveredItems, lastRejection, exportedItems, portArmed, collect, packages, filling);
+                requestedItems, deliveredItems, lastRejection, exportedItems, portArmed, collect, packages, filling,
+                notStored);
     }
 
     /** This summary with other request data. */
     public StationGoggleSummary withRequests(int open, long requested, long delivered,
             Optional<RequestRejection> rejection) {
         return new StationGoggleSummary(assignment, buffer, open, requested, delivered, rejection, exportedItems,
-                portArmed, collect, packages, filling);
+                portArmed, collect, packages, filling, notStored);
     }
 
     /** This summary with a warehouse port's export counter and its unspent rising edge (M17). */
     public StationGoggleSummary withPort(long exported, boolean armed) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exported, armed, collect, packages, filling);
+                exported, armed, collect, packages, filling, notStored);
     }
 
     /** This summary with what a collecting warehouse port fetches from and has fetched (M18, issue #13). */
     public StationGoggleSummary withCollect(PortCollectSummary collect) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exportedItems, portArmed, collect, packages, filling);
+                exportedItems, portArmed, collect, packages, filling, notStored);
     }
 
     /** This summary with what a warehouse input has made of the packages handed to it (M26, issue #18). */
     public StationGoggleSummary withPackages(PackageUnpackSummary packages) {
         return new StationGoggleSummary(assignment, buffer, openRequests, requestedItems, deliveredItems, lastRejection,
-                exportedItems, portArmed, collect, packages, filling);
+                exportedItems, portArmed, collect, packages, filling, notStored);
     }
 
     /** Writes this summary into {@code tag}. Never throws. */
@@ -150,6 +166,8 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
         // And only a station that waits for a fill (M31).
         if (filling)
             tag.putBoolean(FILLING, true);
+        // And only an input whose items wait (issue #53).
+        notStored.ifPresent(reason -> tag.putString(NOT_STORED, reason.name()));
     }
 
     /** Reads a summary written by {@link #write}. Never throws; missing or invalid data reads as empty values. */
@@ -160,6 +178,15 @@ public record StationGoggleSummary(AisleAssignment assignment, InventorySummary<
                         ? RequestRejection.byName(tag.getString(LAST_REJECTION)) : Optional.empty(),
                 tag.getLong(EXPORTED_ITEMS), tag.getBoolean(PORT_ARMED),
                 PortCollectSummary.read(tag.getCompound(COLLECT)),
-                PackageUnpackSummary.read(tag.getCompound(PACKAGES)), tag.getBoolean(FILLING));
+                PackageUnpackSummary.read(tag.getCompound(PACKAGES)), tag.getBoolean(FILLING),
+                tag.contains(NOT_STORED, Tag.TAG_STRING) ? reasonByName(tag.getString(NOT_STORED)) : Optional.empty());
+    }
+
+    private static Optional<NoJobReason> reasonByName(String name) {
+        for (NoJobReason reason : NoJobReason.values()) {
+            if (reason.name().equals(name))
+                return Optional.of(reason);
+        }
+        return Optional.empty();
     }
 }

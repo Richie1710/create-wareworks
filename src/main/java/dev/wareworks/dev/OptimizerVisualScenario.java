@@ -42,6 +42,7 @@ import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.job.RelocationReason;
 import dev.wareworks.core.job.TransportJob;
 import dev.wareworks.core.optimizer.OptimizerOrder;
 import dev.wareworks.core.stock.PriorityBreakdown;
@@ -94,13 +95,17 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * the iron already listed is left out ({@code optimizer-imported}). Gold cannot move, copper can;</li>
  * <li>Optimise: the world is frozen in the very server tick the crane carries the first {@value #FIRST_TRIP} iron to
  * the better chest. The screen shows the running order, its aqua and grey pips and the red cancel mark
- * ({@code optimizer-running}); then the screen is closed and the carry is shot across and along the aisle
- * ({@code carry-across}, {@code carry-along});</li>
+ * ({@code optimizer-running}); the gold row's gold pip says why the gold stays, the reason the server decided
+ * (issue #53): "No place with a higher priority" and what to do about it ({@code optimizer-reason}); then the screen
+ * is closed and the carry is shot across and along the aisle ({@code carry-across}, {@code carry-along});</li>
  * <li>frozen again while the second trip carries the remaining {@value #SECOND_TRIP}: the cancel mark's tooltip
  * ({@code optimizer-cancel-tooltip}) and a real click on it. The order stops at once, the trip under way is finished and
  * counted, and the copper stays where it lies ({@code optimizer-cancelled});</li>
  * <li>the same screen at the floor every layout is measured against, 1280 x 960 at GUI scale 4, i.e. 320 x 240
- * ({@code optimizer-floor}).</li>
+ * ({@code optimizer-floor});</li>
+ * <li>issue #52: the optimizer turned away from the aisle, so it is no member: the status row reads "Not in a
+ * warehouse: face the aisle", a real click on Optimise answers with that reason and the warehouse keeps no order
+ * ({@code optimizer-misaligned}); then it is turned back.</li>
  * </ol>
  * Every round starts from the same stock ({@link #restock}). The second render pass (Flywheel off, still German) clicks
  * the copper row's pip, which optimises that item alone, shoots its carry and the finished order with the green pip.
@@ -153,6 +158,9 @@ public final class OptimizerVisualScenario implements VisualScenario {
     /** The second relocation: the rest of the overflow. */
     private static final int SECOND_TRIP = IRON_LOW - FIRST_TRIP;
     private static final int IRON_TOTAL = IRON_HIGH + IRON_LOW;
+    /** The gold that also lies in the iron's chest while the merge phase runs, and the gold in all. */
+    private static final int GOLD_SPREAD = 10;
+    private static final int GOLD_TOTAL = GOLD_HIGH + GOLD_SPREAD;
     /** Where a carry is frozen: halfway between the overflow chest and the chest the iron belongs in. */
     private static final double CARRY_SHOT_X = (LOW.x() + HIGH.x()) / 2.0;
 
@@ -512,6 +520,7 @@ public final class OptimizerVisualScenario implements VisualScenario {
                     ScreenInput.optimizerCancelMark(screen);
                 });
         parkAndShoot(script, "optimizer-running" + suffix);
+        rowReason(script, tag, suffix);
         closeScreen(script, tag);
         fly(script);
         script.shotFrom(ACROSS, "carry" + suffix)
@@ -596,6 +605,350 @@ public final class OptimizerVisualScenario implements VisualScenario {
         // 6. The floor every layout is measured against.
         floor(script, tag, "optimizer-floor" + suffix);
         closeScreen(script, tag);
+
+        // 7. Issue #57: merge mode, from the same screen. Before the next step on purpose: turning the optimizer away
+        // forgets its order, so the next round starts from a list nothing has been ordered for.
+        mergePhase(script, suffix);
+
+        // 8. Issue #52: turned away from the aisle, the optimizer is not a member. Its screen says so, and Optimise
+        // answers with that reason and starts nothing.
+        misaligned(script, suffix);
+    }
+
+    // --- issue #57: merge mode ------------------------------------------------------------------------------------------
+
+    /**
+     * Issue #57, ADR-088: the gold also lies in the iron's chest ({@value #GOLD_SPREAD} of it, beside the iron), so it is
+     * kept in two places of one priority. The rows show how many places hold each item before anything is pressed; a
+     * real click on the gold row's places number merges that item alone — the crane carries the {@value #GOLD_SPREAD} gold
+     * into the fuller chest (frozen mid-carry), the order finishes, the place that held it is empty and the number reads
+     * 1; then a real click on the Merge button for every row ends all three at once with "All of it lies in one place".
+     * The server's order, entries, reasons, chests and the census are checked before every shot.
+     */
+    private void mergePhase(VisualScript script, String suffix) {
+        String tag = "optimizer" + suffix + "-merge: ";
+        script.server(tag + "let some gold lie in the iron's chest too", OptimizerVisualScenario::restockSpread)
+                .serverUntil(tag + "wait until the controller has indexed the spread gold",
+                        OptimizerVisualScenario::spreadReady, SCENE_READY_TIMEOUT_TICKS)
+                .server(tag + "baseline census of the aisle and the player", (server, context) -> {
+                    expected = SceneItemCensus.take(server.overworld(), censusBox, context.serverPlayer(server));
+                    LOGGER.info(PREFIX + "optimizer: merge baseline census {}", SceneItemCensus.describe(expected));
+                });
+        script.camera(AT_OPTIMIZER);
+        openScreen(script, tag);
+        script.until(tag + "the screen lists the three items with their places", context -> keyOf(screen(context)
+                        .state(), COPPER_ROW).isPresent() && keyOf(screen(context).state(), GOLD_ROW).isPresent()
+                        && screen(context).state().row(GOLD_ROW).map(row -> row.places() == 2).orElse(false),
+                SCREEN_TIMEOUT_TICKS)
+                .client(tag + "CHECK the places numbers before any press", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    requirePlaces(screen, GOLD_ROW, 2);
+                    requirePlaces(screen, IRON_ROW, 1);
+                    requirePlaces(screen, COPPER_ROW, 1);
+                    requireHeadersFit(screen);
+                });
+        parkAndShoot(script, "optimizer-merge-places" + suffix);
+        script.client(tag + "rest the mouse on the gold row's places number", context -> ScreenInput.hover(
+                        context.minecraft(), ScreenInput.optimizerPlaces(screen(context), GOLD_ROW)))
+                .waitTicks(SETTLE_TICKS)
+                .client(tag + "CHECK the places number's tooltip", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    List<String> tooltip = strings(ScreenInput.optimizerTooltip(screen,
+                            ScreenInput.optimizerPlaces(screen, GOLD_ROW)));
+                    List<String> wanted = List.of(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PLACES)
+                            .getString(), WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PLACES_HINT)
+                                    .getString());
+                    if (!tooltip.equals(wanted))
+                        throw new VisualTestException("the places tooltip is " + tooltip + ", expected " + wanted);
+                    int room = OptimizerMenuLayout.WIDTH - 2 * OptimizerMenuLayout.MARGIN;
+                    for (String line : tooltip)
+                        if (font().width(line) > room)
+                            throw new VisualTestException("the tooltip line '" + line + "' is wider than the window");
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the places tooltip {}", tooltip);
+                })
+                .shot("optimizer-merge-tooltip" + suffix)
+                .client(tag + "click the gold row's places number", context -> click(context,
+                        ScreenInput.optimizerPlaces(screen(context), GOLD_ROW)))
+                .until(tag + "the screen shows a running merge order", context -> screen(context).state().order()
+                        .running() && screen(context).state().order().merge(), CLICK_TIMEOUT_TICKS)
+                .server(tag + "CHECK the click started a merge order for the gold alone", (server, context) -> {
+                    OptimizerOrder<ItemKey, RackPosition> order = order(server, context);
+                    List<ItemKey> keys = order.entries().stream().map(OptimizerOrder.Entry::key).toList();
+                    if (!order.isRunning() || order.mode() != OptimizerOrder.Mode.MERGE || !keys.equals(List.of(GOLD)))
+                        throw new VisualTestException("the places click started " + order);
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the places click started a merge order for {}", keys);
+                });
+        script.server(tag + "look for the merge trip", (server, context) -> polls = 0)
+                .serverUntil(tag + "freeze the world while the crane carries the gold", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    StackerCraneBlockEntity crane = crane(level, context.origin());
+                    boolean carrying = crane.craneState().phase() != CranePhase.IDLE
+                            && crane.heldItems().count(GOLD) == GOLD_SPREAD && crane.currentJob()
+                                    .filter(job -> job.type() == JobType.RELOCATE && job.source().equals(HIGH)
+                                            && job.target().equals(GOLD_RACK)).isPresent();
+                    if (!carrying) {
+                        if (++polls % DIAGNOSE_EVERY_POLLS == 0)
+                            LOGGER.info(PREFIX + "optimizer: still waiting for the merge trip: crane {}, order {}",
+                                    describe(crane), order(server, context));
+                        return false;
+                    }
+                    server.tickRateManager().setFrozen(true);
+                    return true;
+                }, TRIP_TIMEOUT_TICKS)
+                .until(tag + "the client sees the frozen world", context -> context.minecraft().level != null
+                        && context.minecraft().level.tickRateManager().isFrozen(), FREEZE_TIMEOUT_TICKS)
+                .server(tag + "CHECK the frozen merge carry and the census", (server, context) -> {
+                    OptimizerOrder<ItemKey, RackPosition> order = order(server, context);
+                    if (order.mode() != OptimizerOrder.Mode.MERGE || order.inFlight().size() != 1
+                            || order.tripsLeft() != tripsPerOrder - 1)
+                        throw new VisualTestException("during the merge trip the order is " + order);
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the merge trip is under way: {}", order);
+                    census(server, context, "optimizer: frozen while the crane carries the merged gold");
+                })
+                .client(tag + "rest the mouse on the gold row's pip", context -> ScreenInput.hover(
+                        context.minecraft(), ScreenInput.optimizerPip(screen(context), GOLD_ROW)))
+                .waitTicks(SETTLE_TICKS)
+                .client(tag + "CHECK the running merge screen", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    OptimizerScreenState.OrderLine line = screen.state().order();
+                    if (!line.running() || !line.merge())
+                        throw new VisualTestException("the screen shows the order as " + line);
+                    requirePip(screen, GOLD_ROW, OptimizerScreenState.Pip.RUNNING);
+                    List<String> tooltip = strings(ScreenInput.optimizerTooltip(screen,
+                            ScreenInput.optimizerPip(screen, GOLD_ROW)));
+                    List<String> wanted = List.of(WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PIP_MERGING)
+                            .getString(), WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PIP_HINT).getString());
+                    if (!tooltip.equals(wanted))
+                        throw new VisualTestException("the merging pip's tooltip is " + tooltip);
+                    requireStatusLine(screen, WareworksLang.OPTIMIZER_RUNNING, number(0), number(tripsPerOrder - 1));
+                })
+                .shot("optimizer-merge-running" + suffix)
+                .freeze(false)
+                .serverUntil(tag + "the merge order finished", (server, context) -> craneIdle(crane(server
+                        .overworld(), context.origin())) && order(server, context).state()
+                                == OptimizerOrder.State.FINISHED, TRIP_TIMEOUT_TICKS)
+                .server(tag + "CHECK the finished merge", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    BlockPos dock = context.origin();
+                    OptimizerOrder<ItemKey, RackPosition> order = order(server, context);
+                    OptimizerOrder.Entry<ItemKey> gold = order.entryFor(GOLD).orElseThrow();
+                    if (order.moved() != GOLD_SPREAD || gold.state() != OptimizerOrder.EntryState.DONE
+                            || !gold.endReason().equals(Optional.of(RelocationReason.ALREADY_ONE_PLACE))
+                            || !order.inFlight().isEmpty() || order.tripsLeft() != tripsPerOrder - 1)
+                        throw new VisualTestException("the merge ended as " + order);
+                    if (stored(level, dock, HIGH, GOLD) != 0 || stored(level, dock, GOLD_RACK, GOLD) != GOLD_TOTAL
+                            || stored(level, dock, HIGH, IRON) != IRON_TOTAL)
+                        throw new VisualTestException("after the merge the chests hold gold "
+                                + stored(level, dock, HIGH, GOLD) + "/" + stored(level, dock, GOLD_RACK, GOLD)
+                                + ", iron " + stored(level, dock, HIGH, IRON));
+                    if (!controller(level, dock).optimizerPlaces(List.of(GOLD)).equals(List.of(1)))
+                        throw new VisualTestException("the controller still sees the gold in several places");
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS one trip merged {} gold into its home and emptied the "
+                            + "chest", order.moved());
+                    census(server, context, "optimizer: the merge moved no item out of the aisle");
+                })
+                .until(tag + "the screen shows the finished merge and one place", context -> {
+                    OptimizerScreenState state = screen(context).state();
+                    return state.order().state() == OptimizerScreenState.OrderState.FINISHED && state.order().merge()
+                            && state.row(GOLD_ROW).map(row -> row.places() == 1 && row.pip()
+                                    == OptimizerScreenState.Pip.DONE).orElse(false);
+                }, SCREEN_TIMEOUT_TICKS)
+                .client(tag + "CHECK the finished merge screen", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    requireStatusLine(screen, WareworksLang.OPTIMIZER_FINISHED, number(GOLD_SPREAD));
+                    requirePlaces(screen, GOLD_ROW, 1);
+                    OptimizerScreenState.RowView gold = screen.state().row(GOLD_ROW).orElseThrow();
+                    if (!gold.statusKey(true).equals(WareworksLang.OPTIMIZER_PIP_MERGED))
+                        throw new VisualTestException("the gold row's status key is " + gold.statusKey(true));
+                });
+        parkAndShoot(script, "optimizer-merged" + suffix);
+
+        // Merge for every row: all three lie in one place now, so every entry ends with that reason at once.
+        script.client(tag + "press Merge", context -> click(context,
+                        ScreenInput.optimizerMergeButton(screen(context))))
+                .until(tag + "the screen shows every row ended", context -> {
+                    OptimizerScreenState state = screen(context).state();
+                    return state.order().merge() && state.order().state() == OptimizerScreenState.OrderState.FINISHED
+                            && state.order().moved() == 0 && state.row(COPPER_ROW).flatMap(
+                                    OptimizerScreenState.RowView::reason).isPresent();
+                }, CLICK_TIMEOUT_TICKS)
+                .server(tag + "CHECK every item ended as already in one place", (server, context) -> {
+                    OptimizerOrder<ItemKey, RackPosition> order = order(server, context);
+                    for (OptimizerOrder.Entry<ItemKey> entry : order.entries()) {
+                        if (entry.state() != OptimizerOrder.EntryState.NOTHING_TO_MOVE
+                                || !entry.endReason().equals(Optional.of(RelocationReason.ALREADY_ONE_PLACE)))
+                            throw new VisualTestException("a merge entry ended as " + entry);
+                    }
+                    if (order.mode() != OptimizerOrder.Mode.MERGE || order.entries().size() != USED_ROWS)
+                        throw new VisualTestException("Merge started " + order);
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS Merge ended all three items as already in one place");
+                    census(server, context, "optimizer: a merge with nothing to merge moved no item");
+                })
+                .client(tag + "rest the mouse on the iron row's pip", context -> ScreenInput.hover(
+                        context.minecraft(), ScreenInput.optimizerPip(screen(context), IRON_ROW)))
+                .waitTicks(SETTLE_TICKS)
+                .client(tag + "CHECK the reason's tooltip", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    List<String> tooltip = strings(ScreenInput.optimizerTooltip(screen,
+                            ScreenInput.optimizerPip(screen, IRON_ROW)));
+                    List<String> wanted = List.of(WareworksLang.translateDirect(OptimizerScreenState.reasonKey(
+                            RelocationReason.ALREADY_ONE_PLACE)).getString(), WareworksLang.translateDirect(
+                                    WareworksLang.OPTIMIZER_PIP_HINT).getString());
+                    if (!tooltip.equals(wanted))
+                        throw new VisualTestException("the reason's tooltip is " + tooltip + ", expected " + wanted);
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the iron row says why: {}", tooltip);
+                })
+                .shot("optimizer-merge-nothing" + suffix);
+        closeScreen(script, tag);
+    }
+
+    private static void requirePlaces(WarehouseOptimizerScreen screen, int row, int places) {
+        int shown = screen.state().row(row).map(OptimizerScreenState.RowView::places).orElse(-1);
+        if (shown != places)
+            throw new VisualTestException("row " + row + " shows " + shown + " places, expected " + places);
+        LOGGER.info(PREFIX + "optimizer: CHECK PASS row {} lies in {} place(s)", row, places);
+    }
+
+    /** After the round the gold lies in its chest and the iron in the better one; some more gold joins the iron. */
+    private static void restockSpread(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        refill(level, chestOf(dock, HIGH), IRON.toStack(IRON_TOTAL), GOLD.toStack(GOLD_SPREAD));
+        refill(level, chestOf(dock, GOLD_RACK), GOLD.toStack(GOLD_HIGH));
+    }
+
+    /** The spread gold is indexed in two places and the controller is idle. */
+    private static boolean spreadReady(MinecraftServer server, VisualContext context) {
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        WarehouseControllerBlockEntity controller = controller(level, dock);
+        StackerCraneBlockEntity crane = crane(level, dock);
+        return controller.status() == ControllerStatus.READY && controller.pendingSnapshotCount() == 0
+                && craneIdle(crane) && controller.countOf(GOLD) == GOLD_TOTAL && controller.countOf(IRON) == IRON_TOTAL
+                && controller.optimizerPlaces(List.of(GOLD)).equals(List.of(2));
+    }
+
+    /**
+     * Issue #53: the gold lies at priority {@value #HIGH_PRIORITY}, the highest there is, so its entry ended with
+     * nothing to move at the order's first planning run, and the server said why. The row carries that reason, its pip
+     * is gold, and the pip's tooltip says "No place with a higher priority" and what to do about it instead of a bare
+     * "Nothing to move". Checked on the server (the order's entry) and on the client (the row pushed, the tooltip, every
+     * line within the window) before the shot; the world is still frozen at the first trip.
+     */
+    private void rowReason(VisualScript script, String tag, String suffix) {
+        RelocationReason reason = RelocationReason.NO_HIGHER_PRIORITY;
+        script.server(tag + "CHECK the gold's entry says why it stays", (server, context) -> {
+                    OptimizerOrder.Entry<ItemKey> gold = order(server, context).entryFor(GOLD).orElseThrow();
+                    if (gold.state() != OptimizerOrder.EntryState.NOTHING_TO_MOVE
+                            || !gold.endReason().equals(Optional.of(reason)))
+                        throw new VisualTestException("the gold's entry is " + gold);
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the server ended the gold with {}", reason);
+                })
+                .client(tag + "rest the mouse on the gold row's pip", context -> ScreenInput.hover(
+                        context.minecraft(), ScreenInput.optimizerPip(screen(context), GOLD_ROW)))
+                .waitTicks(SETTLE_TICKS)
+                .client(tag + "CHECK the gold row's reason and its tooltip", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    Optional<RelocationReason> shown = screen.state().row(GOLD_ROW)
+                            .flatMap(OptimizerScreenState.RowView::reason);
+                    if (!shown.equals(Optional.of(reason)))
+                        throw new VisualTestException("the gold row carries the reason " + shown);
+                    List<String> tooltip = strings(ScreenInput.optimizerTooltip(screen,
+                            ScreenInput.optimizerPip(screen, GOLD_ROW)));
+                    List<String> wanted = List.of(
+                            WareworksLang.translateDirect(OptimizerScreenState.reasonKey(reason)).getString(),
+                            WareworksLang.translateDirect(OptimizerScreenState.reasonHintKey(reason).orElseThrow())
+                                    .getString(),
+                            WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PIP_HINT).getString());
+                    if (!tooltip.equals(wanted))
+                        throw new VisualTestException("the gold pip's tooltip is " + tooltip + ", expected " + wanted);
+                    String nothing = WareworksLang.translateDirect(OptimizerScreenState.Pip.NOTHING_TO_MOVE.langKey())
+                            .getString();
+                    if (tooltip.contains(nothing))
+                        throw new VisualTestException("the gold pip still says " + nothing);
+                    int room = OptimizerMenuLayout.WIDTH - 2 * OptimizerMenuLayout.MARGIN;
+                    for (String line : tooltip) {
+                        int width = context.minecraft().font.width(line);
+                        if (width > room)
+                            throw new VisualTestException("the tooltip line '" + line + "' is " + width
+                                    + " px wide, the window has " + room);
+                    }
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS the gold row says why: {}", tooltip);
+                })
+                .shot("optimizer-reason" + suffix);
+    }
+
+    /**
+     * Issue #52: the optimizer turned away from the aisle (the block entity and its list stay), its screen opened: the
+     * status row reads "Not in a warehouse: face the aisle" instead of the hint, a real click on Optimise answers with
+     * that reason, and the warehouse keeps no order for it. Then it is turned back and is a member again.
+     */
+    private void misaligned(VisualScript script, String suffix) {
+        String tag = "optimizer" + suffix + "-misaligned: ";
+        script.server(tag + "turn the optimizer away from the aisle", (server, context) -> turn(server, context, true))
+                .serverUntil(tag + "the warehouse no longer counts it as a member", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    WarehouseOptimizerBlockEntity optimizer = optimizer(level, context.origin());
+                    WarehouseControllerBlockEntity controller = controller(level, context.origin());
+                    return !controller.isMembershipDirty() && controller.locationAt(optimizer.getBlockPos()).isEmpty()
+                            && optimizer.controller().isEmpty() && optimizer.misaligned();
+                }, SCREEN_TIMEOUT_TICKS)
+                .server(tag + "open the optimizer's screen", (server, context) -> {
+                    if (!optimizer(server.overworld(), context.origin()).openScreen(context.serverPlayer(server)))
+                        throw new VisualTestException("the optimizer screen could not be opened");
+                })
+                .until(tag + "the screen shows it unlinked and misaligned", context -> context.minecraft()
+                        .screen instanceof WarehouseOptimizerScreen screen && !screen.state().linked()
+                        && screen.state().misaligned()
+                        && screen.state().rows().size() == screen.getMenu().rowCount(), SCREEN_TIMEOUT_TICKS)
+                .waitTicks(SETTLE_TICKS)
+                .client(tag + "CHECK the status row names the misalignment before any press", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    if (screen.state().order().state() != OptimizerScreenState.OrderState.NONE)
+                        throw new VisualTestException("an unlinked screen shows the order " + screen.state().order());
+                    requireStatusLine(screen, WareworksLang.OPTIMIZER_MISALIGNED);
+                })
+                .client(tag + "press Optimise", context -> click(context,
+                        ScreenInput.optimizerOptimiseButton(screen(context))))
+                .until(tag + "the press answers with the reason", context -> screen(context).state().message()
+                        == OptimizerScreenState.Message.MISALIGNED, CLICK_TIMEOUT_TICKS)
+                .client(tag + "CHECK the answer on the status row", context -> {
+                    WarehouseOptimizerScreen screen = screen(context);
+                    requireStatusLine(screen, OptimizerScreenState.Message.MISALIGNED.langKey());
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS Optimise on a misaligned optimizer says '{}'",
+                            ScreenInput.optimizerStatusLine(screen).getString());
+                })
+                .server(tag + "CHECK the warehouse keeps no order for it", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    BlockPos pos = optimizer(level, context.origin()).getBlockPos();
+                    if (controller(level, context.origin()).optimizerOrder(pos).isPresent())
+                        throw new VisualTestException("a misaligned optimizer has an order");
+                    LOGGER.info(PREFIX + "optimizer: CHECK PASS a misaligned optimizer starts no order");
+                    census(server, context, "optimizer: a refused press moved no item");
+                });
+        parkAndShoot(script, "optimizer-misaligned" + suffix);
+        closeScreen(script, tag);
+        script.server(tag + "turn the optimizer back towards the aisle", (server, context) -> turn(server, context,
+                        false))
+                .serverUntil(tag + "it is a member again", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    WarehouseOptimizerBlockEntity optimizer = optimizer(level, context.origin());
+                    WarehouseControllerBlockEntity controller = controller(level, context.origin());
+                    return !controller.isMembershipDirty() && optimizer.controller().isPresent();
+                }, SCREEN_TIMEOUT_TICKS);
+    }
+
+    /** Turns the optimizer away from the aisle or back towards it; the same block, so its block entity stays. */
+    private static void turn(MinecraftServer server, VisualContext context, boolean away) {
+        ServerLevel level = server.overworld();
+        BranchLayout layout = layout(context.origin());
+        BlockPos pos = layout.rackPos(OPTIMIZER);
+        Direction towards = layout.sideDirection(OPTIMIZER.side()).getOpposite();
+        WarehouseOptimizerBlockEntity before = optimizer(level, context.origin());
+        level.setBlock(pos, level.getBlockState(pos).setValue(WarehouseOptimizerBlock.FACING,
+                away ? towards.getOpposite() : towards), 3);
+        if (optimizer(level, context.origin()) != before)
+            throw new VisualTestException("turning the optimizer replaced its block entity");
     }
 
     /**
@@ -677,6 +1030,8 @@ public final class OptimizerVisualScenario implements VisualScenario {
             ScreenInput.optimizerPip(screen, COPPER_ROW);
             ScreenInput.optimizerListCell(screen);
             ScreenInput.optimizerOptimiseButton(screen);
+            ScreenInput.optimizerMergeButton(screen);
+            ScreenInput.optimizerPlaces(screen, IRON_ROW);
             ScreenInput.hotbarSlot(screen, IRON_SLOT);
             requireStatusLine(screen, WareworksLang.OPTIMIZER_CANCELLED, number(IRON_LOW));
             requireHeadersFit(screen);
@@ -842,6 +1197,10 @@ public final class OptimizerVisualScenario implements VisualScenario {
                         + "starts at " + left + " (the items label ends at " + itemsEnd + ")");
             widths.add(label.getString() + "=" + width);
         }
+        Component places = WareworksLang.translateDirect(WareworksLang.OPTIMIZER_PLACES_SHORT);
+        if (font.width(places) > OptimizerMenuLayout.PLACES_WIDTH - OptimizerMenuLayout.NUMBER_PADDING)
+            throw new VisualTestException("the places header '" + places.getString() + "' does not fit its column");
+        widths.add(places.getString() + "=" + font.width(places));
         LOGGER.info(PREFIX + "optimizer: CHECK PASS the column headers fit: {}", widths);
     }
 

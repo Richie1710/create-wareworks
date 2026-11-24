@@ -1,10 +1,13 @@
 package dev.wareworks.client.ponder.scenes;
 
 import com.simibubi.create.AllBlocks;
+import com.simibubi.create.content.kinetics.base.DirectionalAxisKineticBlock;
 import com.simibubi.create.content.kinetics.saw.SawBlock;
 import com.simibubi.create.content.kinetics.saw.SawBlockEntity;
 import com.simibubi.create.content.logistics.box.PackageStyles;
+import com.simibubi.create.content.logistics.funnel.BeltFunnelBlock;
 import com.simibubi.create.content.logistics.packager.PackagerBlock;
+import com.simibubi.create.content.processing.basin.BasinBlock;
 import com.simibubi.create.content.processing.basin.BasinBlockEntity;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 
@@ -27,11 +30,18 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.HopperBlock;
 import net.minecraft.world.phys.Vec3;
 
 /**
  * Ponder scenes of the Recipe Selector (ADR-085, design §16): the local tier on a saw behind a production station, and
  * the Ender tier at a far factory, where the recipe travels as a slip in each package.
+ * <p>
+ * <b>The transport is the player's</b> (issue #56): a station never pushes an item, so the local scene builds the way
+ * the {@code selector} visual scenario proves: the station one level up, a hopper under it dropping onto a belt into a
+ * saw facing up that pushes its products into the Warehouse Input, and for the Basin the same hopper filling the Basin,
+ * whose spout drops onto a belt sunk into the plate with a funnel into the input. The stone rides the belt into the saw
+ * and the saw really cuts it in the {@code PonderLevel} ({@code SawBlockEntity} runs on a virtual level).
  * <p>
  * <b>What the scenes must not imply.</b> The selector crafts nothing and moves no item: the crane carries, the machine
  * makes, and the selector only sets the machine's recipe filter, one product at a time. A {@code PonderLevel} runs no
@@ -49,6 +59,9 @@ public final class RecipeSelectorScenes {
     private static final int CONTROL_TICKS = 40;
     private static final int CLICK_LEAD = 7;
     private static final int TRANSFER_TICKS = 30;
+    /** The belt's way into the saw plus one cut of a stack under 10 (50 ticks at 32 RPM), with a little to spare. */
+    private static final int SAW_TICKS = 60;
+    private static final int FUNNEL_TICKS = 16;
     /** The faces the camera reads: the back of the left rack wall, and the factory's west side. */
     private static final Direction FRONT = Direction.NORTH;
 
@@ -68,41 +81,65 @@ public final class RecipeSelectorScenes {
         scene.configureBasePlate(0, 0, aisle.plateSize());
         scene.scaleSceneView(0.9f);
 
-        int inputPosition = 3;
-        int stationPosition = 4;
+        int inputPosition = 4;
+        int stationPosition = 5;
+        int stationLevel = 1;
         int stonePosition = 2;
         int firstRack = 4;
         int lastRack = 6;
+        Direction behind = PonderAisle.outward(Side.LEFT);
 
         BlockPos dock = aisle.dock(util);
         BlockPos controller = aisle.controller(util);
         BlockPos input = aisle.rack(util, inputPosition, 0, Side.LEFT);
-        BlockPos station = aisle.rack(util, stationPosition, 0, Side.LEFT);
-        // The saw stands behind the station, facing up; the selector against its side, behind the input.
-        BlockPos saw = aisle.inventory(util, stationPosition, 0, Side.LEFT);
-        BlockPos selector = aisle.inventory(util, inputPosition, 0, Side.LEFT);
-        BlockPos mixer = saw.above(2);
+        // The station one level up, so the hopper under it can drop onto the saw's belt (the selector scenario's line).
+        BlockPos station = aisle.rack(util, stationPosition, stationLevel, Side.LEFT);
+        BlockPos hopper = station.below();
+        // The belt behind the hopper runs west into the saw behind the input; the saw pushes its products south into
+        // the input. The selector sits on the saw's outer side, where the camera reads it.
+        BlockPos beltEnd = hopper.relative(behind);
+        BlockPos beltStart = beltEnd.east();
+        BlockPos saw = aisle.inventory(util, inputPosition, 0, Side.LEFT);
+        BlockPos selector = saw.relative(behind);
+        // The Basin variant: the same hopper fills a Basin where the belt ended, whose spout drops onto a belt sunk into
+        // the plate behind the input, and a funnel on its end hands the product into the input.
+        BlockPos basin = beltEnd;
+        BlockPos mixer = basin.above(2);
+        BlockPos basinSelector = basin.relative(behind);
+        BlockPos funnel = saw;
+        BlockPos sunkBeltEnd = funnel.below();
+        BlockPos sunkBeltStart = sunkBeltEnd.relative(behind);
         BlockPos stone = aisle.rack(util, stonePosition, 0, Side.RIGHT);
-        Direction towardsSaw = Direction.EAST;
 
         aisle.placeAisle(scene, util);
         aisle.placeInput(scene, util, inputPosition, 0, Side.LEFT);
-        aisle.placeProduction(scene, util, stationPosition, 0, Side.LEFT);
+        aisle.placeProduction(scene, util, stationPosition, stationLevel, Side.LEFT);
         aisle.placeStorage(scene, util, stonePosition, 0, Side.RIGHT);
         for (int position = firstRack; position <= lastRack; position++)
             aisle.placeStorage(scene, util, position, 0, Side.RIGHT);
+        scene.world().setBlock(hopper, Blocks.HOPPER.defaultBlockState().setValue(HopperBlock.FACING, behind), false);
+        RequesterScenes.placeBelt(scene, beltStart, Direction.WEST, 2);
+        // Shaft along X, blade along Z: the saw moves its items along Z (SawBlockEntity#getItemMovementVec), towards the
+        // input at a negative speed.
         scene.world().setBlock(saw, AllBlocks.MECHANICAL_SAW.getDefaultState()
-                .setValue(SawBlock.FACING, Direction.UP), false);
+                .setValue(SawBlock.FACING, Direction.UP)
+                .setValue(DirectionalAxisKineticBlock.AXIS_ALONG_FIRST_COORDINATE, true), false);
         scene.world().setBlock(selector, WareworksBlocks.RECIPE_SELECTOR.getDefaultState()
-                .setValue(RecipeSelectorBlock.FACING, towardsSaw), false);
+                .setValue(RecipeSelectorBlock.FACING, behind.getOpposite()), false);
+        // Lies under the saw and the selector until the Basin variant uncovers it; a belt along Z moves south at a
+        // positive speed (BeltBlockEntity#getMovementFacing).
+        RequesterScenes.placeBelt(scene, sunkBeltStart, behind.getOpposite(), 2);
         scene.world().setKineticSpeed(util.select().everywhere(), CraneScript.PONDER_RPM);
+        scene.world().setKineticSpeed(util.select().position(saw), -CraneScript.PONDER_RPM);
 
         Selection aisleLine = util.select().fromTo(aisle.dockX() - 1, PonderAisle.FLOOR_Y, aisle.aisleZ(),
                 aisle.lastRailX(), PonderAisle.FLOOR_Y, aisle.aisleZ());
         Selection storage = util.select().fromTo(aisle.dockX() + stonePosition, PonderAisle.FLOOR_Y,
                 aisle.aisleZ() + 1, aisle.dockX() + lastRack, PonderAisle.FLOOR_Y, aisle.aisleZ() + 2);
-        Selection stations = util.select().position(input).add(util.select().position(station));
+        Selection stations = util.select().position(input).add(util.select().position(hopper))
+                .add(util.select().position(station));
         Selection sawSelection = util.select().position(saw);
+        Selection belt = util.select().position(beltStart).add(util.select().position(beltEnd));
         Selection selectorSelection = util.select().position(selector);
         Vec3 filterSlot = util.vector().blockSurface(saw, Direction.UP);
 
@@ -113,7 +150,7 @@ public final class RecipeSelectorScenes {
         scene.idle(FADE_IDLE + 5);
         scene.world().showSection(stations, Direction.DOWN);
         scene.idle(FADE_IDLE);
-        scene.world().showSection(sawSelection, Direction.DOWN);
+        scene.world().showSection(sawSelection.add(belt), Direction.DOWN);
         scene.idle(FADE_IDLE);
 
         scene.overlay().showText(TEXT_TICKS)
@@ -126,6 +163,17 @@ public final class RecipeSelectorScenes {
             scene.idle(25);
         }
         scene.idle(TEXT_IDLE - 75);
+
+        scene.overlay().showOutline(PonderPalette.WHITE, "transport", belt.add(util.select().position(hopper)),
+                TEXT_TICKS);
+        scene.overlay().showText(TEXT_TICKS)
+                .text("The station pushes nothing itself: build the way into the machine, here a hopper onto a belt, "
+                        + "and the way back into the Warehouse Input")
+                .attachKeyFrame()
+                .colored(PonderPalette.BLUE)
+                .placeNearTarget()
+                .pointAt(util.vector().topOf(beltEnd));
+        scene.idle(TEXT_IDLE);
 
         scene.overlay().showControls(util.vector().topOf(station), Pointing.DOWN, CONTROL_TICKS).rightClick()
                 .whileSneaking().withItem(new ItemStack(WareworksBlocks.RECIPE_SELECTOR.asItem()));
@@ -175,10 +223,13 @@ public final class RecipeSelectorScenes {
                 .placeNearTarget()
                 .pointAt(util.vector().topOf(controller));
         CraneScript crane = CraneScript.parkedAt(scene, dock);
-        deliver(scene, crane, stonePosition, stationPosition, Items.COBBLED_DEEPSLATE, 8);
+        deliver(scene, crane, stonePosition, stationPosition, stationLevel, Items.COBBLED_DEEPSLATE, 8);
         scene.effects().indicateSuccess(station);
+        // The hopper under the station drops the stone onto the belt; the belt carries it into the saw, which cuts it
+        // with the recipe the selector set and pushes the stairs into the input.
+        scene.world().createItemOnBelt(beltEnd, Direction.DOWN, new ItemStack(Items.COBBLED_DEEPSLATE, 8));
         crane.moveTo(CranePose.at(0, 0, Side.LEFT), CranePhase.IDLE);
-        scene.world().createItemOnBeltLike(input, FRONT, STAIRS.copyWithCount(8));
+        scene.idle(SAW_TICKS);
         scene.effects().indicateSuccess(input);
         scene.idle(20);
 
@@ -205,31 +256,51 @@ public final class RecipeSelectorScenes {
                 .pointAt(util.vector().topOf(input));
         scene.idle(TEXT_IDLE);
 
-        // The Basin variant: the selector goes against the Basin, never against the Mixer above it.
-        scene.world().hideSection(sawSelection.add(selectorSelection), Direction.UP);
+        // The Basin variant: the selector goes against the Basin, never against the Mixer above it. The same hopper
+        // fills the Basin; its spout drops the dye onto the sunk belt, and the funnel on its end feeds the input.
+        scene.world().hideSection(sawSelection.add(belt).add(selectorSelection), Direction.UP);
         scene.idle(FADE_IDLE + 5);
-        scene.world().setBlock(saw, AllBlocks.BASIN.getDefaultState(), false);
+        scene.world().setBlock(beltStart, Blocks.AIR.defaultBlockState(), false);
+        scene.world().setBlock(basin, AllBlocks.BASIN.getDefaultState().setValue(BasinBlock.FACING, Direction.WEST),
+                false);
         scene.world().setBlock(mixer, AllBlocks.MECHANICAL_MIXER.getDefaultState(), false);
+        scene.world().setBlock(funnel, RequesterScenes.beltFunnel(behind, BeltFunnelBlock.Shape.RETRACTED), false);
+        scene.world().setBlock(basinSelector, WareworksBlocks.RECIPE_SELECTOR.getDefaultState()
+                .setValue(RecipeSelectorBlock.FACING, behind.getOpposite()), false);
         scene.world().setKineticSpeed(util.select().position(mixer), CraneScript.PONDER_RPM);
-        scene.world().showSection(sawSelection.add(util.select().position(mixer)), Direction.DOWN);
+        Selection basinSelection = util.select().position(basin);
+        Selection basinLine = basinSelection.add(util.select().position(mixer))
+                .add(util.select().position(funnel));
+        scene.world().showSection(basinLine, Direction.DOWN);
         scene.idle(FADE_IDLE);
-        scene.world().showSection(selectorSelection, Direction.DOWN);
+        scene.world().showSection(util.select().position(basinSelector), Direction.DOWN);
         scene.idle(FADE_IDLE);
-        scene.world().setFilterData(sawSelection, BasinBlockEntity.class, new ItemStack(Items.LIGHT_GRAY_DYE));
-        scene.overlay().showOutline(PonderPalette.GREEN, "basin", sawSelection, TEXT_TICKS);
+        scene.world().setFilterData(basinSelection, BasinBlockEntity.class, new ItemStack(Items.LIGHT_GRAY_DYE));
+        scene.overlay().showOutline(PonderPalette.GREEN, "basin", basinSelection, TEXT_TICKS);
         scene.overlay().showText(TEXT_TICKS)
                 .text("With a Mixer or a Press, place the selector against the Basin below it")
                 .attachKeyFrame()
                 .placeNearTarget()
-                .pointAt(util.vector().blockSurface(selector, FRONT));
-        scene.idle(TEXT_IDLE);
+                .pointAt(util.vector().blockSurface(basinSelector, FRONT));
+        scene.idle(CLICK_LEAD);
+        // The ingredients fall in through the hopper, the product leaves by the spout, the belt and the funnel.
+        scene.overlay().showControls(util.vector().topOf(basin), Pointing.DOWN, CONTROL_TICKS)
+                .withItem(new ItemStack(Items.WHITE_DYE));
+        scene.idle(CONTROL_TICKS);
+        scene.world().createItemOnBelt(sunkBeltStart, Direction.DOWN, new ItemStack(Items.LIGHT_GRAY_DYE, 2));
+        scene.idle(FUNNEL_TICKS);
+        scene.world().removeItemsFromBelt(sunkBeltEnd);
+        scene.world().flapFunnel(funnel, false);
+        scene.world().createItemOnBeltLike(input, behind, new ItemStack(Items.LIGHT_GRAY_DYE, 2));
+        scene.effects().indicateSuccess(input);
+        scene.idle(Math.max(0, TEXT_IDLE - CLICK_LEAD - CONTROL_TICKS - FUNNEL_TICKS));
 
         scene.overlay().showText(TEXT_TICKS)
                 .text("A filter item in the machine is never overwritten, and the selector crafts nothing itself")
                 .attachKeyFrame()
                 .colored(PonderPalette.BLUE)
                 .placeNearTarget()
-                .pointAt(util.vector().topOf(saw));
+                .pointAt(util.vector().topOf(basin));
         scene.idle(TEXT_IDLE);
 
         scene.markAsFinished();
@@ -377,18 +448,23 @@ public final class RecipeSelectorScenes {
         scene.markAsFinished();
     }
 
-    /** One trip of the crane from a rack on the right plane to the station on the left one, holding {@code count}. */
-    private static void deliver(CreateSceneBuilder scene, CraneScript crane, int from, int to, Item item, int count) {
+    /**
+     * One trip of the crane from a rack on the right plane to the station on the left one at {@code level}, holding
+     * {@code count}.
+     */
+    private static void deliver(CreateSceneBuilder scene, CraneScript crane, int from, int to, int level, Item item,
+                                int count) {
         crane.moveTo(CranePose.at(from, 0, Side.RIGHT), CranePhase.TRAVEL_TO_SOURCE);
         crane.moveTo(new CranePose(from, 0, CranePose.EXTENDED, Side.RIGHT), CranePhase.EXTEND_SOURCE);
         crane.hold(item, count);
         crane.dwell(CranePhase.PICK, TRANSFER_TICKS);
         crane.moveTo(CranePose.at(from, 0, Side.RIGHT), CranePhase.RETRACT_SOURCE);
-        crane.moveTo(CranePose.at(to, 0, Side.LEFT), CranePhase.TRAVEL_TO_TARGET);
-        crane.moveTo(new CranePose(to, 0, LocationKind.PRODUCTION.armStroke(), Side.LEFT), CranePhase.EXTEND_TARGET);
+        crane.moveTo(CranePose.at(to, level, Side.LEFT), CranePhase.TRAVEL_TO_TARGET);
+        crane.moveTo(new CranePose(to, level, LocationKind.PRODUCTION.armStroke(), Side.LEFT),
+                CranePhase.EXTEND_TARGET);
         crane.dwell(CranePhase.DROP, 10);
         crane.release();
         crane.dwell(CranePhase.DROP, TRANSFER_TICKS);
-        crane.moveTo(CranePose.at(to, 0, Side.LEFT), CranePhase.RETRACT_TARGET);
+        crane.moveTo(CranePose.at(to, level, Side.LEFT), CranePhase.RETRACT_TARGET);
     }
 }
