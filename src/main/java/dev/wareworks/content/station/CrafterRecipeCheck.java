@@ -85,6 +85,9 @@ public final class CrafterRecipeCheck {
         Optional<ItemKey> result = patterns.keyAt(slot, ProductionPatterns.RESULT_ENTRY);
         if (result.isEmpty())
             return Result.INCOMPLETE;
+        // A Crafter takes items only (issue #55): a pattern with a fluid cell is never a crafting recipe.
+        if (!patterns.fluidCells(slot).isEmpty())
+            return new Result(CrafterPatternCheck.FLUID_CELL, Optional.empty());
         CrafterGrid<ItemKey> grid = layoutOf(patterns, slot);
         int[] counts = new int[CrafterGrid.SLOTS];
         for (int cell = 0; cell < CrafterGrid.SLOTS; cell++)

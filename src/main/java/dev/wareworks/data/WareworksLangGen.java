@@ -294,6 +294,10 @@ public final class WareworksLangGen {
         // ones say what is wrong in the words a player fixes it with; the goggles show them in gold.
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FEEDER), "Crafter Feeder at the back");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_REFUSED), "Patterns the feeder skips: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FLUID_PATTERNS),
+                "Patterns with a fluid: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FLUID_HELD),
+                "Filled containers left in the buffer: %1$s (take them out)");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRAFTER_FEEDER), "Crafter Feeder:");
         // Count last, with no plural noun after it: the count reaches 1 on every order's last run.
         lang.accept(WareworksLang.key(WareworksLang.CRAFTER_FEEDER_FEEDING), "Crafting %1$s \u00b7 runs left: %2$s");
@@ -480,7 +484,11 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key("gui.production.selector.check.stonecutting_off"),
                 "Stonecutting on saws is switched off on this server");
         lang.accept(WareworksLang.key("gui.production.selector.check.fluid"),
-                "Recipes with fluids cannot use a Recipe Selector yet");
+                "Recipes that make a fluid cannot use a Recipe Selector");
+        lang.accept(WareworksLang.key("gui.production.selector.check.fluid_mismatch"),
+                "%1$s: the recipe takes other fluids or amounts than the pattern's fluid cells");
+        lang.accept(WareworksLang.key("gui.production.selector.check.fluid_far"),
+                "A far factory is served by packages: they carry no fluid");
         lang.accept(WareworksLang.key("gui.terminal.order.selector.probe_one_run"),
                 "First run alone: checks the factory's selector");
         lang.accept(WareworksLang.key("gui.terminal.order.selector.behind"), "Waits for its turn: %1$s first");
@@ -542,6 +550,8 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_REFUSED), "Refused: %1$s × %2$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_LATCH), "Serves station %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_SET_BACKS), "Hand changes set back: %1$s");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_SELECTOR_HEAT_HINT),
+                "Heated recipes need a lit Blaze Burner below: not checked");
         lang.accept(WareworksLang.key("gui.goggles.selector_reason.cannot_make"), "cannot make it");
         lang.accept(WareworksLang.key("gui.goggles.selector_reason.foreign_slip"), "other station");
         lang.accept(WareworksLang.key("gui.goggles.selector_reason.stale_slip"), "old package");
@@ -1130,7 +1140,15 @@ public final class WareworksLangGen {
         // the consequence. They are tooltip lines of a 216 px window, measured by CrafterFeederTextWidthTest.
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FEEDER), "Crafter Feeder");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_NOT_ONLY_ITEMS),
-                "This recipe needs a fluid: a pattern holds items only");
+                "This recipe needs an ingredient a pattern cannot hold: only items and fluids");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_TOO_MANY_FLUIDS),
+                "This recipe needs more than 2 different fluids: a pattern holds 2");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_FLUID_TOO_MUCH),
+                "This recipe needs more than 1000 mB of a fluid per run: a fluid cell holds 1000");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_FLUID_RESULT),
+                "This recipe makes a fluid: a pattern makes items only");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_UNKNOWN_FLUID),
+                "This server does not know a fluid of this recipe");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_TOO_MANY_INPUTS),
                 "This recipe needs more than the pattern's 9 cells");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_LAY_MAKES_INGREDIENT),
@@ -1145,6 +1163,7 @@ public final class WareworksLangGen {
                 case NOT_A_RECIPE -> "Not a crafting recipe";
                 case RESULT_DIFFERS -> "The recipe makes %1$s x%2$s";
                 case FILTER_NOT_CHECKABLE -> "The filter names no item to check";
+                case FLUID_CELL -> "A Crafter takes no fluids";
                 default -> throw new IllegalStateException("no reason text for " + check);
             });
         }
@@ -1170,6 +1189,22 @@ public final class WareworksLangGen {
                 "A List or Attribute Filter allows a choice of items");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_ORDER_USES), "Uses %1$s");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_ORDER_USES_MORE), "and %1$s more");
+        // A fluid cell of a pattern (issue #55, ADR-089): the tooltip lines and the hotbar line of a refused edit. Tooltip
+        // lines of a 216 px window at the 320 x 240 floor, measured by ProductionFluidTextWidthTest.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_CELL), "Fluid ingredient");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_AMOUNT), "%1$s mB per run");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_BUCKETS), "One bucket serves %1$s runs");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_WHOLE), "Delivered in whole filled buckets");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_REST),
+                "Does not divide 1000 mB: a rest stays in your machine");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_SET_HINT),
+                "Click with a filled bucket to set the fluid");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_WHEEL_HINT),
+                "Scroll: 50 mB, Shift 250, Ctrl 1000");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_CLEAR_HINT), "Right-click clears");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_UNKNOWN), "Unknown fluid (its mod is missing?)");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_SAME),
+                "The other fluid cell already holds this fluid");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RULES), "Rules");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_EMPTY_ROW), "Empty row");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM), "Minimum");
@@ -1419,6 +1454,9 @@ public final class WareworksLangGen {
                 case TOO_MANY_INGREDIENT_ITEMS -> "Too many items to make %1$s";
                 case ORDERS_BUSY -> "No free order for %1$s";
                 case NO_MATCHING_ITEM -> "Nothing in stock fits %1$s";
+                case FLUID_MISSING -> "Not enough fluid for %1$s";
+                case NO_EMPTY_CONTAINER -> "No empty container for %1$s";
+                case BUFFER_TOO_SMALL -> "Buffer too small for %1$s";
             });
         }
 

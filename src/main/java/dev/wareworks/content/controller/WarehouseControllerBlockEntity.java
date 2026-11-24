@@ -97,6 +97,7 @@ import dev.wareworks.core.port.PortSettings;
 import dev.wareworks.core.production.ChoiceAllocator;
 import dev.wareworks.core.production.CrafterPatternCheck;
 import dev.wareworks.core.production.FetchPreview;
+import dev.wareworks.core.production.FluidSupply;
 import dev.wareworks.core.production.IngredientChoices;
 import dev.wareworks.core.production.NodeLine;
 import dev.wareworks.core.production.PlanBudget;
@@ -1897,10 +1898,12 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         if (productionOrders.isFull())
             return 0L;
         IngredientChoices<ItemKey> choices = ingredientChoices(patterns, available);
+        FluidSupply<ItemKey> fluids = fluidSupplyFor(patterns, StockAccess.PLAYER);
         long best = 0L;
         for (AislePattern candidate : patterns) {
             if (candidate.pattern().produces(key))
-                best = Math.max(best, ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices));
+                best = Math.max(best, ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices,
+                        fluids));
         }
         return best;
     }
@@ -1976,9 +1979,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Map<ItemKey, Long> amounts = new LinkedHashMap<>();
         ToLongFunction<ItemKey> available = availabilityLookup();
         IngredientChoices<ItemKey> choices = full ? IngredientChoices.none() : ingredientChoices(patterns, available);
+        FluidSupply<ItemKey> fluids = full ? FluidSupply.none() : fluidSupplyFor(patterns, StockAccess.PLAYER);
         for (AislePattern candidate : patterns) {
             long amount = full ? 0L
-                    : ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices);
+                    : ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices, fluids);
             // Two patterns for one item do not add up: the best single one is what is certainly reachable (§3.5.2).
             amounts.merge(candidate.pattern().result().key(), amount, Math::max);
         }
@@ -2075,12 +2079,22 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             int admission = selectors.admission(order);
             if (admission == 0)
                 continue;
+            // The fluid lines first (issue #55, ADR-089): a crane that can fetch the water of an order is sent for it
+            // before the iron, so a station is never fed items whose fluid cannot come.
+            List<PlannerInput.SupplyNeed<ItemKey, RackPosition>> items = new ArrayList<>();
             for (SupplyLine<ItemKey> line : order.lines()) {
                 int remaining = admission < 0 ? line.remaining()
                         : SelectorStations.remainingUnderCap(order, line, admission);
-                if (remaining > 0)
-                    needs.add(new PlannerInput.SupplyNeed<>(line.id(), line.key(), remaining, order.station()));
+                if (remaining < 1)
+                    continue;
+                PlannerInput.SupplyNeed<ItemKey, RackPosition> need = new PlannerInput.SupplyNeed<>(line.id(),
+                        line.key(), remaining, order.station(), line.isFluid());
+                if (line.isFluid())
+                    needs.add(need);
+                else
+                    items.add(need);
             }
+            needs.addAll(items);
         }
         return List.copyOf(needs);
     }
@@ -2178,12 +2192,27 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     private ProductionPlanInput<ItemKey, RackPosition> productionPlanInput(List<AislePattern> patterns,
             ToLongFunction<ItemKey> ingredients) {
-        return productionPlanInput(patterns, ingredients, WareworksConfig.planLimits());
+        return productionPlanInput(patterns, ingredients, WareworksConfig.planLimits(), StockAccess.PLAYER);
+    }
+
+    /**
+     * {@link #productionPlanInput(List, ToLongFunction)} for a taker whose fluid is worth what {@code access} says (issue
+     * #55): the fluid a plan may claim is the bays' less the open fluid promises and the fluid keeper's reserve for that
+     * access, exactly as the items behind {@code ingredients} are.
+     */
+    private ProductionPlanInput<ItemKey, RackPosition> productionPlanInput(List<AislePattern> patterns,
+            ToLongFunction<ItemKey> ingredients, StockAccess access) {
+        return productionPlanInput(patterns, ingredients, WareworksConfig.planLimits(), access);
     }
 
     /** {@link #productionPlanInput(List, ToLongFunction)} with other bounds than a click's. */
     private ProductionPlanInput<ItemKey, RackPosition> productionPlanInput(List<AislePattern> patterns,
             ToLongFunction<ItemKey> ingredients, PlanLimits limits) {
+        return productionPlanInput(patterns, ingredients, limits, StockAccess.PLAYER);
+    }
+
+    private ProductionPlanInput<ItemKey, RackPosition> productionPlanInput(List<AislePattern> patterns,
+            ToLongFunction<ItemKey> ingredients, PlanLimits limits, StockAccess access) {
         productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
         List<StationPattern<ItemKey, RackPosition>> stationPatterns = new ArrayList<>(patterns.size());
         for (AislePattern candidate : patterns)
@@ -2194,7 +2223,21 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // "as much room as anyone could ask for", so an aisle without stock keepers pays nothing for the question.
         // The keys that may pay a filter cell are measured with the same availability as everything else (ADR-082).
         return new ProductionPlanInput<>(stationPatterns, PlanBudget.of(ingredients), limits, freeSlots, slots,
-                stockPauses::containsKey, this::productionRoomFor, ingredientChoices(patterns, ingredients));
+                stockPauses::containsKey, this::productionRoomFor, ingredientChoices(patterns, ingredients),
+                fluidSupplyFor(patterns, access));
+    }
+
+    /**
+     * What this aisle can deliver of fluid to a plan over {@code patterns} (issue #55, ADR-089): the controller's
+     * {@link ControllerFluidSupply} when any of the patterns has a fluid cell, and {@link FluidSupply#none()} otherwise,
+     * so an aisle without fluid patterns pays nothing for the question.
+     */
+    private FluidSupply<ItemKey> fluidSupplyFor(List<AislePattern> patterns, StockAccess access) {
+        for (AislePattern candidate : patterns) {
+            if (candidate.pattern().hasFluids())
+                return new ControllerFluidSupply(this, access);
+        }
+        return FluidSupply.none();
     }
 
     /**
@@ -2308,7 +2351,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                     return FetchPreview.none();
                 if (snapshot == null)
                     snapshot = productionPlanInput(aislePatterns(),
-                            StockAvailability.of(stockRules(), access, availabilityLookup()));
+                            StockAvailability.of(stockRules(), access, availabilityLookup()), access);
                 return SequentialPlans.preview(snapshot, needs);
             }
         };
@@ -2395,6 +2438,22 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         setChanged();
         markChunkKeepDirty(); // M19: an open order is work, and every step of a plan is one of these
         return promised;
+    }
+
+    /** GameTests only (issue #55): puts a production order made by hand into this aisle; whether it was accepted. */
+    public boolean addProductionOrderForTest(ProductionOrder<ItemKey, RackPosition> order) {
+        productionOrders.setMaxOpenOrders(configuredMaxProductionOrders());
+        boolean added = productionOrders.add(order);
+        if (added) {
+            selectors.invalidate();
+            setChanged();
+        }
+        return added;
+    }
+
+    /** GameTests only (issue #55): the fluid supply a click of a player plans with. */
+    public FluidSupply<ItemKey> fluidSupplyForTest() {
+        return new ControllerFluidSupply(this, StockAccess.PLAYER);
     }
 
     /**
@@ -2940,10 +2999,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         AislePattern best = null;
         long bestAmount = 0L;
         IngredientChoices<ItemKey> choices = ingredientChoices(patterns, available);
+        FluidSupply<ItemKey> fluids = fluidSupplyFor(patterns, StockAccess.PLAYER);
         for (AislePattern candidate : patterns) {
             if (!candidate.pattern().produces(key))
                 continue;
-            long amount = ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices);
+            long amount = ProduciblePlanner.producibleAmount(candidate.pattern(), available, choices, fluids);
             if (amount > bestAmount) {
                 best = candidate;
                 bestAmount = amount;
@@ -3546,7 +3606,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // make it is worked out here, once, from this very snapshot (M20, issue #4, ADR-032). Either every step of it
         // can be created or the click is refused with a reason that names the item in the way — nothing moves in
         // between, so the crane never starts carrying logs for a chest the aisle could not have finished.
-        ProductionPlanInput<ItemKey, RackPosition> planInput = productionPlanInput(patterns, ingredients);
+        ProductionPlanInput<ItemKey, RackPosition> planInput = productionPlanInput(patterns, ingredients, access);
         Optional<ProductionPlanResult<ItemKey, RackPosition>> planned = planProduction(planInput, key,
                 amount - claimable);
         ProductionPlan<ItemKey, RackPosition> plan = planned.flatMap(ProductionPlanResult::plan).orElse(null);
@@ -4202,7 +4262,8 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * and the filled key the request asked for.
      *
      * @param station  the station's rack position
-     * @param kind     its kind, an {@link LocationKind#OUTPUT}
+     * @param kind     its kind, an {@link LocationKind#OUTPUT}, or the {@link LocationKind#PRODUCTION} station of a fluid
+     *                 line (issue #55, ADR-089)
      * @param expected the filled container the request asked for, which the fill must hand back exactly
      */
     public record FillDestination(RackPosition station, LocationKind kind, ItemKey expected) {
@@ -4224,6 +4285,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         Objects.requireNonNull(job, "job");
         if (level == null || level.isClientSide || layout == null || job.type() != JobType.FILL)
             return Optional.empty();
+        // A fluid line of a production order (issue #55, ADR-089): the same fill trip, whose request id is the line. A
+        // line that is no longer open, or whose container is not what the job carries, answers "nobody waits": the empties
+        // are then rerouted onto a shelf, never filled for nobody.
+        if (job.requestId().filter(id -> productionOrders.byLine(id).isPresent()).isPresent())
+            return fluidLineDestination(job);
         Optional<RetrievalRequest<ItemKey, BlockPos>> request = job.requestId().flatMap(requests::get);
         if (request.isEmpty() || !request.get().isFill())
             return Optional.empty();
@@ -4233,6 +4299,61 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return rackOf(request.get().destination())
                 .filter(rack -> kindAt(rack).orElse(null) == LocationKind.OUTPUT)
                 .map(rack -> new FillDestination(rack, LocationKind.OUTPUT, request.get().key()));
+    }
+
+    /** {@link #fillDestination} of a fill trip serving a fluid line: its open order's production station. */
+    private Optional<FillDestination> fluidLineDestination(TransportJob<ItemKey, RackPosition> job) {
+        UUID lineId = job.requestId().orElseThrow();
+        Optional<ProductionOrder<ItemKey, RackPosition>> order = productionOrders.byLine(lineId)
+                .filter(ProductionOrder::isOpen);
+        Optional<SupplyLine<ItemKey>> line = order.flatMap(found -> found.line(lineId))
+                .filter(found -> found.isFluid() && !found.isComplete());
+        if (line.isEmpty() || membership.kindAt(order.get().station()).orElse(null) != LocationKind.PRODUCTION)
+            return Optional.empty();
+        Optional<FillLedger.Recipe<ItemKey, FluidKey>> recipe = fillRecipes.of(line.get().key());
+        if (recipe.isEmpty() || !recipe.get().emptyKey().equals(job.key()))
+            return Optional.empty();
+        return Optional.of(new FillDestination(order.get().station(), LocationKind.PRODUCTION, line.get().key()));
+    }
+
+    /**
+     * Filled containers of this aisle's open fluid lines that stand in the buffer of production station {@code station}
+     * right now (issue #55, ADR-089): delivered, and not yet taken by the player's machine. They count against the two
+     * containers a station may have in flight ({@link PlannerInput.FillSupply#MAX_AT_STATION}). One buffer read of a
+     * loaded station; 0 for any other.
+     */
+    public int fluidContainersHeldAt(RackPosition station) {
+        Objects.requireNonNull(station, "station");
+        if (level == null || layout == null)
+            return 0;
+        Set<ItemKey> keys = new HashSet<>();
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.ordersFor(station)) {
+            if (!order.isOpen())
+                continue;
+            for (SupplyLine<ItemKey> line : order.lines()) {
+                if (line.isFluid())
+                    keys.add(line.key());
+            }
+        }
+        if (keys.isEmpty())
+            return 0;
+        return productionStationAt(station).map(found -> (int) Math.min(Integer.MAX_VALUE, found.countOf(keys)))
+                .orElse(0);
+    }
+
+    /** The ids of every open fluid line of the orders at production station {@code station} (issue #55 review). */
+    public List<UUID> openFluidLinesAt(RackPosition station) {
+        Objects.requireNonNull(station, "station");
+        List<UUID> ids = new ArrayList<>();
+        for (ProductionOrder<ItemKey, RackPosition> order : productionOrders.ordersFor(station)) {
+            if (!order.isOpen())
+                continue;
+            for (SupplyLine<ItemKey> line : order.lines()) {
+                if (line.isFluid() && !line.isComplete())
+                    ids.add(line.id());
+            }
+        }
+        return ids;
     }
 
     /**
@@ -4251,6 +4372,19 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      */
     public FillLedger<ItemKey, FluidKey, RackPosition> fillLedger() {
         List<RetrievalRequest<ItemKey, BlockPos>> fills = requests.requestsOf(RequestKind.FILL);
+        // The open fluid lines of production orders owe containers exactly as a fill request does (issue #55, ADR-089):
+        // each one is entered as a synthetic fill request with the line's id, so the empties and the fluid they will take
+        // are owed to them and no terminal fill or second order is promised the same ones. In memory only, rebuilt per
+        // question like everything here; an aisle without a fluid line pays one pass over its orders.
+        if (layout != null && level != null && !level.isClientSide && productionOrders.hasOpenFluidLine()) {
+            List<RetrievalRequest<ItemKey, BlockPos>> all = new ArrayList<>(fills);
+            for (PlannerInput.SupplyNeed<ItemKey, RackPosition> need : supplyNeeds()) {
+                if (need.fluid())
+                    all.add(new RetrievalRequest<>(need.id(), need.key(), need.remaining(), need.remaining(),
+                            layout.rackPos(need.station()), RequestKind.FILL));
+            }
+            fills = all;
+        }
         if (fills.isEmpty())
             return FillLedger.empty();
         return FillLedger.of(fills, dispatch.trackedJobs(), fillRecipes::of);
@@ -4494,7 +4628,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 ContainerPlan.Row<ItemKey> row = makeable.get();
                 int wanted = (int) Math.min(Integer.MAX_VALUE, left / row.capacityMb());
                 ProductionPlan<ItemKey, RackPosition> chain = planProduction(productionPlanInput(aislePatterns(),
-                        StockAvailability.of(stockRules(), access, availabilityLookup())), row.container(), wanted)
+                        StockAvailability.of(stockRules(), access, availabilityLookup()), access), row.container(), wanted)
                         .flatMap(ProductionPlanResult::plan).orElse(null);
                 int count = chain == null ? 0 : (int) Math.min(wanted, chain.rootPromise());
                 if (count >= 1) {
@@ -4673,7 +4807,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         ProductionPlan<ItemKey, RackPosition> chain = preview;
         if (chain.rootPromise() > count)
             chain = planProduction(productionPlanInput(aislePatterns(), StockAvailability.of(stockRules(), access,
-                    availabilityLookup())), container, count).flatMap(ProductionPlanResult::plan).orElse(null);
+                    availabilityLookup()), access), container, count).flatMap(ProductionPlanResult::plan).orElse(null);
         return chain == null ? 0 : Math.min(count, startProductionPlan(chain, null));
     }
 
@@ -5524,7 +5658,10 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // reason (RestockOutcome.PACKAGE_MODE, review fix); the rules keep counting, capping and holding back.
         RestockLimits limits = PackageModeGate.enabled() ? RestockLimits.OFF : WareworksConfig.restockLimits();
         // Resolved once for the whole pass, and only when an order could actually come of it.
-        List<AislePattern> patterns = anyShort && limits.enabled() ? aislePatterns() : List.of();
+        // A pattern with a fluid cell is never restocked automatically (issue #55, ADR-089): an automatic order is built
+        // from the pattern alone and would forget its fluid. The terminal and the ports plan it ({@code planProduction}).
+        List<AislePattern> patterns = anyShort && limits.enabled()
+                ? aislePatterns().stream().filter(candidate -> !candidate.pattern().hasFluids()).toList() : List.of();
         Map<ItemKey, List<ProductionPattern<ItemKey>>> byResult = patternsByResult(patterns);
         ToLongFunction<ItemKey> available = patterns.isEmpty() ? key -> 0L
                 : StockAvailability.of(stockRules(), StockAccess.AUTOMATION, availabilityLookup());

@@ -667,6 +667,21 @@ final class ScreenInput {
     }
 
     /**
+     * The centre of fluid cell {@code cell} (0 or 1, issue #55) of the production screen, checked with the screen's own
+     * hit test.
+     */
+    static Point productionFluidCell(WarehouseProductionScreen screen, int cell) {
+        ProductionMenuLayout layout = (ProductionMenuLayout) get(PRODUCTION_LAYOUT, screen);
+        Point point = new Point(screen.getGuiLeft() + layout.fluidCellX(cell) + ProductionMenuLayout.SLOT / 2.0,
+                screen.getGuiTop() + layout.fluidCellY(cell) + ProductionMenuLayout.SLOT / 2.0);
+        int hit = screen.fluidCellAt(point.x(), point.y());
+        if (hit != cell)
+            throw new VisualTestException("the production screen's hit test puts " + point + " on fluid cell " + hit
+                    + ", not " + cell);
+        return point;
+    }
+
+    /**
      * The centre of the tab of pattern slot {@code pattern} of the production screen, checked with the screen's own hit
      * test. A click there selects the slot; a cursor resting there draws the slot's tooltip, which names why a Crafter
      * Feeder skips it (issue #34). With a scrolling strip (issue #35) the tab sits where the screen's current scroll

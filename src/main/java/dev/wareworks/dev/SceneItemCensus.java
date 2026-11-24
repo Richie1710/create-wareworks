@@ -8,6 +8,7 @@ import java.util.StringJoiner;
 import java.util.TreeMap;
 
 import com.simibubi.create.AllDataComponents;
+import com.simibubi.create.content.fluids.drain.ItemDrainBlockEntity;
 import com.simibubi.create.content.kinetics.mechanicalArm.ArmBlockEntity;
 import com.simibubi.create.content.logistics.box.PackageEntity;
 import com.simibubi.create.content.logistics.box.PackageItem;
@@ -167,6 +168,10 @@ final class SceneItemCensus {
                     add(counts, entry.key(), entry.count());
             } else if (be instanceof ArmBlockEntity arm) {
                 add(counts, armClaw(arm, level.registryAccess()));
+            } else if (be instanceof ItemDrainBlockEntity drain) {
+                // A Create Item Drain holds the stack it is emptying (or stalling on) outside any item capability
+                // (issue #55: a filled bucket waits there for the machine behind it).
+                add(counts, drain.getHeldItemStack());
             } else {
                 if (isSecondChestHalf(level.getBlockState(pos), pos, bounds))
                     continue;

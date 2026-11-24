@@ -44,6 +44,8 @@ import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
 import dev.wareworks.core.job.PlannerInput;
+import dev.wareworks.core.production.FluidCell;
+import dev.wareworks.core.production.FluidNeeds;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
@@ -567,15 +569,64 @@ public final class RecipeSelectorBlockGameTests {
         assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, new ProductionPattern<>(List.of(
                 new ProductionEntry<>(GRAY, 1), new ProductionEntry<>(white, 2), new ProductionEntry<>(black, 1)),
                 new ProductionEntry<>(LIGHT_GRAY, 2)), all, SelectorRecipeCheck.Verdict.AMBIGUOUS);
-        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, pattern(ItemKey.of(
-                AllItems.WHEAT_FLOUR.asItem()), 1, ItemKey.of(AllItems.DOUGH.asItem()), 1), all,
-                SelectorRecipeCheck.Verdict.FLUID);
+        // Fluid ingredients (issue #55, ADR-089 amending D14): flour + 1000 mB of water makes dough, and the pattern's
+        // fluid cells must say exactly that. An item-only pattern for it is FLUID_MISMATCH, no longer FLUID.
+        ItemKey flour = ItemKey.of(AllItems.WHEAT_FLOUR.asItem());
+        ItemKey dough = ItemKey.of(AllItems.DOUGH.asItem());
+        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, pattern(flour, 1, dough, 1), all,
+                SelectorRecipeCheck.Verdict.FLUID_MISMATCH);
+        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, withFluids(pattern(flour, 1, dough, 1),
+                new FluidCell("minecraft:water", 1000)), all, SelectorRecipeCheck.Verdict.VALID);
+        assertCheck(helper, level, SelectorMachine.Kind.BASIN_ALONE, withFluids(pattern(flour, 1, dough, 1),
+                new FluidCell("minecraft:water", 1000)), all, SelectorRecipeCheck.Verdict.VALID);
+        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, withFluids(pattern(flour, 1, dough, 1),
+                new FluidCell("minecraft:water", 500)), all, SelectorRecipeCheck.Verdict.FLUID_MISMATCH);
+        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, withFluids(pattern(flour, 1, dough, 1),
+                new FluidCell("minecraft:lava", 1000)), all, SelectorRecipeCheck.Verdict.FLUID_MISMATCH);
+        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, withFluids(pattern(flour, 1, dough, 1),
+                new FluidCell("minecraft:water", 1000), new FluidCell("minecraft:lava", 1)), all,
+                SelectorRecipeCheck.Verdict.FLUID_MISMATCH);
+        // Mud: dirt + 250 mB of water; the amount is part of the recipe (a fluid-tag-free single-fluid ingredient).
+        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, withFluids(pattern(ItemKey.of(Items.DIRT), 1,
+                ItemKey.of(Items.MUD), 1), new FluidCell("minecraft:water", 250)), all,
+                SelectorRecipeCheck.Verdict.VALID);
+        assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, withFluids(pattern(ItemKey.of(Items.DIRT), 1,
+                ItemKey.of(Items.MUD), 1), new FluidCell("minecraft:water", 251)), all,
+                SelectorRecipeCheck.Verdict.FLUID_MISMATCH);
+        // A fluid cell on a recipe without any fluid is a cell the machine never takes.
+        assertCheck(helper, level, SelectorMachine.Kind.SAW, withFluids(pattern(COBBLED, 1, SAW_STAIRS, 1),
+                new FluidCell("minecraft:water", 250)), all, SelectorRecipeCheck.Verdict.FLUID_MISMATCH);
         assertCheck(helper, level, SelectorMachine.Kind.PRESS_BASIN, pattern(IRON, 4, TRAPDOOR, 1), all,
                 SelectorRecipeCheck.Verdict.VALID);
         assertCheck(helper, level, SelectorMachine.Kind.PRESS_BASIN, pattern(IRON, 9, ItemKey.of(Items.IRON_BLOCK), 1),
                 all, SelectorRecipeCheck.Verdict.VALID);
         assertCheck(helper, level, SelectorMachine.Kind.MIXER_BASIN, pattern(IRON, 4, TRAPDOOR, 1), all,
                 SelectorRecipeCheck.Verdict.NO_RECIPE);
+        // Made-up fluid recipes: one that makes a fluid and one with three fluid ingredients fit no pattern (FLUID);
+        // two fluid ingredients are paired with the two cells in either order.
+        FluidNeeds.Need water100 = new FluidNeeds.Need("minecraft:water"::equals, 100);
+        FluidNeeds.Need lava200 = new FluidNeeds.Need("minecraft:lava"::equals, 200);
+        FluidNeeds.Need milk1 = new FluidNeeds.Need("minecraft:milk"::equals, 1);
+        Ingredient dirt = Ingredient.of(Items.DIRT);
+        ProductionPattern<ItemKey> mudPattern = pattern(ItemKey.of(Items.DIRT), 1, ItemKey.of(Items.MUD), 1);
+        List<SelectorRecipeCheck.Output> mud = List.of(new SelectorRecipeCheck.Output(new ItemStack(Items.MUD), 1.0F));
+        helper.assertValueEqual(SelectorRecipeCheck.judge(SelectorMachine.Kind.MIXER_BASIN, List.of(
+                new SelectorRecipeCheck.Candidate(List.of(dirt), mud, List.of(water100), true, false)),
+                withFluids(mudPattern, new FluidCell("minecraft:water", 100)), all),
+                SelectorRecipeCheck.Verdict.FLUID, "a recipe that makes a fluid");
+        helper.assertValueEqual(SelectorRecipeCheck.judge(SelectorMachine.Kind.MIXER_BASIN, List.of(
+                new SelectorRecipeCheck.Candidate(List.of(dirt), mud, List.of(water100, lava200, milk1), false,
+                        false)), withFluids(mudPattern, new FluidCell("minecraft:water", 100),
+                        new FluidCell("minecraft:lava", 200)), all),
+                SelectorRecipeCheck.Verdict.FLUID, "three fluid ingredients");
+        SelectorRecipeCheck.Candidate two = new SelectorRecipeCheck.Candidate(List.of(dirt), mud,
+                List.of(water100, lava200), false, false);
+        helper.assertValueEqual(SelectorRecipeCheck.judge(SelectorMachine.Kind.MIXER_BASIN, List.of(two),
+                withFluids(mudPattern, new FluidCell("minecraft:lava", 200), new FluidCell("minecraft:water", 100)),
+                all), SelectorRecipeCheck.Verdict.VALID, "two fluids, cells in the other order");
+        helper.assertValueEqual(SelectorRecipeCheck.judge(SelectorMachine.Kind.MIXER_BASIN, List.of(two),
+                withFluids(mudPattern, new FluidCell("minecraft:lava", 200)), all),
+                SelectorRecipeCheck.Verdict.FLUID_MISMATCH, "one of two fluids missing");
         // Made-up recipes: a chance output, and two cutting recipes for one result in other amounts.
         Ingredient cobbled = Ingredient.of(Items.COBBLED_DEEPSLATE);
         ProductionPattern<ItemKey> stairsPattern = pattern(COBBLED, 1, SAW_STAIRS, 1);
@@ -848,6 +899,10 @@ public final class RecipeSelectorBlockGameTests {
 
     private static ProductionPattern<ItemKey> pattern(ItemKey in, int inCount, ItemKey out, int outCount) {
         return ProductionPattern.of(in, inCount, out, outCount);
+    }
+
+    private static ProductionPattern<ItemKey> withFluids(ProductionPattern<ItemKey> pattern, FluidCell... fluids) {
+        return new ProductionPattern<>(pattern.ingredients(), pattern.result(), pattern.choices(), List.of(fluids));
     }
 
     private static ProductionPattern<ItemKey> pattern2(ItemKey a, int aCount, ItemKey b, int bCount, ItemKey out,

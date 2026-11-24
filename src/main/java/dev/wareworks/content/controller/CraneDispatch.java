@@ -1039,6 +1039,21 @@ final class CraneDispatch {
             public int liveFill(RackPosition bay, ItemKey emptyKey, int amount) {
                 return simulateFill(level, layout, bay, emptyKey, amount);
             }
+
+            // Both answers are memoised per planner input: a blocked line asks again at every dispatch attempt, and
+            // each is an order scan (and the first a buffer read).
+            private final Map<RackPosition, Integer> held = new HashMap<>();
+            private final Map<RackPosition, List<UUID>> lines = new HashMap<>();
+
+            @Override
+            public int heldAtStation(RackPosition station) {
+                return held.computeIfAbsent(station, controller::fluidContainersHeldAt);
+            }
+
+            @Override
+            public java.util.Collection<UUID> fluidLinesAt(RackPosition station) {
+                return lines.computeIfAbsent(station, controller::openFluidLinesAt);
+            }
         };
     }
 

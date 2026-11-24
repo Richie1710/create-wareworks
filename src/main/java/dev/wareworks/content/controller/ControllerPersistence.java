@@ -183,6 +183,7 @@ final class ControllerPersistence {
     private static final String DELIVERED = "Delivered";
     /** The filter a supply line pays (ADR-082); absent on every exact line. */
     private static final String CHOICE = "Choice";
+    private static final String FLUID = "Fluid";
     private static final String REQUEST = "Request";
     /** Marks an order the warehouse started by itself to refill a stock rule (M15 part 2). */
     private static final String RESTOCK = "Restock";
@@ -666,6 +667,9 @@ final class ControllerPersistence {
                         if (!(choiceTag instanceof CompoundTag compound && compound.isEmpty()))
                             lineTag.put(CHOICE, choiceTag);
                     }
+                    // Only on a fluid line (issue #55, ADR-089), so every other line saves what it always did. An older
+                    // build ignores it and reads the line as an item line of the filled container (documented).
+                    line.fluid().ifPresent(fluid -> lineTag.putString(FLUID, fluid));
                     lines.add(lineTag);
                 }
                 if (!complete || lines.isEmpty())
@@ -735,13 +739,21 @@ final class ControllerPersistence {
             CompoundTag lineTag = lineTags.getCompound(i);
             int required = lineTag.getInt(REQUIRED);
             Optional<ItemKey> key = ItemKey.load(registries, lineTag.get(ITEM));
+            // A fluid line whose container cannot be read (its mod was removed) can never be supplied, and an order that
+            // lost one would hand the machine its items without its fluid: the whole order is skipped (issue #55).
+            if (key.isEmpty() && lineTag.contains(FLUID, Tag.TAG_STRING))
+                return Optional.empty();
             if (!lineTag.hasUUID(ID) || key.isEmpty() || required < 1)
                 continue;
             int delivered = Mth.clamp(lineTag.getInt(DELIVERED), 0, required);
             // No choice means an exact ingredient, which is every line saved before ADR-082.
             Optional<ItemKey> choice = lineTag.contains(CHOICE) ? ItemKey.load(registries, lineTag.get(CHOICE))
                     : Optional.empty();
-            lines.add(new SupplyLine<>(lineTag.getUUID(ID), key.get(), required, delivered, choice));
+            // No Fluid means an item line, which is every line saved before ADR-089. An id the registry does not know
+            // stays as it is: the line is never supplied and the order ends by its timeout, never by a crash.
+            Optional<String> fluid = lineTag.contains(FLUID, Tag.TAG_STRING)
+                    ? Optional.of(lineTag.getString(FLUID)).filter(id -> !id.isBlank()) : Optional.empty();
+            lines.add(new SupplyLine<>(lineTag.getUUID(ID), key.get(), required, delivered, choice, fluid));
         }
         if (lines.isEmpty())
             return Optional.empty(); // an order without ingredients could never finish and promises nothing

@@ -223,6 +223,20 @@ public final class ProductionMenuLayout {
         return patternsY() + index / GRID_WIDTH * SLOT;
     }
 
+    /**
+     * X of fluid cell {@code cell} (0 or 1, issue #55, ADR-089): the column of the result cell, whose free space above and
+     * below it is exactly one cell tall. A fluid cell therefore costs the window no height, so every combination the
+     * configuration allows still fits the 320 x {@value #MAX_HEIGHT} floor.
+     */
+    public int fluidCellX(int cell) {
+        return patternCellX(RESULT_CELL);
+    }
+
+    /** Y of fluid cell {@code cell}: 0 is above the result cell, 1 below it (flush with the grid's first and last row). */
+    public int fluidCellY(int cell) {
+        return cell <= 0 ? patternsY() : patternsY() + PATTERN_BLOCK_HEIGHT - SLOT;
+    }
+
     /** X of the arrow between the grid and the result cell. */
     public int arrowX() {
         return patternsX() + GRID_WIDTH * SLOT;

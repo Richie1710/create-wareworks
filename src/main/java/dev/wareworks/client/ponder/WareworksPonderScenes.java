@@ -7,6 +7,7 @@ import com.tterrag.registrate.util.entry.RegistryEntry;
 import dev.wareworks.client.ponder.scenes.CraneScenes;
 import dev.wareworks.client.ponder.scenes.CrafterFeederScenes;
 import dev.wareworks.client.ponder.scenes.FluidBayScenes;
+import dev.wareworks.client.ponder.scenes.FluidPatternScenes;
 import dev.wareworks.client.ponder.scenes.HandTruckScenes;
 import dev.wareworks.client.ponder.scenes.NetworkScenes;
 import dev.wareworks.client.ponder.scenes.PackageScenes;
@@ -55,7 +56,7 @@ import net.minecraft.resources.ResourceLocation;
  *       warehouse/production_chain, warehouse/fluid_bay, warehouse/ordering_to_a_door,
  *       warehouse/fluid_request, warehouse/package_mode</td></tr>
  *   <tr><td>warehouse_production</td><td>warehouse/production, warehouse/port_collecting,
- *       warehouse/production_chain, warehouse/crafter_feeder, warehouse/recipe_selector,
+ *       warehouse/production_chain, warehouse/crafter_feeder, warehouse/recipe_selector, warehouse/fluid_pattern,
  *       warehouse/ender_recipe_selector</td></tr>
  *   <tr><td>recipe_selector</td><td>warehouse/recipe_selector</td></tr>
  *   <tr><td>ender_recipe_selector</td><td>warehouse/ender_recipe_selector</td></tr>
@@ -263,5 +264,12 @@ public final class WareworksPonderScenes {
         scenes.forComponents(WareworksBlocks.WAREHOUSE_INPUT, WareworksBlocks.WAREHOUSE_TERMINAL)
                 .addStoryBoard("warehouse/package_mode", PackageScenes::packageMode,
                         WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.LOGISTICS);
+
+        // A production pattern with a fluid cell (issue #55, ADR-089), registered last so no scene of any other block
+        // moves (ADR-016). It belongs to the production station alone: the pattern is its, and the arm-free machine the
+        // scene builds is what a player puts behind it.
+        scenes.forComponents(WareworksBlocks.WAREHOUSE_PRODUCTION)
+                .addStoryBoard("warehouse/fluid_pattern", FluidPatternScenes::fluidPattern,
+                        WareworksPonderTags.WAREHOUSE, AllCreatePonderTags.FLUIDS);
     }
 }

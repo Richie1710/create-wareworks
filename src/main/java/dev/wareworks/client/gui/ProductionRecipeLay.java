@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.network.ProductionPatternLayPayload;
 import net.minecraft.client.Minecraft;
@@ -48,13 +49,20 @@ public final class ProductionRecipeLay {
     public static boolean lay(ProductionMenu menu, boolean crafting, List<List<ItemKey>> cells, List<Integer> counts,
             Optional<ProductionEntry<ItemKey>> result, List<Optional<ResourceLocation>> tags,
             Optional<ResourceLocation> recipe) {
+        return lay(menu, crafting, cells, counts, result, tags, recipe, List.of());
+    }
+
+    /** {@link #lay} for a recipe with fluid inputs, which become the pattern's fluid cells (issue #55, ADR-089). */
+    public static boolean lay(ProductionMenu menu, boolean crafting, List<List<ItemKey>> cells, List<Integer> counts,
+            Optional<ProductionEntry<ItemKey>> result, List<Optional<ResourceLocation>> tags,
+            Optional<ResourceLocation> recipe, List<FluidCell> fluids) {
         Objects.requireNonNull(menu, "menu");
         ClientPacketListener connection = Minecraft.getInstance().getConnection();
         Optional<WarehouseProductionScreen> screen = WarehouseProductionScreen.forMenu(menu.containerId);
         if (!canLay(menu) || screen.isEmpty() || connection == null)
             return false;
         Optional<ProductionPatternLayPayload> payload = ProductionPatternLayPayload.fitted(menu.containerId,
-                screen.get().selectedPattern(), crafting, cells, counts, result, tags, recipe,
+                screen.get().selectedPattern(), crafting, cells, counts, result, tags, recipe, fluids,
                 connection.registryAccess(),
                 connection.getConnectionType());
         payload.ifPresent(PacketDistributor::sendToServer);

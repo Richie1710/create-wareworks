@@ -716,6 +716,8 @@ public final class WareworksLang {
     public static final String GOGGLES_SELECTOR_LATCH = "gui.goggles.selector_latch";
     /** {@code "Hand changes set back: %1$s"}: local goggles: how often a hand change was set back. */
     public static final String GOGGLES_SELECTOR_SET_BACKS = "gui.goggles.selector_set_backs";
+    /** A basin's recipe may need a lit Blaze Burner below it, which no check looks at (issue #55, ADR-089). */
+    public static final String GOGGLES_SELECTOR_HEAT_HINT = "gui.goggles.selector_heat_hint";
     /**
      * {@code "Stopped products: %1$s"}: items the safety stop is holding — on a production station the ones it makes
      * itself, on a warehouse controller the aisle's whole count (M20, issue #4, ADR-032).
@@ -1689,6 +1691,14 @@ public final class WareworksLang {
     public static final String PRODUCTION_FEEDER = "gui.production.feeder";
     /** A recipe viewer's "+" at a production station is greyed out: the recipe needs a fluid (ADR-076). */
     public static final String PRODUCTION_LAY_NOT_ONLY_ITEMS = "gui.production.lay.not_only_items";
+    /** The same: the recipe needs more than two different fluids, which a pattern cannot hold (issue #55). */
+    public static final String PRODUCTION_LAY_TOO_MANY_FLUIDS = "gui.production.lay.too_many_fluids";
+    /** The same: a fluid input of the recipe needs more than 1000 mB per run (issue #55). */
+    public static final String PRODUCTION_LAY_FLUID_TOO_MUCH = "gui.production.lay.fluid_too_much";
+    /** The same: the recipe makes a fluid, which a pattern cannot say (issue #55). */
+    public static final String PRODUCTION_LAY_FLUID_RESULT = "gui.production.lay.fluid_result";
+    /** Said over the hotbar if the server finds it: a fluid of the recipe is unknown to the server (issue #55). */
+    public static final String PRODUCTION_LAY_UNKNOWN_FLUID = "gui.production.lay.unknown_fluid";
     /** The same: the recipe needs more than the pattern's nine cells. */
     public static final String PRODUCTION_LAY_TOO_MANY_INPUTS = "gui.production.lay.too_many_inputs";
     /** The same, and said over the hotbar if the server finds it: the recipe makes one of its own ingredients. */
@@ -1729,6 +1739,26 @@ public final class WareworksLang {
     public static final String PRODUCTION_ORDER_USES = "gui.production.order.uses";
     /** {@code "and %1$s more"}: the items past the ones named, under the last "Uses" line. */
     public static final String PRODUCTION_ORDER_USES_MORE = "gui.production.order.uses_more";
+    /** {@code "Fluid ingredient"}: heads a fluid cell's tooltip under the fluid's own name (issue #55, ADR-089). */
+    public static final String PRODUCTION_FLUID_CELL = "gui.production.fluid.cell";
+    /** {@code "%1$s mB per run"}: the amount of a fluid cell, as the tooltip says it. */
+    public static final String PRODUCTION_FLUID_AMOUNT = "gui.production.fluid.amount";
+    /** {@code "One bucket serves %1$s runs"}: a fluid cell whose amount divides 1000 mB. */
+    public static final String PRODUCTION_FLUID_BUCKETS = "gui.production.fluid.buckets";
+    /** {@code "Delivered in whole filled buckets"}: the rule a fluid reaches the station by. */
+    public static final String PRODUCTION_FLUID_WHOLE = "gui.production.fluid.whole";
+    /** The gold warning of a fluid cell whose amount does not divide 1000 mB: the rest stays in the player's machine. */
+    public static final String PRODUCTION_FLUID_REST = "gui.production.fluid.rest";
+    /** The empty fluid cell's hint: a filled bucket sets the fluid. */
+    public static final String PRODUCTION_FLUID_SET_HINT = "gui.production.fluid.set_hint";
+    /** The filled fluid cell's hint: what the mouse wheel does. */
+    public static final String PRODUCTION_FLUID_WHEEL_HINT = "gui.production.fluid.wheel_hint";
+    /** The filled fluid cell's hint: how to clear it. */
+    public static final String PRODUCTION_FLUID_CLEAR_HINT = "gui.production.fluid.clear_hint";
+    /** {@code "Unknown fluid"}: a fluid cell whose fluid this installation does not have (a removed mod). */
+    public static final String PRODUCTION_FLUID_UNKNOWN = "gui.production.fluid.unknown";
+    /** Hotbar line: the other fluid cell of the pattern already holds this fluid. */
+    public static final String PRODUCTION_FLUID_SAME = "gui.production.fluid.same";
     /**
      * {@code "The recipe makes %1$s x%2$s"}: the reason of a pattern whose grid is a crafting recipe for another result
      * or amount, with what the recipe really makes. The other two reasons have keys of their own
@@ -1746,6 +1776,10 @@ public final class WareworksLang {
     public static final String GOGGLES_PRODUCTION_FEEDER = "gui.goggles.production_feeder";
     /** {@code "Patterns the feeder skips: %1$s"}: the same station's count of patterns that are no crafting recipe. */
     public static final String GOGGLES_PRODUCTION_REFUSED = "gui.goggles.production_refused";
+    /** {@code "Patterns with a fluid: %1$s"}: a production station's count of patterns with a fluid cell (issue #55). */
+    public static final String GOGGLES_PRODUCTION_FLUID_PATTERNS = "gui.goggles.production_fluid_patterns";
+    /** {@code "Filled containers left in the buffer: %1$s (take them out)"}: leftovers that count against the cap of two. */
+    public static final String GOGGLES_PRODUCTION_FLUID_HELD = "gui.goggles.production_fluid_held";
     /** {@code "Can be produced here"}: a terminal item that is not in stock but has a pattern. */
     public static final String TERMINAL_PRODUCIBLE = "gui.terminal.producible";
     /** {@code "Can be made now: %1$s"}: how many of a producible item the ingredients in stock allow right now. */

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,6 +22,8 @@ import com.simibubi.create.content.processing.recipe.ProcessingRecipe;
 import com.simibubi.create.infrastructure.config.AllConfigs;
 
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.content.station.PatternFluids;
+import dev.wareworks.core.production.FluidNeeds;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionPattern;
 import net.minecraft.core.HolderLookup;
@@ -34,6 +37,10 @@ import net.minecraft.world.item.crafting.RecipeManager;
 import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.item.crafting.ShapedRecipe;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.material.Fluid;
+import net.neoforged.neoforge.fluids.FluidStack;
+import net.neoforged.neoforge.fluids.FluidType;
+import net.neoforged.neoforge.fluids.crafting.SizedFluidIngredient;
 
 /**
  * The pattern check of a Recipe Selector station (ADR-085, design §10): would the machine, with its filter set to the
@@ -70,8 +77,21 @@ public final class SelectorRecipeCheck {
         AMBIGUOUS,
         /** Only a stonecutting recipe would make it, and the server does not let saws stonecut. */
         STONECUTTING_OFF,
-        /** The recipe needs or makes a fluid, which a selector station cannot handle yet. */
-        FLUID;
+        /**
+         * The recipe makes a fluid, or needs more fluids than a pattern holds, which a selector station cannot handle.
+         * (Before issue #55 it was every recipe with a fluid.)
+         */
+        FLUID,
+        /**
+         * The recipe needs fluids and the pattern's fluid cells are not exactly those: a fluid or an amount differs, one
+         * is missing or one is too many (issue #55, ADR-089). Appended: verdicts travel by ordinal.
+         */
+        FLUID_MISMATCH,
+        /**
+         * The pattern has fluid cells at a station of an Ender Recipe Selector: a far factory is served by packages,
+         * which carry items only (issue #55, ADR-089). Appended.
+         */
+        FLUID_FAR;
 
         /** The relative lang key, {@code gui.production.selector.check.<name>}. */
         public String langKey() {
@@ -96,13 +116,34 @@ public final class SelectorRecipeCheck {
     }
 
     /**
-     * One recipe as the check sees it: its item ingredients (one item each), its outputs, whether it needs or makes a
-     * fluid, and whether it is a stonecutting recipe (which a saw takes only where the server allows it).
+     * One recipe as the check sees it: its item ingredients (one item each), its outputs, the fluid ingredients it
+     * takes (issue #55), whether it makes a fluid, and whether it is a stonecutting recipe (which a saw takes only where
+     * the server allows it).
      */
-    public record Candidate(List<Ingredient> ingredients, List<Output> outputs, boolean fluid, boolean stonecutting) {
+    public record Candidate(List<Ingredient> ingredients, List<Output> outputs, List<FluidNeeds.Need> fluidNeeds,
+                            boolean fluidResult, boolean stonecutting) {
         public Candidate {
             ingredients = List.copyOf(ingredients);
             outputs = List.copyOf(outputs);
+            fluidNeeds = List.copyOf(fluidNeeds);
+        }
+
+        /**
+         * A candidate that only says whether it involves a fluid, as before issue #55: {@code fluid} marks a recipe that
+         * makes one, which no pattern can fit.
+         */
+        public Candidate(List<Ingredient> ingredients, List<Output> outputs, boolean fluid, boolean stonecutting) {
+            this(ingredients, outputs, List.of(), fluid, stonecutting);
+        }
+
+        /** Whether it needs or makes a fluid. */
+        public boolean fluid() {
+            return fluidResult || !fluidNeeds.isEmpty();
+        }
+
+        /** Whether no pattern can fit it: it makes a fluid, or needs more fluids than a pattern has cells. */
+        boolean beyondPatterns() {
+            return fluidResult || fluidNeeds.size() > FluidNeeds.MAX_NEEDS;
         }
 
         /** The item the machine's filter is tested against: the first output's. */
@@ -152,6 +193,7 @@ public final class SelectorRecipeCheck {
         List<Candidate> passing = new ArrayList<>();
         boolean stonecuttingWould = false;
         boolean fluidWould = false;
+        boolean fluidMismatch = false;
         for (Candidate candidate : candidates) {
             if (candidate.primary() != result || !ingredientsFit(kind, candidate, items))
                 continue;
@@ -159,16 +201,23 @@ public final class SelectorRecipeCheck {
                 stonecuttingWould = true;
                 continue;
             }
-            if (candidate.fluid()) {
+            if (candidate.beyondPatterns()) {
                 fluidWould = true;
+                continue;
+            }
+            if (!FluidNeeds.fit(candidate.fluidNeeds(), pattern.fluids())) {
+                fluidMismatch = true;
                 continue;
             }
             passing.add(candidate);
         }
         if (fluidWould)
             return Verdict.FLUID;
-        if (passing.isEmpty())
-            return stonecuttingWould ? Verdict.STONECUTTING_OFF : Verdict.NO_RECIPE;
+        if (passing.isEmpty()) {
+            if (stonecuttingWould)
+                return Verdict.STONECUTTING_OFF;
+            return fluidMismatch ? Verdict.FLUID_MISMATCH : Verdict.NO_RECIPE;
+        }
         Set<List<Integer>> shapes = new LinkedHashSet<>();
         for (Candidate candidate : passing) {
             for (Output output : candidate.outputs()) {
@@ -177,7 +226,9 @@ public final class SelectorRecipeCheck {
             }
             int consumed = kind == SelectorMachine.Kind.SAW ? 1 : candidate.ingredients().size();
             int made = candidate.outputs().size() == 1 ? candidate.outputs().get(0).stack().getCount() : -1;
-            shapes.add(List.of(made, consumed));
+            List<Integer> shape = new ArrayList<>(List.of(made, consumed));
+            candidate.fluidNeeds().stream().map(FluidNeeds.Need::millibuckets).sorted().forEach(shape::add);
+            shapes.add(shape);
         }
         if (shapes.size() > 1)
             return Verdict.AMBIGUOUS;
@@ -375,14 +426,26 @@ public final class SelectorRecipeCheck {
                 outputs.add(new Output(output.getStack(), output.getChance()));
             if (outputs.isEmpty())
                 return null;
-            boolean fluid = !processing.getFluidIngredients().isEmpty() || !processing.getFluidResults().isEmpty();
-            return new Candidate(ingredients, outputs, fluid, false);
+            List<FluidNeeds.Need> needs = new ArrayList<>(processing.getFluidIngredients().size());
+            for (SizedFluidIngredient fluid : processing.getFluidIngredients())
+                needs.add(needOf(fluid));
+            return new Candidate(ingredients, outputs, needs, !processing.getFluidResults().isEmpty(), false);
         }
         ItemStack made = recipe.getResultItem(registries);
         if (made.isEmpty())
             return null;
         return new Candidate(ingredients, List.of(new Output(made, 1.0F)), false,
                 recipe.getType() == RecipeType.STONECUTTING);
+    }
+
+    /** A recipe's fluid ingredient as the check pairs it: the fluids it accepts by registry id, and its amount. */
+    private static FluidNeeds.Need needOf(SizedFluidIngredient fluid) {
+        return new FluidNeeds.Need(id -> acceptsFluid(fluid, id), fluid.amount());
+    }
+
+    private static boolean acceptsFluid(SizedFluidIngredient fluid, String id) {
+        Optional<Fluid> found = PatternFluids.resolve(id);
+        return found.isPresent() && fluid.ingredient().test(new FluidStack(found.get(), FluidType.BUCKET_VOLUME));
     }
 
     private static List<Ingredient> nonEmpty(List<Ingredient> ingredients) {

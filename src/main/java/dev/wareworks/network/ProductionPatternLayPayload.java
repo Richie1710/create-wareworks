@@ -10,6 +10,7 @@ import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.RecipeTagCells;
 import dev.wareworks.core.crafting.CraftGrid;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.ProductionEntry;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.DecoderException;
@@ -45,10 +46,14 @@ import net.neoforged.neoforge.network.connection.ConnectionType;
  *                    valid resource location reads as no tag
  * @param recipe      the id of the recipe the viewer laid, the server's only source of which ingredients are tags; empty
  *                    lays every cell exact
+ * @param fluids      the fluid cells the recipe needs (issue #55, ADR-089), at most {@value FluidCell#MAX_PER_PATTERN}
+ *                    with distinct fluids; the server keeps only fluids it has and replaces the slot's fluid cells with
+ *                    them. Empty for a crafting recipe and for a recipe without a fluid
  */
 public record ProductionPatternLayPayload(int containerId, int pattern, boolean crafting, List<List<ItemKey>> cells,
                                           List<Integer> counts, Optional<ProductionEntry<ItemKey>> result,
-                                          List<Optional<ResourceLocation>> tags, Optional<ResourceLocation> recipe)
+                                          List<Optional<ResourceLocation>> tags, Optional<ResourceLocation> recipe,
+                                          List<FluidCell> fluids)
         implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<ProductionPatternLayPayload> TYPE =
             new CustomPacketPayload.Type<>(Wareworks.asResource("production_pattern_lay"));
@@ -67,6 +72,14 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
         counts = List.copyOf(counts);
         tags = List.copyOf(Objects.requireNonNull(tags, "tags"));
         Objects.requireNonNull(recipe, "recipe");
+        fluids = List.copyOf(Objects.requireNonNull(fluids, "fluids"));
+    }
+
+    /** A lay without fluid cells: every recipe before issue #55. */
+    public ProductionPatternLayPayload(int containerId, int pattern, boolean crafting, List<List<ItemKey>> cells,
+            List<Integer> counts, Optional<ProductionEntry<ItemKey>> result, List<Optional<ResourceLocation>> tags,
+            Optional<ResourceLocation> recipe) {
+        this(containerId, pattern, crafting, cells, counts, result, tags, recipe, List.of());
     }
 
     /** A lay without tags: every cell exact, as before ADR-082. */
@@ -85,7 +98,9 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
                 && tags.size() == cells.size() && (crafting || result.isPresent())
                 && tags.stream().allMatch(tag -> tag.isEmpty()
                         || tag.get().toString().length() <= RecipeTagCells.MAX_TAG_LENGTH)
-                && recipe.map(id -> id.toString().length() <= RecipeTagCells.MAX_TAG_LENGTH).orElse(true);
+                && recipe.map(id -> id.toString().length() <= RecipeTagCells.MAX_TAG_LENGTH).orElse(true)
+                && fluids.size() <= FluidCell.MAX_PER_PATTERN
+                && fluids.stream().allMatch(fluid -> fluid.fluid().length() <= FluidCell.MAX_ID_LENGTH);
     }
 
     /**
@@ -97,6 +112,15 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
             List<? extends List<ItemKey>> cells, List<Integer> counts, Optional<ProductionEntry<ItemKey>> result,
             List<Optional<ResourceLocation>> tags, Optional<ResourceLocation> recipe, RegistryAccess registries,
             ConnectionType connectionType) {
+        return fitted(containerId, pattern, crafting, cells, counts, result, tags, recipe, List.of(), registries,
+                connectionType);
+    }
+
+    /** {@link #fitted} with the recipe's fluid cells (issue #55). */
+    public static Optional<ProductionPatternLayPayload> fitted(int containerId, int pattern, boolean crafting,
+            List<? extends List<ItemKey>> cells, List<Integer> counts, Optional<ProductionEntry<ItemKey>> result,
+            List<Optional<ResourceLocation>> tags, Optional<ResourceLocation> recipe, List<FluidCell> fluids,
+            RegistryAccess registries, ConnectionType connectionType) {
         Objects.requireNonNull(registries, "registries");
         Objects.requireNonNull(connectionType, "connectionType");
         if (!TerminalCraftLayPayload.wellFormed(cells))
@@ -109,7 +133,8 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
             for (List<ItemKey> cell : cells)
                 cut.add(cell.subList(0, Math.min(cell.size(), limit)));
             ProductionPatternLayPayload payload =
-                    new ProductionPatternLayPayload(containerId, pattern, crafting, cut, counts, result, tags, recipe);
+                    new ProductionPatternLayPayload(containerId, pattern, crafting, cut, counts, result, tags, recipe,
+                            fluids);
             if (!payload.wellFormed())
                 return Optional.empty();
             RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(Unpooled.buffer(), registries, connectionType);
@@ -170,7 +195,17 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
         Optional<ResourceLocation> recipe = buffer.readBoolean()
                 ? Optional.ofNullable(ResourceLocation.tryParse(buffer.readUtf(RecipeTagCells.MAX_TAG_LENGTH)))
                 : Optional.empty();
-        return new ProductionPatternLayPayload(containerId, pattern, crafting, cells, counts, result, tags, recipe);
+        // Fluid cells are the last section (issue #55); an id or an amount that is out of range is clamped or dropped.
+        int fluidCount = Math.min(Math.max(0, buffer.readVarInt()), FluidCell.MAX_PER_PATTERN);
+        List<FluidCell> fluids = new ArrayList<>(fluidCount);
+        for (int i = 0; i < fluidCount; i++) {
+            String fluid = buffer.readUtf(FluidCell.MAX_ID_LENGTH);
+            int amount = buffer.readVarInt();
+            if (!fluid.isBlank() && fluids.stream().noneMatch(other -> other.fluid().equals(fluid)))
+                fluids.add(FluidCell.sanitized(fluid, amount));
+        }
+        return new ProductionPatternLayPayload(containerId, pattern, crafting, cells, counts, result, tags, recipe,
+                fluids);
     }
 
     /** @throws EncoderException when the payload is not well-formed; {@link #fitted} never builds such a payload */
@@ -201,6 +236,11 @@ public record ProductionPatternLayPayload(int containerId, int pattern, boolean 
         });
         buffer.writeBoolean(recipe.isPresent());
         recipe.ifPresent(id -> buffer.writeUtf(id.toString(), RecipeTagCells.MAX_TAG_LENGTH));
+        buffer.writeVarInt(fluids.size());
+        for (FluidCell fluid : fluids) {
+            buffer.writeUtf(fluid.fluid(), FluidCell.MAX_ID_LENGTH);
+            buffer.writeVarInt(fluid.millibuckets());
+        }
     }
 
     @Override

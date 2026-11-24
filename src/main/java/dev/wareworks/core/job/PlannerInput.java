@@ -334,8 +334,34 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
      * @param <L> location type
      */
     public interface FillSupply<K, L> {
+        /**
+         * Filled containers that may be on their way to or standing in one production station's buffer at once
+         * (issue #55, ADR-089): what the player's Item Drain (1500 mB) and Basin (1000 mB) can take unconsumed. The one
+         * number {@code FluidSupply#MAX_IN_FLIGHT} of the production planner repeats; a unit test keeps them equal.
+         */
+        int MAX_AT_STATION = 2;
+
         /** The empty container and the millibuckets per container of {@code filledKey}; empty if it cannot be filled. */
         Optional<FillRecipe<K>> recipe(K filledKey);
+
+        /**
+         * Filled containers of open fluid lines that stand in the buffer of production station {@code station} right now
+         * (issue #55): delivered, and not taken by the player's machine yet. They count against
+         * {@link #MAX_AT_STATION} with the trips on their way. One buffer read, asked only for a station with a fluid
+         * line to serve.
+         */
+        default int heldAtStation(L station) {
+            return 0;
+        }
+
+        /**
+         * The ids of <b>every</b> open fluid line of production station {@code station}, also the ones the Recipe
+         * Selector's gate keeps out of {@link PlannerInput#supplies()} right now (issue #55 review): a trip a gated line
+         * already has in flight still counts against {@link #MAX_AT_STATION}. Empty by default.
+         */
+        default java.util.Collection<java.util.UUID> fluidLinesAt(L station) {
+            return java.util.List.of();
+        }
 
         /**
          * The bays that hold the fluid of {@code filledKey}, each with how many whole containers of it it can still give
@@ -449,16 +475,24 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
      * @param key       the ingredient
      * @param remaining items not delivered to the station yet, at least 1
      * @param station   the production station they go to
+     * @param fluid     whether this is a <b>fluid line</b> (issue #55, ADR-089): {@code key} is then a filled container
+     *                  a fluid bay makes, and it is served by a fill trip ({@link JobPlanner#planFluidSupply}) instead of
+     *                  a retrieval out of the racks
      * @param <K>       item key type
      * @param <L>       location type
      */
-    public record SupplyNeed<K, L>(UUID id, K key, int remaining, L station) {
+    public record SupplyNeed<K, L>(UUID id, K key, int remaining, L station, boolean fluid) {
         public SupplyNeed {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(station, "station");
             if (remaining < 1)
                 throw new IllegalArgumentException("remaining must be at least 1: " + remaining);
+        }
+
+        /** An item ingredient: what every supply need was before ADR-089. */
+        public SupplyNeed(UUID id, K key, int remaining, L station) {
+            this(id, key, remaining, station, false);
         }
     }
 

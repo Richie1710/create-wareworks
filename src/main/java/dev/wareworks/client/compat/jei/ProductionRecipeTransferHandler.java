@@ -16,6 +16,7 @@ import dev.wareworks.client.gui.ProductionRecipeLay;
 import dev.wareworks.client.gui.TerminalRecipeLay;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionMenu;
+import dev.wareworks.content.station.PatternFluids;
 import dev.wareworks.content.station.RecipeTagCells;
 import dev.wareworks.core.crafting.CraftGrid;
 import dev.wareworks.core.production.PatternLay;
@@ -23,6 +24,7 @@ import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.util.WareworksLang;
 import mezz.jei.api.gui.ingredient.IRecipeSlotView;
 import mezz.jei.api.gui.ingredient.IRecipeSlotsView;
+import mezz.jei.api.neoforge.NeoForgeTypes;
 import mezz.jei.api.recipe.RecipeIngredientRole;
 import mezz.jei.api.recipe.transfer.IRecipeTransferError;
 import mezz.jei.api.recipe.transfer.IRecipeTransferHandlerHelper;
@@ -39,6 +41,7 @@ import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
+import net.neoforged.neoforge.fluids.FluidStack;
 
 /**
  * JEI's "+" on a recipe of <b>any</b> category, while a production station is open: it lays the recipe into the selected
@@ -83,6 +86,9 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
     private final IRecipeTransferError notOnlyItems;
     private final IRecipeTransferError tooManyInputs;
     private final IRecipeTransferError makesIngredient;
+    private final IRecipeTransferError tooManyFluids;
+    private final IRecipeTransferError fluidTooMuch;
+    private final IRecipeTransferError fluidResult;
 
     ProductionRecipeTransferHandler(IRecipeTransferHandlerHelper helper) {
         this.helper = Objects.requireNonNull(helper, "helper");
@@ -90,6 +96,9 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
         notOnlyItems = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_NOT_ONLY_ITEMS));
         tooManyInputs = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_TOO_MANY_INPUTS));
         makesIngredient = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_MAKES_INGREDIENT));
+        tooManyFluids = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_TOO_MANY_FLUIDS));
+        fluidTooMuch = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_FLUID_TOO_MUCH));
+        fluidResult = helper.createUserErrorWithTooltip(refusal(WareworksLang.PRODUCTION_LAY_FLUID_RESULT));
     }
 
     private static Component refusal(String key) {
@@ -119,30 +128,58 @@ final class ProductionRecipeTransferHandler implements IUniversalRecipeTransferH
         if (value instanceof CraftingRecipe crafting && inputs.size() == CraftGrid.SIZE
                 && crafting.canCraftInDimensions(CraftGrid.WIDTH, CraftGrid.WIDTH))
             return layCrafting(container, recipe, inputs, doTransfer);
+        // A recipe that makes a fluid cannot be a pattern: nothing would drain what the machine makes (issue #55).
+        if (recipeSlots.getSlotViews(RecipeIngredientRole.OUTPUT).stream()
+                .anyMatch(output -> output.getIngredients(NeoForgeTypes.FLUID_STACK).anyMatch(fluid -> !fluid.isEmpty())))
+            return fluidResult;
         Optional<ProductionEntry<ItemKey>> result = result(value, recipeSlots);
         if (result.isEmpty())
             return hidden;
         List<PatternLay.Input<ItemKey>> laid = new ArrayList<>(inputs.size());
+        List<PatternLay.FluidInput> fluids = new ArrayList<>(2);
         List<IRecipeSlotView> filled = new ArrayList<>(inputs.size());
         for (IRecipeSlotView input : inputs) {
             if (input.isEmpty())
                 continue;
+            if (input.getItemStacks().findAny().isEmpty()) {
+                Optional<PatternLay.FluidInput> fluid = fluidInput(input);
+                if (fluid.isPresent()) {
+                    fluids.add(fluid.get());
+                    continue;
+                }
+            }
             int count = input.getItemStacks().findFirst().map(ItemStack::getCount).orElse(1);
             laid.add(new PatternLay.Input<>(TerminalRecipeLay.candidates(input.getItemStacks()), count));
             filled.add(input);
         }
-        PatternLay.Layout<ItemKey> layout = PatternLay.layout(laid, result.get().key());
+        PatternLay.Layout<ItemKey> layout = PatternLay.layout(laid, fluids, result.get().key());
         if (layout.refusal().isPresent())
             return switch (layout.refusal().get()) {
                 case NOT_ONLY_ITEMS -> notOnlyItems;
                 case TOO_MANY_INPUTS -> tooManyInputs;
                 case MAKES_ITS_INGREDIENT -> makesIngredient;
+                case TOO_MANY_FLUIDS -> tooManyFluids;
+                case FLUID_TOO_MUCH -> fluidTooMuch;
+                case FLUID_RESULT -> fluidResult;
             };
         if (!doTransfer)
             return null;
         List<Optional<ResourceLocation>> tags = machineTags(value, laid, filled, result.get().key(), layout.cells());
         return ProductionRecipeLay.lay(container, false, layout.cells(), layout.counts(), result, tags,
-                recipeId(recipe)) ? null : hidden;
+                recipeId(recipe), layout.fluids()) ? null : hidden;
+    }
+
+    /**
+     * The fluid input a slot shows (issue #55, ADR-089): the fluids JEI lists for it, each as the registry id of its
+     * source, and the amount of the first (a tag's alternatives all take the same). Empty when the slot lists no fluid.
+     */
+    private static Optional<PatternLay.FluidInput> fluidInput(IRecipeSlotView slot) {
+        List<FluidStack> stacks = slot.getIngredients(NeoForgeTypes.FLUID_STACK).filter(stack -> !stack.isEmpty())
+                .toList();
+        if (stacks.isEmpty())
+            return Optional.empty();
+        List<String> candidates = stacks.stream().map(stack -> PatternFluids.idOf(stack.getFluid())).distinct().toList();
+        return Optional.of(new PatternLay.FluidInput(candidates, stacks.get(0).getAmount()));
     }
 
     /**

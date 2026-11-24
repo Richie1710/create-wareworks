@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Fluid ingredients in production patterns** ([#55](https://github.com/Richie1710/create-wareworks/issues/55)). A
+  pattern now has two fluid cells beside its items: click one with a filled bucket to set the fluid, the wheel sets the
+  millibuckets one run takes (50 mB a notch, Shift 250, Ctrl 1000, at most 1000 mB, the size of a Basin's tank), a
+  right-click clears it. Ordered at the terminal, the crane brings the fluid as **whole filled buckets**: it takes
+  empty buckets out of stock, fills them at a fluid bay and carries them to the station, at most two per station, and
+  the buckets count against the station's buffer slots. The warehouse names what is missing ("Not enough fluid for …",
+  "No empty container for …", "Buffer too small for …").
+  - Your own machine turns the bucket into fluid, **without a Mechanical Arm**: an extracting brass funnel filtered to
+    the filled bucket, an Item Drain, a pump and pipes into a Basin under a Mixer. A new Ponder scene, **Fluid in a
+    Production Pattern**, shows the principle and its warnings, and the README has the details: a Mechanical Arm that
+    can also reach the Basin puts buckets into its item slots, a depot is no way out for the empty bucket, and an
+    amount that does not divide 1000 mB leaves a rest in your machine (the cell's tooltip says so).
+  - JEI's "+" lays a recipe's fluid inputs as fluid cells.
+  - Limits: a pattern cannot make a fluid, a Crafter Feeder refuses a pattern with a fluid cell, package mode leaves
+    the cells inert and an automatic stock-rule restock skips such a pattern. Filled buckets left in the station's
+    buffer after a cancel are not taken out by the crane and count against the cap of two; the station's goggles say
+    so while no order is open.
+  - The Basin's goggles say that the Selector does not check heat, and the station's goggles count the patterns with a
+    fluid.
+
+### Changed
+
+- **A local Recipe Selector at a Basin accepts its fluid recipes** ([#55](https://github.com/Richie1710/create-wareworks/issues/55)).
+  A fluid recipe is accepted when the pattern's fluid cells are the recipe's fluids with the same amounts; a pattern
+  without them is drawn red ("the recipe takes other fluids or amounts than the pattern's fluid cells"; before: every
+  fluid recipe was refused),
+  and the Ender Recipe Selector refuses a station with fluid cells.
+- **Server and players have to update together** again: the production station's screen data and the lay packet of
+  JEI's "+" carry the fluid cells.
+- **Going back to an older Wareworks loses fluid cells.** An older version ignores them, so a pattern that has only
+  fluid cells is empty after the next save there, and an open order's fluid line is read as an item line of the
+  bucket. Patterns without a fluid cell are saved exactly as before.
+
 ## [0.26.0-beta] - 2026-11-24
 
 ### Added

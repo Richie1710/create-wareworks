@@ -70,11 +70,33 @@ public final class ProduciblePlanner {
      */
     public static <K> int runsPossible(ProductionPattern<K> pattern, ToLongFunction<? super K> available,
             IngredientChoices<K> choices) {
+        return runsPossible(pattern, available, choices, FluidSupply.none());
+    }
+
+    /**
+     * {@link #runsPossible(ProductionPattern, ToLongFunction, IngredientChoices)} with the fluid the warehouse can deliver
+     * (issue #55, ADR-089): a pattern with a fluid cell is bounded by the fluid in the bays and by the empty containers to
+     * carry it in ({@link #fluidRuns}). Without a supply that can deliver the fluid it makes nothing, and a pattern
+     * without a fluid cell is untouched.
+     */
+    public static <K> int runsPossible(ProductionPattern<K> pattern, ToLongFunction<? super K> available,
+            IngredientChoices<K> choices, FluidSupply<K> fluids) {
         Objects.requireNonNull(pattern, "pattern");
         Objects.requireNonNull(available, "available");
         Objects.requireNonNull(choices, "choices");
+        Objects.requireNonNull(fluids, "fluids");
+        int items = itemRuns(pattern, available, choices);
+        if (items == 0 || !pattern.hasFluids())
+            return items;
+        return Math.min(items, fluidRuns(pattern, available, fluids));
+    }
+
+    private static <K> int itemRuns(ProductionPattern<K> pattern, ToLongFunction<? super K> available,
+            IngredientChoices<K> choices) {
         if (pattern.hasChoices())
             return runsWithChoices(pattern, available, choices);
+        if (pattern.ingredients().isEmpty())
+            return Integer.MAX_VALUE; // a fluid-only pattern: the fluid decides
         long runs = Long.MAX_VALUE;
         for (ProductionEntry<K> ingredient : pattern.ingredients()) {
             long stock = Math.max(0L, available.applyAsLong(ingredient.key()));
@@ -83,6 +105,53 @@ public final class ProduciblePlanner {
                 return 0;
         }
         return (int) Math.min(Integer.MAX_VALUE, runs);
+    }
+
+    /**
+     * How many runs the fluid cells of {@code pattern} support (issue #55): the most runs whose whole containers the
+     * bays can fill and whose empty containers are in stock, summed over the cells that share an empty container. 0 when
+     * a fluid cannot be delivered at all. A binary search over {@link #fluidFits}, which is monotone in the runs; the
+     * upper bound is the largest the fluid alone allows.
+     */
+    static <K> int fluidRuns(ProductionPattern<K> pattern, ToLongFunction<? super K> available,
+            FluidSupply<K> fluids) {
+        List<FluidSupply.Delivery<K>> deliveries = new java.util.ArrayList<>(pattern.fluids().size());
+        long bound = Integer.MAX_VALUE;
+        for (FluidCell cell : pattern.fluids()) {
+            FluidSupply.Delivery<K> delivery = fluids.delivery(cell.fluid()).orElse(null);
+            if (delivery == null)
+                return 0;
+            deliveries.add(delivery);
+            bound = Math.min(bound, delivery.fluidMb() / cell.millibuckets());
+        }
+        int hi = (int) Math.max(0L, Math.min(Integer.MAX_VALUE, bound));
+        int lo = 0;
+        while (lo < hi) {
+            int mid = lo + (hi - lo + 1) / 2;
+            if (fluidFits(pattern, deliveries, available, mid))
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        return lo;
+    }
+
+    private static <K> boolean fluidFits(ProductionPattern<K> pattern, List<FluidSupply.Delivery<K>> deliveries,
+            ToLongFunction<? super K> available, int runs) {
+        java.util.Map<K, Long> empties = new java.util.HashMap<>();
+        for (int index = 0; index < deliveries.size(); index++) {
+            FluidCell cell = pattern.fluids().get(index);
+            FluidSupply.Delivery<K> delivery = deliveries.get(index);
+            long containers = cell.containersFor(runs, delivery.containerMb());
+            if (containers * delivery.containerMb() > delivery.fluidMb())
+                return false;
+            empties.merge(delivery.empty(), containers, Long::sum);
+        }
+        for (java.util.Map.Entry<K, Long> entry : empties.entrySet()) {
+            if (Math.max(0L, available.applyAsLong(entry.getKey())) < entry.getValue())
+                return false;
+        }
+        return true;
     }
 
     /**
@@ -200,7 +269,13 @@ public final class ProduciblePlanner {
     /** {@link #producibleAmount(ProductionPattern, ToLongFunction)} with the keys that may pay a choice (ADR-082). */
     public static <K> long producibleAmount(ProductionPattern<K> pattern, ToLongFunction<? super K> available,
             IngredientChoices<K> choices) {
-        int runs = runsPossible(pattern, available, choices);
+        return producibleAmount(pattern, available, choices, FluidSupply.none());
+    }
+
+    /** {@link #producibleAmount(ProductionPattern, ToLongFunction, IngredientChoices)} with fluid (issue #55). */
+    public static <K> long producibleAmount(ProductionPattern<K> pattern, ToLongFunction<? super K> available,
+            IngredientChoices<K> choices, FluidSupply<K> fluids) {
+        int runs = runsPossible(pattern, available, choices, fluids);
         return runs == 0 ? 0L : (long) runs * pattern.result().count();
     }
 

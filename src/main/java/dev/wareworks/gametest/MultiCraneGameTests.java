@@ -136,6 +136,7 @@ public final class MultiCraneGameTests {
     private static final ItemKey LOG = ItemKey.of(Items.OAK_LOG);
     private static final ItemKey NAIL = ItemKey.of(Items.IRON_NUGGET);
     private static final ItemKey PLANK = ItemKey.of(Items.OAK_PLANKS);
+    private static final ItemKey WATER_BUCKET = ItemKey.of(Items.WATER_BUCKET);
     private static final int COUNT = 16;
     private static final int STACK = 64;
     private static final int HALF = 32;
@@ -868,6 +869,93 @@ public final class MultiCraneGameTests {
                 })
                 .thenExecute(() -> helper.assertValueEqual(supplying.size(), severalCranes() ? 2 : 1,
                         "every crane brought an ingredient"))
+                .thenSucceed();
+    }
+
+    /**
+     * The fluid line of a production order with two cranes (issue #55, ADR-089): three buckets of water for twelve mud, a
+     * station that may have <b>two</b> containers in flight. Over both cranes the most buckets ever standing in the
+     * station or carried is two, the third waits for the player's machine, and the water is conserved on every tick:
+     * the reservations of the two cranes are one ledger, so neither plans the third trip while the other carries.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = LONG_TIMEOUT_TICKS)
+    public static void fluidsupplykeepstwoincontainersonbothcranes(GameTestHelper helper) {
+        BlockPos bayPos = LINE.rack(7, Side.LEFT);
+        helper.setBlock(bayPos, WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                .setValue(dev.wareworks.content.storage.FluidBayBlock.FACING, Line.away(Side.LEFT)));
+        build(helper, LINE, true);
+        storage(helper, LINE, 2, Side.LEFT, DIRT.toStack(COUNT * 4));
+        storage(helper, LINE, 12, Side.LEFT, new ItemStack(Items.BUCKET, COUNT));
+        BlockPos station = LINE.rack(5, Side.RIGHT);
+        helper.setBlock(station, WareworksBlocks.WAREHOUSE_PRODUCTION.getDefaultState()
+                .setValue(WarehouseProductionBlock.FACING, Direction.NORTH));
+        BlockPos output = LINE.rack(3, Side.RIGHT);
+        output(helper, output, Side.RIGHT);
+        BlockPos input = LINE.rack(9, Side.RIGHT);
+        input(helper, input, Side.RIGHT);
+        net.minecraft.world.level.material.Fluid water = net.minecraft.world.level.material.Fluids.WATER;
+        dev.wareworks.content.fluid.FluidKey waterKey = dev.wareworks.content.fluid.FluidKey.of(water);
+        Map<dev.wareworks.content.fluid.FluidKey, Long> fluid = FluidCensus.of();
+        AtomicInteger mostInFlight = new AtomicInteger();
+        helper.onEachTick(() -> {
+            FluidCensus.assertEquals(helper, fluid, "the water is in the bay, a bucket or the machine");
+            assertApart(helper, LINE.docks());
+            int inFlight = (int) stationCount(helper, station, WATER_BUCKET);
+            for (BlockPos dock : LINE.docks())
+                inFlight += crane(helper, dock).heldItems().count(WATER_BUCKET);
+            mostInFlight.accumulateAndGet(inFlight, Math::max);
+        });
+        if (!severalCranes()) {
+            assertLegacy(helper, LINE);
+            return;
+        }
+        helper.startSequence()
+                .thenWaitUntil(() -> assertReady(helper, LINE))
+                .thenExecute(() -> {
+                    dev.wareworks.content.storage.FluidBayBlockEntity bay = WareworksBlockEntityTypes.FLUID_BAY
+                            .getNullable(helper.getLevel(), helper.absolutePos(bayPos));
+                    helper.assertTrue(bay != null, "the bay");
+                    helper.assertValueEqual(bay.fill(new net.neoforged.neoforge.fluids.FluidStack(water, 6000), false),
+                            6000, "the bay took the water");
+                    FluidCensus.change(fluid, waterKey, 6000);
+                    WarehouseProductionBlockEntity production = productionAt(helper, station);
+                    helper.assertTrue(production.setPatternEntry(0, 0, DIRT, 1), "dirt");
+                    helper.assertTrue(production.setPatternEntry(0, ProductionPatterns.RESULT_ENTRY,
+                            ItemKey.of(Items.MUD), 1), "makes mud");
+                    helper.assertValueEqual(production.editFluidCell(0, 0, "minecraft:water", 250),
+                            WarehouseProductionBlockEntity.EditOutcome.CHANGED, "from 250 mB of water");
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(controller(helper, LINE).availableFluid(waterKey), 6000L,
+                        "indexed"))
+                .thenExecute(() -> request(helper, LINE, output, ItemKey.of(Items.MUD), 12))
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(stationCount(helper, station, WATER_BUCKET), 2L, "two buckets arrived");
+                    helper.assertTrue(jobs(helper, LINE).isEmpty(), "and both cranes are idle");
+                })
+                .thenIdle(200)
+                .thenExecute(() -> {
+                    helper.assertValueEqual(stationCount(helper, station, WATER_BUCKET), 2L,
+                            "the third bucket waits, whichever crane is free");
+                    // The player's machine empties the two buckets and sends the empties back through the input.
+                    IItemHandler handler = helper.getLevel().getCapability(Capabilities.ItemHandler.BLOCK,
+                            helper.absolutePos(station), null);
+                    int taken = 0;
+                    for (int slot = 0; slot < handler.getSlots(); slot++) {
+                        if (WATER_BUCKET.matches(handler.getStackInSlot(slot)))
+                            taken += handler.extractItem(slot, 1, false).getCount();
+                    }
+                    helper.assertValueEqual(taken, 2, "two buckets were taken");
+                    FluidCensus.change(fluid, waterKey, -1000L * taken);
+                    ItemHandlerHelper.insertItem(helper.getLevel().getCapability(Capabilities.ItemHandler.BLOCK,
+                            helper.absolutePos(input), null), new ItemStack(Items.BUCKET, taken), false);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(stationCount(helper, station, WATER_BUCKET), 1L,
+                        "the third bucket comes once there is room"))
+                .thenExecute(() -> {
+                    helper.assertTrue(mostInFlight.get() <= 2, "never more than two over both cranes: "
+                            + mostInFlight.get());
+                    helper.assertValueEqual(mostInFlight.get(), 2, "and two really were");
+                })
                 .thenSucceed();
     }
 

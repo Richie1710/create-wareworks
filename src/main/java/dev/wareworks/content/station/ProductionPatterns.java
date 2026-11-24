@@ -13,12 +13,14 @@ import org.jetbrains.annotations.Nullable;
 
 import dev.wareworks.Wareworks;
 import dev.wareworks.content.item.ItemKey;
+import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.ProductionEntry;
 import dev.wareworks.core.production.ProductionPattern;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.resources.ResourceLocation;
 
 /**
  * The editable pattern slots of one warehouse production station ({@code docs/warehouse-system.md} §3.5, ADR-024).
@@ -47,6 +49,11 @@ import net.minecraft.nbt.Tag;
  * {@link ProductionPattern#choices()}. The result entry is never a filter cell, and an entry saved without the flag is an
  * exact cell — also a configured filter in an old save, which therefore loads exactly as it did.
  * <p>
+ * <b>Fluid cells (issue #55, ADR-089).</b> Beside the grid a slot holds up to {@value #FLUID_CELLS} {@link FluidCell}s, a
+ * fluid and the millibuckets one run takes. They are no entries: they have their own list in the save
+ * ({@code FluidCells}, written only for a slot that has one, so every save without fluid cells is byte for byte what it
+ * was), their own setter ({@link #setFluid}) and never a filter flag. The same fluid may not sit in both cells.
+ * <p>
  * <b>Bounded loading.</b> Save data is untrusted (block entity data on items, {@code /data merge}, schematics), so a
  * load reads at most {@value #MAX_SLOTS} slots with at most {@value #ENTRIES_PER_PATTERN} entries each and clamps every
  * count; reading never throws, and an entry whose item cannot be decoded is dropped like any other unreadable item.
@@ -63,6 +70,14 @@ public final class ProductionPatterns {
     /** The entry index of the result; {@code 0..}{@value #GRID_CELLS}{@code -1} are the grid cells. */
     public static final int RESULT_ENTRY = GRID_CELLS;
 
+    /** Fluid cells of one pattern slot (issue #55). */
+    public static final int FLUID_CELLS = FluidCell.MAX_PER_PATTERN;
+    /**
+     * The entry index of the first fluid cell in a menu or payload: the cells of a pattern are {@code 0..9}, the fluid
+     * cells {@code FLUID_ENTRY_BASE + 0..1}. A fluid cell is no {@link #keyAt} entry; the index only names it on the wire.
+     */
+    public static final int FLUID_ENTRY_BASE = ENTRIES_PER_PATTERN;
+
     /** The NBT key the block entity stores {@link #save} under. */
     public static final String PATTERNS_TAG = "Patterns";
 
@@ -73,6 +88,11 @@ public final class ProductionPatterns {
     private static final String COUNT = "Count";
     /** Present ({@code 1b}) only on a filter cell (ADR-082); a missing flag is an exact cell. */
     private static final String FILTER = "Filter";
+    /** The optional per-slot list of fluid cells (issue #55); absent means none, which is every save before ADR-089. */
+    private static final String FLUID_CELLS_TAG = "FluidCells";
+    private static final String CELL = "Cell";
+    private static final String FLUID = "Fluid";
+    private static final String MILLIBUCKETS = "Mb";
 
     /** One pattern slot: {@value #GRID_CELLS} grid cells and one result, each optional. */
     private static final class Draft {
@@ -80,6 +100,8 @@ public final class ProductionPatterns {
         private final int[] counts = new int[ENTRIES_PER_PATTERN];
         /** Whether a grid cell is a filter cell (ADR-082); never true for the result. */
         private final boolean[] filters = new boolean[ENTRIES_PER_PATTERN];
+        /** The fluid cells (issue #55); a cell is {@code null} while unset. */
+        private final FluidCell[] fluids = new FluidCell[FLUID_CELLS];
 
         private Draft() {
             Arrays.fill(counts, ProductionEntry.MIN_COUNT);
@@ -90,13 +112,22 @@ public final class ProductionPatterns {
                 if (key != null)
                     return false;
             }
-            return true;
+            return !hasFluids();
+        }
+
+        private boolean hasFluids() {
+            for (FluidCell fluid : fluids) {
+                if (fluid != null)
+                    return true;
+            }
+            return false;
         }
 
         private void clear() {
             Arrays.fill(keys, null);
             Arrays.fill(counts, ProductionEntry.MIN_COUNT);
             Arrays.fill(filters, false);
+            Arrays.fill(fluids, null);
         }
     }
 
@@ -161,6 +192,71 @@ public final class ProductionPatterns {
     /** The count of one entry (at least 1, also for an unset entry). */
     public int countAt(int pattern, int entry) {
         return inRange(pattern, entry) ? slots.get(pattern).counts[entry] : ProductionEntry.MIN_COUNT;
+    }
+
+    /** The fluid cell {@code cell} (0 or 1) of pattern slot {@code pattern}, or empty when it is not set (issue #55). */
+    public Optional<FluidCell> fluidAt(int pattern, int cell) {
+        if (pattern < 0 || pattern >= slots.size() || cell < 0 || cell >= FLUID_CELLS)
+            return Optional.empty();
+        return Optional.ofNullable(slots.get(pattern).fluids[cell]);
+    }
+
+    /** The set fluid cells of pattern slot {@code pattern} in cell order (issue #55); empty for a slot without any. */
+    public List<FluidCell> fluidCells(int pattern) {
+        if (pattern < 0 || pattern >= slots.size())
+            return List.of();
+        List<FluidCell> set = new ArrayList<>(FLUID_CELLS);
+        for (FluidCell fluid : slots.get(pattern).fluids) {
+            if (fluid != null)
+                set.add(fluid);
+        }
+        return List.copyOf(set);
+    }
+
+    /**
+     * Sets or clears one fluid cell (issue #55). The amount is clamped to {@code 1..}{@value FluidCell#MAX_MB}. Nothing
+     * changes for an out-of-range index, a blank or malformed fluid id, or a fluid the other cell of the slot already
+     * names (a Basin recipe never asks for the same fluid twice). The set cells stay at the front: clearing cell 0 moves
+     * cell 1 into it, and setting cell 1 while cell 0 is empty fills cell 0.
+     *
+     * @param fluid the fluid's registry id, or {@code null} to clear the cell
+     * @return whether the cell changed
+     */
+    public boolean setFluid(int pattern, int cell, @Nullable String fluid, int millibuckets) {
+        if (pattern < 0 || pattern >= slots.size() || cell < 0 || cell >= FLUID_CELLS)
+            return false;
+        Draft draft = slots.get(pattern);
+        if (fluid == null) {
+            if (draft.fluids[cell] == null)
+                return false;
+            draft.fluids[cell] = null;
+            compactFluids(draft);
+            return true;
+        }
+        // Bounded like every payload that carries it: a longer id could never be synced to a client (an untrusted save
+        // or a /data merge must not make the screen state unwritable).
+        if (fluid.isBlank() || fluid.length() > FluidCell.MAX_ID_LENGTH || ResourceLocation.tryParse(fluid) == null)
+            return false;
+        FluidCell other = draft.fluids[1 - cell];
+        if (other != null && other.fluid().equals(fluid))
+            return false;
+        FluidCell next = FluidCell.sanitized(fluid, millibuckets);
+        if (next.equals(draft.fluids[cell]))
+            return false;
+        draft.fluids[cell] = next;
+        compactFluids(draft);
+        return true;
+    }
+
+    /**
+     * Keeps the set fluid cells at the front: a lone cell is always cell 0. The screen draws a cell where its position in
+     * the list is, so a gap would put an edit on a cell other than the one a player clicked.
+     */
+    private static void compactFluids(Draft draft) {
+        if (draft.fluids[0] == null && draft.fluids[1] != null) {
+            draft.fluids[0] = draft.fluids[1];
+            draft.fluids[1] = null;
+        }
     }
 
     /** How many grid cells of {@code pattern} are filled. */
@@ -275,11 +371,12 @@ public final class ProductionPatterns {
                     choices.add(draft.keys[cell]);
             }
         }
-        if (cells.isEmpty())
+        List<FluidCell> fluids = fluidCells(pattern);
+        if (cells.isEmpty() && fluids.isEmpty())
             return Optional.empty();
         try {
             return Optional.of(ProductionPattern.fromGrid(cells,
-                    new ProductionEntry<>(draft.keys[RESULT_ENTRY], draft.counts[RESULT_ENTRY]), choices));
+                    new ProductionEntry<>(draft.keys[RESULT_ENTRY], draft.counts[RESULT_ENTRY]), choices, fluids));
         } catch (IllegalArgumentException e) {
             // setEntry refuses everything that could get here; a crafted save could still contain it.
             return Optional.empty();
@@ -302,9 +399,10 @@ public final class ProductionPatterns {
     // --- persistence ---------------------------------------------------------------------------------------------
 
     /**
-     * NBT form: {@code Patterns: [{Slot: int, Entries: [{Entry: int, Item: <ItemKey>, Count: int, Filter: 1b}]}]}, the
-     * {@code Filter} flag only on a filter cell (ADR-082). Empty slots and unset entries are left out, so an untouched
-     * station saves almost nothing. Never throws.
+     * NBT form: {@code Patterns: [{Slot: int, Entries: [{Entry: int, Item: <ItemKey>, Count: int, Filter: 1b}],
+     * FluidCells: [{Cell: int, Fluid: string, Mb: int}]}]}, the {@code Filter} flag only on a filter cell (ADR-082) and
+     * {@code FluidCells} only on a slot with a fluid cell (issue #55). Empty slots and unset entries are left out, so an
+     * untouched station saves almost nothing. Never throws.
      */
     public ListTag save(HolderLookup.Provider registries) {
         ListTag list = new ListTag();
@@ -332,11 +430,25 @@ public final class ProductionPatterns {
                     Wareworks.LOGGER.warn("Could not save production pattern entry {} of slot {}", entry, pattern, e);
                 }
             }
-            if (entries.isEmpty())
+            ListTag fluidList = new ListTag();
+            for (int cell = 0; cell < FLUID_CELLS; cell++) {
+                FluidCell fluid = draft.fluids[cell];
+                if (fluid == null)
+                    continue;
+                CompoundTag fluidTag = new CompoundTag();
+                fluidTag.putInt(CELL, cell);
+                fluidTag.putString(FLUID, fluid.fluid());
+                fluidTag.putInt(MILLIBUCKETS, fluid.millibuckets());
+                fluidList.add(fluidTag);
+            }
+            if (entries.isEmpty() && fluidList.isEmpty())
                 continue;
             CompoundTag slotTag = new CompoundTag();
             slotTag.putInt(SLOT, pattern);
             slotTag.put(ENTRIES, entries);
+            // Only a slot with a fluid cell carries the list, so a save without any is what it always was.
+            if (!fluidList.isEmpty())
+                slotTag.put(FLUID_CELLS_TAG, fluidList);
             list.add(slotTag);
         }
         return list;
@@ -376,6 +488,12 @@ public final class ProductionPatterns {
                 } catch (RuntimeException ex) {
                     Wareworks.LOGGER.warn("Skipping unreadable production pattern entry {}", entryTag, ex);
                 }
+            }
+            // Absent in every save before ADR-089; read bounded like the entries and never throwing.
+            ListTag fluidList = slotTag.getList(FLUID_CELLS_TAG, Tag.TAG_COMPOUND);
+            for (int f = 0; f < fluidList.size() && f < FLUID_CELLS; f++) {
+                CompoundTag fluidTag = fluidList.getCompound(f);
+                setFluid(pattern, fluidTag.getInt(CELL), fluidTag.getString(FLUID), fluidTag.getInt(MILLIBUCKETS));
             }
         }
     }

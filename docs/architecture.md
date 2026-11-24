@@ -9209,6 +9209,100 @@ answer is not forced: a live refusal ends the item `HOME_FULL` (a refusal can be
 `JobPlannerTest#storeFollowsTheHomeOfTheItem`, `RelocationRuleTest`, `OptimizerOrdersTest`, `OptimizerTextWidthTest`;
 GameTests `OptimizerMergeGameTests`; the visual scenario `optimizer` (merge in English and German); the robustness run.
 
+### ADR-089 — A production pattern may name fluid ingredients: the crane brings them as filled buckets, the player's own machine without an arm turns them into fluid, the Recipe Selector accepts the Basin's fluid recipes (amends ADR-073 D1, ADR-076 D5, ADR-085 D14) ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55))
+
+*Context:* Create's Basin and Mixer have recipes with a fluid ingredient (water for mud and dough, lava for other
+things). A production pattern could name items only, so such a recipe had to be fed by hand or by pipes from outside the
+warehouse. The reporter asked for fluid cells; a spike on Create 6.0.10 (18 GameTests, `docs/api`) settled what the
+physics allow before any code was written.
+
+*Facts the design stands on (Create 6.0.10, verified):* a Mechanical Arm has **no interaction point** for an Item Drain
+or a Fluid Tank; an arm that can also reach a Basin puts a filled bucket into the Basin's **item** inventory; an
+extracting brass funnel with a filter on a production station's (extract-only) item handler takes exactly the filtered
+item and drops it as an item entity, which an Item Drain (or a Basin) below it catches; the drain holds 1500 mB, so a
+third 1000 mB bucket stalls it until the machine behind it consumes fluid (nothing times out); a depot is no way out
+for the empty bucket (it holds one and jams); a pipe placed beside a single neighbour opens the side opposite to it
+(`FluidPipeBlock#updateBlockState`) and keeps that open end when the next pipe arrives, and Create's pump divides
+every transfer between the Basin and such an open end, so half of the water is poured away (the visual scenario lost
+32 of every 64 mB until each pipe had exactly its two connections); a Create Fluid Tank refuses a survival player's
+bucket.
+
+*Decision:*
+
+* **D1 The fluid cell.** A pattern holds up to **2 fluid cells** next to its 3 × 3 items and the result; a cell is a
+  fluid id and **1..1000 mB per run** (`core.production.FluidCell`, the Basin's tank segment), two different fluids at
+  most. A pattern needs at least one item or one fluid. The cell is a fluid, not a bucket item: the old "bucket as an
+  item cell" is untouched and still means an item. It is saved in a **list of its own** per slot (`FluidCells`,
+  written only while the slot has one), never inside `Entries`, so a pattern without a fluid is byte-identical to
+  before. A click with a filled bucket sets the fluid (and the bucket's content as the amount); the wheel steps 50 mB,
+  Shift 250, Ctrl 1000; right-click clears. Fluids carry no data components (a potion is its base fluid).
+* **D2 Fluid travels as filled containers, one trip each (amends ADR-073 D1).** The warehouse delivers **whole filled
+  buckets** of the fluid's own bucket item (the container the game really fills, measured by `FillRecipes`, so a
+  modded fluid's container works); containers per cell = `ceil(runs × mB / the container's real mB)`. `JobType.FILL` may
+  now end at a production station: `SupplyNeed` carries a fluid flag, `JobPlanner.planFluidSupply` serves it with the
+  existing fill trip (an empty bucket from stock to a bay of that fluid, then to the station), and the fill ledger
+  gets synthetic FILL entries for open fluid lines (rebuilt from `supplyNeeds`, never saved), so a terminal fill and
+  an order never owe the same bucket twice. The station's item capability stays extract-only and the crane drops the
+  bucket into the buffer through the existing path. Nothing teleports; the controller only plans.
+* **D3 The plan.** Fluid lines are planned and reserved **before** item lines. A shortfall is never expanded into a
+  child step (no pattern makes fluid) and ends the plan with a named reason: `FLUID_MISSING`, `NO_EMPTY_CONTAINER`,
+  `BUFFER_TOO_SMALL`. The containers count against `productionBufferSlots` (item stacks plus at most 2 containers must
+  fit), and the plan **clamps the runs** instead of refusing when the buffer allows fewer. At most **2 filled containers
+  are in flight per station** (drain 1500 mB + Basin 1000 mB), counted over the buffer and the trips already reserved;
+  a fluid line is released only as the Recipe Selector's gate admits its order. An amount that does not divide 1000 mB
+  leaves a rest in the player's machine: the tooltip says so in gold (it is still allowed), and the rest is neither
+  credited nor tracked.
+* **D4 Leftover containers.** A carried container whose order is cancelled or whose station breaks is rerouted to a bay
+  of its fluid and drained there (tested). A container already **in the buffer** stays for the player's machine and the
+  return input: nothing in the mod lets a crane take items out of a station's buffer (the drop path is insert-only),
+  and the 2-per-station cap counts it, so a stuck pair blocks further fluid for that station. The empty bucket leaves
+  the player's machine through the return input as an ordinary item, or through any real sink (a funnel over a chest, a
+  belt). The stall is not silent: while no order is open, the station's goggles name the filled containers left in the
+  buffer (the planner's wait reason stays the shared `PRODUCTION_FULL`; a reason code of its own would have rippled
+  through every reason switch for a case the goggles already cover). The cap counts the in-flight trips of **every**
+  open fluid line of the station, also one a selector gate keeps out of the supplies, and a held count and the line
+  list are memoised per planner input. Two further limits (review): a fluid line counts as no promise of its filled
+  container (a bay fills it; the racks owe nothing), and an order whose fluid line cannot be read on load (the
+  container's mod was removed) is dropped whole, because keeping the line would hand the machine its items without its
+  fluid; a trip already carrying for it is rerouted like any other orphan.
+* **D5 The player's layout, without an arm.** The documented and tested build is: an **extracting brass funnel with
+  the filled bucket as its filter** at the station, an **Item Drain** under the funnel, a **pump and pipes** from the
+  drain into the **Basin** (every pipe with exactly two connections: a pipe with an open end pours the water away), a Mechanical Mixer two blocks above it, a
+  second filtered funnel (the dirt) above the Basin, and the Basin's spout into a Warehouse Input one level below (Create turns a
+  Basin's spout away from a side whose block has a collision shape, so that side stays free and a Recipe Selector goes
+  on another face; visual scenario `fluidpattern`, Ponder scene "Fluid in a Production Pattern"). **Warnings that are part of the
+  feature:** a Mechanical Arm that can reach the Basin puts buckets into its item slots and cannot be prevented from
+  there; a depot jams as the way out of the empty bucket; the Item Drain pushes the empty bucket out of a side that the funnel
+  which dropped it does not choose, so a funnel over a chest stands on every free side; the drain stalls on a third bucket until the Mixer has
+  consumed fluid.
+* **D6 JEI's "+" (amends ADR-076 D5).** A recipe's fluid input slot is laid as a fluid cell (equal fluids merge, the
+  first alternative of a tag is laid); it stays greyed out, with the reason, for a fluid in an output slot, more than 2
+  fluids and more than 1000 mB. `PatternLay`'s refusals `TOO_MANY_FLUIDS`, `FLUID_TOO_MUCH`, `FLUID_RESULT` are appended.
+* **D7 The Recipe Selector (amends ADR-085 D14).** A **local** selector at a Basin accepts a fluid recipe when its fluid
+  ingredients and the pattern's fluid cells pair one-to-one with equal amounts (`core.production.FluidNeeds`). A
+  pattern without the cell for a recipe's fluid is the new verdict `FLUID_MISMATCH` (before: `FLUID`); a pattern with
+  fluid cells at an **Ender** selector's station is `FLUID_FAR` (packages carry items only). `FLUID` stays for fluid
+  results and for more than two fluids. Verdicts travel by ordinal: both new ones are **appended**. Heat is **not**
+  checked (it comes from a Blaze Burner under the Basin); the Basin's goggles say so in one line.
+* **D8 Where it is inert or refused.** A Crafter Feeder refuses a pattern with fluid cells (`CrafterPatternCheck`
+  `FLUID_CELL`, appended; a vanilla Crafter cannot take a fluid). Package mode makes nothing, so the cells stay
+  editable and show their red reason. Automatic restock skips a pattern with fluid cells (it builds orders from the
+  pattern alone and would forget the fluid); the terminal and the ports plan them.
+* **D9 Not in this build:** fluid **results**, a station tank (exact mB, no bucket), fluid tags as cells, heat checks,
+  the Ender tier, an offer to make empty buckets first.
+
+*Consequences:* network version 31 (`ProductionPatternPayload` carries an optional fluid id, entries 10 and 11 are the
+two fluid cells; the lay payload ends with the fluid cells; `ProductionScreenState` a trailing section). The
+controller's saved order line gets an optional `Fluid` tag, written only for a fluid line; a line whose container item
+cannot be read (its mod was removed) drops the **whole order** on load rather than keep the items without the fluid,
+and an unknown fluid id with a readable container is kept as it is. **A world saved with fluid cells and then opened
+with an older Wareworks** loses them: the old mod ignores `FluidCells`, so a pattern that has only fluid cells is
+empty on its next save, and an open order's fluid line is read as an item line of the bucket. Tests: `FluidCellTest`,
+`ProductionPlannerFluidTest`, `JobPlannerFluidSupplyTest`, `FluidNeedsTest`, `PatternLayTest`,
+`SelectorVerdictOrdinalTest`, `ProductionFluidLayoutTest`, `ProductionFluidTextWidthTest`; GameTests
+`FluidPatternGameTests`, `FluidSupplyGameTests`, `MultiCraneGameTests`; the visual scenarios `fluidpattern` and
+`patternjei`; the robustness phase "fluid supply in flight"; the Ponder scene `warehouse/fluid_pattern`.
+
 ## Persistence & sync
 
 * All authoritative state lives in block entities (controller: aisle layout, index cache, job queue, reservations; crane: state, axis positions, current job, head inventory) and is saved via `saveAdditional`/`loadAdditional` with registry-aware `HolderLookup.Provider` (1.21.1 signature).

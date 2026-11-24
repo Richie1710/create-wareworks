@@ -262,7 +262,8 @@ public final class ProductionPlanner {
                 continue;
             long best = 0L;
             for (StationPattern<K, L> maker : patterns)
-                best = Math.max(best, ProduciblePlanner.producibleAmount(maker.pattern(), snapshot, input.choices()));
+                best = Math.max(best, ProduciblePlanner.producibleAmount(maker.pattern(), snapshot, input.choices(),
+                        input.fluids()));
             producible.put(candidate, best);
             makers.add(candidate);
         }
@@ -281,7 +282,7 @@ public final class ProductionPlanner {
                 continue;
             candidates.add(candidate);
             producible.put(candidate,
-                    ProduciblePlanner.producibleAmount(candidate.pattern(), snapshot, input.choices()));
+                    ProduciblePlanner.producibleAmount(candidate.pattern(), snapshot, input.choices(), input.fluids()));
         }
         if (candidates.size() > 1) {
             // A stable sort, so the head is "the best, ties by aisle order" and the tail keeps aisle order too.
@@ -366,7 +367,8 @@ public final class ProductionPlanner {
      * leaves no trace of it: the steps created so far, the ingredient items committed, what the plan means to make of
      * every item, and the budget's ledger.
      */
-    private record Mark<K>(int created, long ingredientItems, Map<K, Long> plannedOutput, Map<K, Long> spent) {
+    private record Mark<K>(int created, long ingredientItems, Map<K, Long> plannedOutput, Map<K, Long> spent,
+                           Map<String, Long> fluidSpent) {
     }
 
     /**
@@ -386,6 +388,11 @@ public final class ProductionPlanner {
          * under the same maximum as the first one, because both of them are the plan asking to store that item.
          */
         private final Map<K, Long> plannedOutput = new LinkedHashMap<>();
+        /**
+         * Millibuckets of each fluid (registry id) the plan has already claimed in whole containers (issue #55): the
+         * fluid's counterpart of the item budget's ledger, so two steps of one plan never promise the same water twice.
+         */
+        private final Map<String, Long> fluidSpent = new LinkedHashMap<>();
         private long ingredientItems;
         /**
          * Attempts at an alternative pattern this walk may still spend
@@ -485,9 +492,16 @@ public final class ProductionPlanner {
             // not checked here — a player may order past their own maximum, and the request panel says so.
             if (depth > 0 && pattern.runsWithin(roomLeftFor(key)) < runs)
                 return refuse(PlanRefusal.NO_ROOM, key);
+            // The fluid lines are decided before any item line (issue #55, ADR-089): the crane must never carry iron to
+            // a station that cannot get its water. They are filled containers, so the whole of them is known here.
+            List<NodeLine<K>> fluidLines = payFluids(pattern, key, runs);
+            if (fluidLines == null)
+                return null;
             if (created.size() >= stepLimit)
                 return refuse(input.slotsBind() ? PlanRefusal.ORDERS_BUSY : PlanRefusal.TOO_MANY_STEPS, key);
             long cost = (long) pattern.ingredientItems() * runs;
+            for (NodeLine<K> line : fluidLines)
+                cost += line.amount();
             if (ingredientItems + cost > input.limits().maxIngredientItems())
                 return refuse(PlanRefusal.TOO_MANY_INGREDIENT_ITEMS, key);
             Draft<K, L> node = new Draft<>(station, runs, needed, depth, parent);
@@ -526,6 +540,8 @@ public final class ProductionPlanner {
                     offsets[index] = lines.size();
                     lines.addAll(segments.get(index));
                 }
+                // The fluid lines come after the item lines, so every offset above is still the line's index.
+                lines.addAll(fluidLines);
                 node.lines = List.copyOf(lines);
                 for (Draft<K, L> child : node.children)
                     child.parentLine = offsets[child.feedsIngredient] + child.feedsPosition;
@@ -533,6 +549,80 @@ public final class ProductionPlanner {
                 path.remove(path.size() - 1);
             }
             return node;
+        }
+
+        /**
+         * Pays the fluid cells of {@code pattern} for {@code runs} runs (issue #55, ADR-089): one {@link NodeLine#fluid}
+         * per cell, counted in whole filled containers ({@link FluidCell#containersFor}) of the real size the supply
+         * picked. Nothing is expanded into a child step, because no pattern makes fluid: a shortfall ends the plan with a
+         * named reason. Empty for a pattern without fluid cells, which costs nothing.
+         * <ol>
+         * <li>no delivery for a fluid (unknown, or no container): {@link PlanRefusal#FLUID_MISSING};</li>
+         * <li>the item stacks of the runs plus the containers that may stand in the buffer at once
+         * ({@link FluidSupply#MAX_IN_FLIGHT}) must fit the buffer's slots: {@link PlanRefusal#BUFFER_TOO_SMALL}. More
+         * runs need more stacks, so the clamp of the ordered item's runs finds the largest order that fits;</li>
+         * <li>the bays hold the containers' millibuckets, less what this plan already claimed:
+         * {@link PlanRefusal#FLUID_MISSING};</li>
+         * <li>the empty containers, paid from the item budget like any item: {@link PlanRefusal#NO_EMPTY_CONTAINER}.</li>
+         * </ol>
+         *
+         * @return the fluid lines, or {@code null} with {@link #refusal} set
+         */
+        private List<NodeLine<K>> payFluids(ProductionPattern<K> pattern, K made, int runs) {
+            if (!pattern.hasFluids())
+                return List.of();
+            FluidSupply<K> supply = input.fluids();
+            List<FluidSupply.Delivery<K>> deliveries = new ArrayList<>(pattern.fluids().size());
+            long containersAtOnce = 0L;
+            for (FluidCell cell : pattern.fluids()) {
+                FluidSupply.Delivery<K> delivery = supply.delivery(cell.fluid()).orElse(null);
+                if (delivery == null) {
+                    refuse(PlanRefusal.FLUID_MISSING, made);
+                    return null;
+                }
+                deliveries.add(delivery);
+                containersAtOnce += cell.containersFor(runs, delivery.containerMb());
+            }
+            if (!fitsBuffer(pattern, supply, runs, containersAtOnce)) {
+                refuse(PlanRefusal.BUFFER_TOO_SMALL, made);
+                return null;
+            }
+            List<NodeLine<K>> lines = new ArrayList<>(deliveries.size());
+            for (int index = 0; index < deliveries.size(); index++) {
+                FluidCell cell = pattern.fluids().get(index);
+                FluidSupply.Delivery<K> delivery = deliveries.get(index);
+                long containers = cell.containersFor(runs, delivery.containerMb());
+                long claimed = fluidSpent.getOrDefault(cell.fluid(), 0L) + containers * delivery.containerMb();
+                if (claimed > delivery.fluidMb()) {
+                    refuse(PlanRefusal.FLUID_MISSING, delivery.container());
+                    return null;
+                }
+                if (budget.take(delivery.empty(), containers) < containers) {
+                    refuse(PlanRefusal.NO_EMPTY_CONTAINER, delivery.container());
+                    return null;
+                }
+                fluidSpent.put(cell.fluid(), claimed);
+                lines.add(NodeLine.fluid(delivery.container(), containers, cell.fluid()));
+            }
+            return lines;
+        }
+
+        /**
+         * Whether the item stacks of {@code runs} runs and the containers of the fluid cells that may be in the buffer at
+         * once fit into its slots. A choice ingredient counts 64 to a stack, which is an estimate: the keys that pay it
+         * are only chosen after this.
+         */
+        private boolean fitsBuffer(ProductionPattern<K> pattern, FluidSupply<K> supply, int runs,
+                long containersAtOnce) {
+            int slots = supply.bufferSlots();
+            if (slots == Integer.MAX_VALUE)
+                return true;
+            long stacks = Math.min(containersAtOnce, FluidSupply.MAX_IN_FLIGHT);
+            for (ProductionEntry<K> ingredient : pattern.ingredients()) {
+                int stack = pattern.isChoice(ingredient.key()) ? 64 : Math.max(1, supply.stackSize(ingredient.key()));
+                stacks += ((long) ingredient.count() * runs + stack - 1) / stack;
+            }
+            return stacks <= slots;
         }
 
         /** The order the ingredients of {@code station}'s pattern are paid in ({@link ChoiceAllocator#payOrder}). */
@@ -635,7 +725,7 @@ public final class ProductionPlanner {
         /** Everything a pattern attempt may change, so that giving up on it leaves no trace. */
         private Mark<K> mark() {
             return new Mark<>(created.size(), ingredientItems, new LinkedHashMap<>(plannedOutput),
-                    budget.spentByKey());
+                    budget.spentByKey(), new LinkedHashMap<>(fluidSpent));
         }
 
         /** Puts this walk back to what {@link #mark()} recorded, after a pattern attempt led nowhere. */
@@ -646,6 +736,8 @@ public final class ProductionPlanner {
             plannedOutput.clear();
             plannedOutput.putAll(mark.plannedOutput());
             budget.resetTo(mark.spent());
+            fluidSpent.clear();
+            fluidSpent.putAll(mark.fluidSpent());
         }
 
         /** The drafts as nodes in dependency order: children before parents, the root last. */

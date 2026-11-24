@@ -8089,6 +8089,58 @@ Proof: GameTests `PackageModeGameTests`, `PackageModeLockoutGameTests`, `Package
 that world's `serverconfig`, real clicks, a census that counts every box as itself); the robustness run's package-mode
 phase; the Ponder scene `warehouse/package_mode`.
 
+### 3.13 Fluid cells in production patterns ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55), ADR-089)
+
+A production pattern may name up to **two fluid ingredients** next to its items (`core.production.FluidCell`: a fluid
+id and 1..1000 mB per run; two different fluids at most). The warehouse never moves fluid by itself: it moves **filled
+buckets**, exactly as the terminal's fluid orders do (§3.9), and the player's own machine turns a bucket into fluid.
+
+* **Planning.** `ProductionPlanner.payFluids` plans the fluid lines **before** the item lines, in whole containers of the
+  fluid's own bucket (`ControllerFluidSupply`, sized by `FillRecipes`; `ceil(runs × mB / container mB)`). The fluid comes
+  from the fluid bays' stock minus what the fill ledger already owes, the empty buckets from the item budget. A shortfall
+  is never expanded into a child step; it ends the plan with `FLUID_MISSING`, `NO_EMPTY_CONTAINER` or
+  `BUFFER_TOO_SMALL`, each naming the filled container or the item being made. The item stacks plus at most two
+  containers must fit `productionBufferSlots`; the binary search over the runs clamps an order to what fits.
+* **Supply.** A fluid line is a `SupplyLine` whose key is the filled bucket and whose `fluid` field is the fluid id. The
+  controller's `supplyNeeds()` lists fluid lines first and only for orders the Recipe Selector's gate admits;
+  `JobPlanner.planFluidSupply` serves one with an ordinary `FILL` job that now may end at a production station
+  (`JobType.FILL`). `fillLedger()` adds a synthetic FILL entry per open fluid line (rebuilt on every call, never saved),
+  so a terminal fill and a production order do not owe the same bucket twice. **At most two filled containers per
+  station** are in flight, counting the buffer (`fluidContainersHeldAt`) and the trips already reserved
+  (`FillSupply.heldAtStation`, `MAX_AT_STATION`). The crane drops the bucket into the station's buffer through the
+  existing insert path; the station's own item capability stays extract-only.
+* **Conservation.** A filled bucket is a carrier of its fluid: the item census counts the bucket as an item and the
+  fluid census counts the fluid inside it (§8, `FluidContainers`). A container the crane carries when its
+  order is cancelled or its station breaks is rerouted to a bay of its fluid and drained there. A container already in
+  the buffer stays: nothing lets a crane take items out of a production buffer, so it waits for the player's machine and
+  counts against the cap of two. Restock skips patterns with fluid cells.
+* **Persistence.** The station saves a fluid cell in a list of its own per slot (`FluidCells`, only while the slot has
+  one) and the controller a `Fluid` tag on a supply line (only for a fluid line); a pattern without a fluid is saved
+  byte for byte as before. Untrusted data never throws: unknown ids load as cells that can never be supplied, amounts are
+  clamped, and an order line whose container item cannot be read drops the whole order.
+* **Where it is refused.** `CrafterPatternCheck.FLUID_CELL` (a Crafter cannot take a fluid), package mode (inert, with
+  its red reason), the Ender Recipe Selector (`SelectorRecipeCheck.Verdict.FLUID_FAR`); a local selector at a Basin
+  accepts the recipe when `FluidNeeds` pairs the recipe's fluids one-to-one with the pattern's cells and equal amounts
+  (`FLUID_MISMATCH` otherwise). Heat is not checked.
+* **The player's machine** (no Mechanical Arm; verified on Create 6.0.10 by the visual scenario `fluidpattern`): an
+  extracting brass funnel filtered to the filled bucket on the station, an Item Drain under the funnel, a pump and pipes
+  into the Basin (every pipe with exactly two connections: an open pipe end pours away half of every transfer), a Mixer two blocks above
+  the Basin, a second filtered funnel for the other ingredients above the Basin, and the Basin's spout (its `FACING`)
+  into a Warehouse Input one level below; Create picks the spout side itself (`BasinBlockEntity#updateSpoutput`) and
+  only takes a side whose block has no collision shape, so a block placed on the spout side, a Recipe Selector
+  included, turns the spout down and the mud stays in the Basin. **What cannot be prevented, only documented:** a Mechanical Arm that can also
+  reach the Basin puts filled buckets into its item inventory; a depot as the empty bucket's way out jams after the
+  first bucket; the drain pushes the empty bucket out of the side its item last moved towards, which the funnel that
+  dropped it does not decide (north in the spike, east in the scenario), so a sink stands on every free side; the Item Drain (1500 mB) holds a third 1000 mB bucket until the machine has used fluid, and blocks
+  everything behind it; an amount that does not divide 1000 mB leaves a rest in drain and Basin that is neither
+  credited nor tracked. The empty bucket leaves through the return input or any real sink (a funnel over a chest, a
+  belt) and comes back as ordinary stock.
+* **Tests.** `FluidCellTest`, `ProductionPlannerFluidTest`, `JobPlannerFluidSupplyTest`, `FluidNeedsTest`,
+  `PatternLayTest`, `SelectorVerdictOrdinalTest`; GameTests `FluidPatternGameTests`, `FluidSupplyGameTests`, the
+  two-crane test in `MultiCraneGameTests`; the visual scenario `fluidpattern` (a real pattern, a real order, the whole
+  machine, item and fluid census exact on every tick, a rejoin mid order, the Recipe Selector on the Basin); the
+  robustness phase "fluid supply in flight".
+
 ## 4. Discovery and membership (no permanent world searches)
 
 * **`WarehouseRegistry`** (server-side, per `ServerLevel` via catnip `WorldAttached`, in-memory) maps controller position to `AisleBounds`. A controller registers in `onLoad()` (bounds become known after its first tick) and whenever its geometry changes. It unregisters in `invalidate()`/`remove()` (Create's `setRemoved` is final).

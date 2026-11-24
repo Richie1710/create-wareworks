@@ -41,11 +41,16 @@ import net.minecraft.resources.ResourceLocation;
  * @param refusedPatterns   complete patterns the feeder refuses because they are no crafting recipe it can lay
  *                          ({@code CrafterPatternCheck#refused}); always 0 without a feeder
  * @param selector          the station's Recipe Selector (ADR-085), {@link SelectorSummary#NONE} without one
+ * @param fluidPatterns     complete patterns with at least one fluid cell (issue #55, ADR-089); 0 for every station
+ *                          before it, which then writes nothing for it
+ * @param fluidContainersHeld filled containers of those patterns' fluids that stand in the station's buffer (issue
+ *                          #55 review): shown while no order is open, because then nothing takes them any more
  */
 public record ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
                                       long missingIngredients, long awaitedResult, int stoppedProducts,
                                       long unrecovered, boolean oldestWaitingForStep, boolean feeder,
-                                      int refusedPatterns, SelectorSummary selector) {
+                                      int refusedPatterns, SelectorSummary selector, int fluidPatterns,
+                                      int fluidContainersHeld) {
     public static final ProductionGoggleSummary NONE =
             new ProductionGoggleSummary(0, 0, Optional.empty(), 0L, 0L, 0, 0L, false, false, 0);
 
@@ -60,6 +65,8 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
     private static final String FEEDER = "Feeder";
     private static final String REFUSED = "Refused";
     private static final String SELECTOR = "Selector";
+    private static final String FLUID_PATTERNS = "FluidPatterns";
+    private static final String FLUID_HELD = "FluidHeld";
 
     public ProductionGoggleSummary {
         patterns = Math.max(0, patterns);
@@ -77,6 +84,25 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
         refusedPatterns = feeder ? Math.max(0, refusedPatterns) : 0;
         if (selector == null)
             selector = SelectorSummary.NONE;
+        fluidPatterns = Math.max(0, fluidPatterns);
+        fluidContainersHeld = fluidPatterns > 0 ? Math.max(0, fluidContainersHeld) : 0;
+    }
+
+    /** A summary that knows no filled container in the buffer: the shape before the issue #55 review. */
+    public ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
+            long missingIngredients, long awaitedResult, int stoppedProducts, long unrecovered,
+            boolean oldestWaitingForStep, boolean feeder, int refusedPatterns, SelectorSummary selector,
+            int fluidPatterns) {
+        this(patterns, openOrders, oldestState, missingIngredients, awaitedResult, stoppedProducts, unrecovered,
+                oldestWaitingForStep, feeder, refusedPatterns, selector, fluidPatterns, 0);
+    }
+
+    /** A station whose patterns hold no fluid cell: the shape every summary had before issue #55. */
+    public ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
+            long missingIngredients, long awaitedResult, int stoppedProducts, long unrecovered,
+            boolean oldestWaitingForStep, boolean feeder, int refusedPatterns, SelectorSummary selector) {
+        this(patterns, openOrders, oldestState, missingIngredients, awaitedResult, stoppedProducts, unrecovered,
+                oldestWaitingForStep, feeder, refusedPatterns, selector, 0);
     }
 
     /** A station without a Recipe Selector: the shape every summary had before ADR-085. */
@@ -137,6 +163,11 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
             if (refusedPatterns > 0)
                 tag.putInt(REFUSED, refusedPatterns);
         }
+        // A station without a fluid cell pays nothing for it either (issue #55).
+        if (fluidPatterns > 0)
+            tag.putInt(FLUID_PATTERNS, fluidPatterns);
+        if (fluidContainersHeld > 0)
+            tag.putInt(FLUID_HELD, fluidContainersHeld);
         // And a station without a Recipe Selector pays nothing for it (ADR-085).
         if (selector.on()) {
             CompoundTag selectorTag = new CompoundTag();
@@ -153,7 +184,8 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
                 tag.getLong(AWAITED), tag.getInt(STOPPED), tag.getLong(UNRECOVERED),
                 tag.getBoolean(WAITING_FOR_STEP), tag.getBoolean(FEEDER), tag.getInt(REFUSED),
                 tag.contains(SELECTOR, Tag.TAG_COMPOUND) ? SelectorSummary.read(tag.getCompound(SELECTOR))
-                        : SelectorSummary.NONE);
+                        : SelectorSummary.NONE,
+                tag.getInt(FLUID_PATTERNS), tag.getInt(FLUID_HELD));
     }
 
     /**

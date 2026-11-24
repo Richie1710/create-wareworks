@@ -40,15 +40,24 @@ import java.util.Set;
  * largest stock first. An order is always created from the concrete keys that were chosen ({@link NodeLine}), never
  * from a choice, so nothing downstream of a plan ever sees a filter key. The result is always one exact item.
  * <p>
+ * <b>Fluid cells (issue #55, ADR-089).</b> A pattern may also name up to {@value FluidCell#MAX_PER_PATTERN}
+ * {@link FluidCell}s: a fluid and the millibuckets one run takes. They are no ingredient entries (never part of the item
+ * multiset, of {@link #choices()} or of {@link #ingredientItems()}); a pattern needs at least one item ingredient
+ * <i>or</i> one fluid cell. A pattern without fluid cells is exactly what it was before.
+ * <p>
  * Immutable and pure: no Minecraft types, so the whole producible computation is unit tested without a game.
  *
- * @param ingredients what one run consumes, 1..{@value #MAX_INGREDIENTS} entries with distinct keys
+ * @param ingredients what one run consumes, 1..{@value #MAX_INGREDIENTS} entries with distinct keys (none only when the
+ *                    pattern has a fluid cell)
  * @param result      what one run is expected to yield
  * @param choices     the ingredient keys that are choices (filters) rather than exact items; every one of them is an
  *                    ingredient key. Empty for a pattern of exact items, which is every pattern before ADR-082
+ * @param fluids      the fluid cells (issue #55), at most {@value FluidCell#MAX_PER_PATTERN} with distinct fluids; empty
+ *                    for every pattern before ADR-089
  * @param <K>         item key type
  */
-public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, ProductionEntry<K> result, Set<K> choices) {
+public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, ProductionEntry<K> result, Set<K> choices,
+                                   List<FluidCell> fluids) {
     /** Edge length of the authoring grid: a pattern reads like a vanilla crafting recipe. */
     public static final int GRID_WIDTH = 3;
     /** Cells of the authoring grid, {@value #GRID_WIDTH} x {@value #GRID_WIDTH}. */
@@ -62,7 +71,13 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
     public ProductionPattern {
         ingredients = List.copyOf(Objects.requireNonNull(ingredients, "ingredients"));
         Objects.requireNonNull(result, "result");
-        if (ingredients.isEmpty() || ingredients.size() > MAX_INGREDIENTS)
+        fluids = List.copyOf(Objects.requireNonNull(fluids, "fluids"));
+        if (fluids.size() > FluidCell.MAX_PER_PATTERN)
+            throw new IllegalArgumentException("a pattern holds at most " + FluidCell.MAX_PER_PATTERN
+                    + " fluid cells: " + fluids.size());
+        if (fluids.size() == 2 && fluids.get(0).fluid().equals(fluids.get(1).fluid()))
+            throw new IllegalArgumentException("a fluid may appear only once: " + fluids.get(0).fluid());
+        if (ingredients.size() > MAX_INGREDIENTS || (ingredients.isEmpty() && fluids.isEmpty()))
             throw new IllegalArgumentException("a pattern needs 1.." + MAX_INGREDIENTS + " ingredients: "
                     + ingredients.size());
         List<K> seen = new ArrayList<>(ingredients.size());
@@ -79,6 +94,11 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
             if (!seen.contains(choice))
                 throw new IllegalArgumentException("a choice must be one of the ingredients: " + choice);
         }
+    }
+
+    /** A pattern without fluid cells, as every pattern was before ADR-089. */
+    public ProductionPattern(List<ProductionEntry<K>> ingredients, ProductionEntry<K> result, Set<K> choices) {
+        this(ingredients, result, choices, List.of());
     }
 
     /** A pattern of exact ingredients only, as every pattern was before ADR-082. */
@@ -113,9 +133,19 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
      */
     public static <K> ProductionPattern<K> fromGrid(List<ProductionEntry<K>> cells, ProductionEntry<K> result,
             Set<K> choices) {
+        return fromGrid(cells, result, choices, List.of());
+    }
+
+    /**
+     * {@link #fromGrid(List, ProductionEntry, Set)} with fluid cells (issue #55): the grid may then be empty, because a
+     * fluid cell is an ingredient too.
+     */
+    public static <K> ProductionPattern<K> fromGrid(List<ProductionEntry<K>> cells, ProductionEntry<K> result,
+            Set<K> choices, List<FluidCell> fluids) {
         Objects.requireNonNull(cells, "cells");
         Objects.requireNonNull(choices, "choices");
-        if (cells.isEmpty() || cells.size() > GRID_SIZE)
+        Objects.requireNonNull(fluids, "fluids");
+        if ((cells.isEmpty() && fluids.isEmpty()) || cells.size() > GRID_SIZE)
             throw new IllegalArgumentException("a pattern grid holds 1.." + GRID_SIZE + " filled cells: "
                     + cells.size());
         Map<K, ProductionEntry<K>> merged = new LinkedHashMap<>();
@@ -128,7 +158,7 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
             if (merged.containsKey(choice))
                 used.add(choice);
         }
-        return new ProductionPattern<>(List.copyOf(merged.values()), result, used);
+        return new ProductionPattern<>(List.copyOf(merged.values()), result, used, fluids);
     }
 
     /** A pattern of one ingredient, e.g. one log to four planks. */
@@ -189,7 +219,12 @@ public record ProductionPattern<K>(List<ProductionEntry<K>> ingredients, Product
         return List.copyOf(chosen);
     }
 
-    /** Items one run consumes in total, over all ingredients. */
+    /** Whether this pattern names any fluid cell (issue #55). */
+    public boolean hasFluids() {
+        return !fluids.isEmpty();
+    }
+
+    /** Items one run consumes in total, over all item ingredients (fluid cells are no items). */
     public int ingredientItems() {
         long total = 0;
         for (ProductionEntry<K> ingredient : ingredients)

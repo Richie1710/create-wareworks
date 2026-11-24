@@ -99,7 +99,7 @@ public final class PonderVisualScenario implements VisualScenario {
             new Subject("terminal", WareworksBlocks.WAREHOUSE_TERMINAL, 7),
             // Issue #34 adds the Crafter Feeder scene, which the station shows as well: the feeder is its machine.
             // ADR-085 adds both Recipe Selector scenes, which the station shows as well: they set its machine.
-            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 6),
+            new Subject("production", WareworksBlocks.WAREHOUSE_PRODUCTION, 7),
             new Subject("feeder", WareworksBlocks.WAREHOUSE_CRAFTER_FEEDER, 1),
             new Subject("selector", WareworksBlocks.RECIPE_SELECTOR, 1),
             new Subject("ender-selector", WareworksBlocks.ENDER_RECIPE_SELECTOR, 1),

@@ -4171,3 +4171,41 @@ you get tired of waiting, and put it back before judging check 160.
 520. **Does storing follow the home?** After 519, feed more iron into the input: it goes to the bay that holds the most,
     not to the nearest one. A click on a row's number merges that item alone; in German the number's tooltip and the
     Merge button's texts read well and fit the window at GUI scale 4.
+
+## BZ. Fluid in a production pattern ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55))
+
+521. **Does a fluid cell feel right?** Open a Warehouse Production station and look at a pattern's screen: two fluid
+    cells sit beside the result cell. Click one with a filled water bucket: it shows water and "1000 mB" and the bucket
+    stays in your hand. Scroll: the amount changes by 50, with Shift by 250, with Ctrl by 1000, between 1 and 1000.
+    Hover it: the tooltip names the fluid, how many runs one bucket serves, and for 300 mB a gold line that a rest stays
+    in your machine. Right-click clears it. Leave the world and rejoin: the cell is still there. **Is it clear that
+    nothing was taken from your bucket and what the number means?**
+522. **Does the whole machine run without an arm?** Build this layout for real (the Ponder scene shows the principle
+    in a simplified form; these are the positions the `fluidpattern` scenario tests; README, "A pattern can
+    name a fluid"): an extracting brass funnel at the station filtered to a water bucket, an Item Drain under it, a
+    pump and pipes into a Basin from below (no pipe touching the drain), a Mixer two blocks above the Basin, a filtered
+    funnel with dirt above the Basin, the Basin's spout (its facing) into a Warehouse Input one level below, and a
+    funnel over a chest on every free side of the drain as the empty bucket's way out. Write the pattern dirt + 250 mB water -> mud, store a fluid bay of
+    water, empty buckets and dirt, order eight mud at the terminal. **Do two buckets arrive, does the drain empty them
+    one after the other, do the empty buckets end up in the chest and the mud in the terminal?**
+523. **Do the warnings hold?** Put a Mechanical Arm that reaches both the station and the Basin: a filled bucket ends
+    in the Basin's item slots (the warehouse cannot prevent it; the README says so). Use a depot as the way out of the
+    empty bucket: the second bucket jams in the drain. Use 300 mB: a rest of fluid stays in the drain and the Basin.
+    **Do the README and the Ponder scene "Fluid in a Production Pattern" warn about exactly these three things?**
+    Then cancel an order while two filled buckets stand in the station's buffer: with goggles on the station the line
+    "Filled containers left in the buffer: 2 (take them out)" shows, and the next order of that fluid waits until you
+    take them out. **Is the stuck pair visible and does taking them out free the line?**
+524. **What does the warehouse say when something is missing?** Order the mud with no empty bucket in stock, then with
+    no water in the bays, then with a one-slot buffer: each time the order is refused in the terminal with a reason that
+    names the filled bucket or the product. **Does the reason tell you what to stock?**
+525. **Does the Recipe Selector accept it?** Place a Recipe Selector on the Basin, link it to the station and bind the
+    Input: the pattern is not drawn red. Remove the fluid cell: the pattern is drawn red with "the recipe takes other
+    fluids or amounts than the pattern's fluid cells". Add a lit Blaze Burner under a heated recipe: the selector does
+    not check heat, the Basin's goggles say so. With an Ender Recipe Selector the station's fluid pattern is red too.
+    **Is every state explained in the station's screen?**
+526. **JEI and German.** With JEI installed, open the mud recipe (Mixer) in JEI and press "+" in the station's screen:
+    dirt and water 250 mB are laid; the same on a recipe with a fluid result or three fluids stays greyed out with a
+    reason. Switch the game to German: the cell's tooltip, the goggles line "Muster mit Flüssigkeit" and the refusals
+    read as German sentences and fit the window at GUI scale 4. **Does everything fit?**
+527. **Does going back lose only the fluid?** Open a world saved with a fluid pattern in the previous release (0.26.0): the
+    pattern's items and result are there, the fluid cell is gone. **Is that what the CHANGELOG warned about?**

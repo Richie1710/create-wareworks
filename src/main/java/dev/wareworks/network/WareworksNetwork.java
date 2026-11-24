@@ -249,8 +249,16 @@ public final class WareworksNetwork {
      * of the order after its trips left and every row the number of places the item lies in after its reason (issue
      * #57, ADR-088), and {@code RelocationReason} has three more values; {@code OptimizerAction} gained MERGE and
      * MERGE_ROW (by name).
+     * <p>
+     * <b>{@code "31"} is issue #55</b> (fluid ingredients in production patterns, ADR-089): {@link ProductionPatternPayload}
+     * gained an optional fluid id after its count (a fluid cell is edited through entry indices after the pattern's own
+     * cells), and {@code ProductionScreenState} carries the fluid cells of each slot after the selector checks; a reader
+     * of the old shape would leave them in the buffer. {@code CrafterPatternCheck} gained {@code FLUID_CELL} (by
+     * ordinal, appended). The production station's goggle data may carry a count of patterns with a fluid. Saves gained
+     * the optional {@code FluidCells} list on a pattern slot; an older build ignores it, so a pattern that has only fluid
+     * cells and an item result loses its fluid on the next save.
      */
-    public static final String VERSION = "30";
+    public static final String VERSION = "31";
 
     private WareworksNetwork() {
     }
@@ -456,7 +464,7 @@ public final class WareworksNetwork {
      */
     private static void onProductionPattern(ProductionPatternPayload payload, IPayloadContext context) {
         ProductionMenu.submitPattern(context.player(), payload.containerId(), payload.pattern(), payload.entry(),
-                payload.key(), payload.count());
+                payload.key(), payload.count(), payload.fluid());
     }
 
     /**
@@ -473,6 +481,8 @@ public final class WareworksNetwork {
                         WareworksLang.translateDirect(WareworksLang.PRODUCTION_LAY_NOT_A_RECIPE), true);
                 case MAKES_ITS_INGREDIENT -> player.displayClientMessage(
                         WareworksLang.translateDirect(WareworksLang.PRODUCTION_LAY_MAKES_INGREDIENT), true);
+                case UNKNOWN_FLUID -> player.displayClientMessage(
+                        WareworksLang.translateDirect(WareworksLang.PRODUCTION_LAY_UNKNOWN_FLUID), true);
             }
         });
     }

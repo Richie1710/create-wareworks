@@ -698,6 +698,10 @@ public class RecipeSelectorBlockEntity extends SmartBlockEntity
                         .forGoggles(tooltip, 1);
         }
         if (!shown.ender()) {
+            // Heat is the player's Blaze Burner and is never checked (issue #55, ADR-089): only said, for a basin.
+            if (shown.kind().filter(kind -> kind != SelectorMachine.Kind.SAW).isPresent())
+                WareworksLang.translate(WareworksLang.GOGGLES_SELECTOR_HEAT_HINT).style(ChatFormatting.DARK_GRAY)
+                        .forGoggles(tooltip, 1);
             if (shown.setBacks() > 0)
                 WareworksLang.countLine(WareworksLang.GOGGLES_SELECTOR_SET_BACKS, shown.setBacks())
                         .style(ChatFormatting.DARK_GRAY).forGoggles(tooltip, 1);

@@ -1151,6 +1151,23 @@ public final class ProductionOrders<K, L> {
     }
 
     /**
+     * Whether any <b>open</b> order still has a <b>fluid line</b> that needs containers (issue #55, ADR-089). One pass
+     * over the orders, which is what lets the fill ledger and the availability of every key stay as cheap as before in an
+     * aisle without a fluid pattern.
+     */
+    public boolean hasOpenFluidLine() {
+        for (ProductionOrder<K, L> order : orders.values()) {
+            if (!order.isOpen())
+                continue;
+            for (SupplyLine<K> line : order.lines()) {
+                if (line.isFluid() && !line.isComplete())
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Gives every order a fresh deadline, for a world reload: deadlines are not persisted, so a restored <b>open</b>
      * order starts its timeout over instead of timing out immediately because the world was closed for a while
      * ({@code docs/warehouse-system.md} §3.5).
@@ -1224,7 +1241,8 @@ public final class ProductionOrders<K, L> {
             if (!order.isOpen())
                 continue;
             for (SupplyLine<K> line : order.lines()) {
-                if (line.remaining() > 0)
+                // a fluid line is filled by a fluid bay and never takes its filled container out of the racks
+                if (line.remaining() > 0 && !line.isFluid())
                     byKey.merge(line.key(), (long) line.remaining(), Long::sum);
             }
         }

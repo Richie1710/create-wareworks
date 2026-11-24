@@ -318,7 +318,8 @@ class TransportJobTest {
         assertTrue(JobType.FILL.allowsTarget(LocationKind.OUTPUT));
         assertTrue(JobType.FILL.allowsTarget(LocationKind.STORAGE));
         assertFalse(JobType.FILL.allowsTarget(LocationKind.INPUT));
-        assertFalse(JobType.FILL.allowsTarget(LocationKind.PRODUCTION));
+        // Since issue #55 (ADR-089) the fill trip of a fluid line of a production order ends at its production station.
+        assertTrue(JobType.FILL.allowsTarget(LocationKind.PRODUCTION));
         assertEquals(Optional.of(JobType.FILL), JobType.byName("FILL"), "the stable save name");
     }
 
@@ -358,8 +359,8 @@ class TransportJobTest {
         assertThrows(IllegalArgumentException.class, () -> picked.filledFor("bucket", "terminal", LocationKind.OUTPUT),
                 "a key filled into itself is no fill");
         assertThrows(IllegalArgumentException.class,
-                () -> picked.filledFor("lava_bucket", "machine", LocationKind.PRODUCTION),
-                "a fill trip never drops at a production station");
+                () -> picked.filledFor("lava_bucket", "machine", LocationKind.INPUT),
+                "a fill trip never drops at an input");
         TransportJob<String, String> retrieve = TransportJob.retrieve(JOB, "chest", "out", ORE, 1, REQUEST)
                 .withPicked(1);
         assertThrows(IllegalStateException.class,

@@ -339,7 +339,7 @@ public final class JobPlanner<K, L> {
                 continue;
             work = true;
             Optional<PlannedJob<K, L>> job = request.kind() == RequestKind.FILL
-                    ? planFill(input, request, (int) need, budget, reasons)
+                    ? planFill(input, request, (int) need, budget, reasons, NoJobReason.OUTPUT_FULL)
                     : planRetrieve(input, request, (int) need, budget, reasons);
             if (job.isPresent())
                 return new PlanResult<>(job, reasons, start);
@@ -584,8 +584,42 @@ public final class JobPlanner<K, L> {
     /** One ingredient of a production order, planned exactly like a retrieve but towards its production station. */
     private Optional<PlannedJob<K, L>> planSupply(PlannerInput<K, L> input, PlannerInput.SupplyNeed<K, L> supply,
             int need, Budget budget, Set<NoJobReason> reasons) {
+        if (supply.fluid())
+            return planFluidSupply(input, supply, need, budget, reasons);
         return planOutOfStorage(input, supply.key(), supply.station(), supply.id(), JobType.SUPPLY, need,
                 NoJobReason.PRODUCTION_FULL, budget, reasons);
+    }
+
+    /**
+     * One <b>fluid line</b> of a production order (issue #55, ADR-089): filled containers a fluid bay makes, delivered to
+     * the order's production station by <b>one fill trip</b> ({@link #planFill}) whose request id is the line.
+     * <p>
+     * At most {@link PlannerInput.FillSupply#MAX_AT_STATION} containers are on their way to or waiting in one station's
+     * buffer at a time, counted over <b>every</b> fluid line of that station: what the trips already carry (their
+     * reservation backs the line, {@link ReservationView#committedToRequest}) and what stands in the buffer, which the
+     * player's own machine has not taken yet ({@link PlannerInput.FillSupply#heldAtStation}). Beyond that the line waits
+     * with {@link NoJobReason#PRODUCTION_FULL}, because a third container would stall the drain and everything behind it.
+     */
+    private Optional<PlannedJob<K, L>> planFluidSupply(PlannerInput<K, L> input,
+            PlannerInput.SupplyNeed<K, L> supply, int need, Budget budget, Set<NoJobReason> reasons) {
+        long standing = input.fillSupply().heldAtStation(supply.station());
+        // Every fluid line of the station, the ones a selector gate keeps out of the supplies included: their trips in
+        // flight stand in the buffer's way just the same (issue #55 review).
+        Set<UUID> lines = new HashSet<>(input.fillSupply().fluidLinesAt(supply.station()));
+        for (PlannerInput.SupplyNeed<K, L> other : input.supplies()) {
+            if (other.fluid() && other.station().equals(supply.station()))
+                lines.add(other.id());
+        }
+        for (UUID line : lines)
+            standing += Math.max(0L, input.reservations().committedToRequest(line));
+        long room = PlannerInput.FillSupply.MAX_AT_STATION - standing;
+        if (room < 1) {
+            reasons.add(NoJobReason.PRODUCTION_FULL);
+            return Optional.empty();
+        }
+        int wanted = (int) Math.min(need, room);
+        return planFill(input, new PlannerInput.OpenRequest<>(supply.id(), supply.key(), wanted, supply.station(),
+                RequestKind.FILL), wanted, budget, reasons, NoJobReason.PRODUCTION_FULL);
     }
 
     /**
@@ -723,7 +757,7 @@ public final class JobPlanner<K, L> {
      * {@link NoJobReason#NOT_IN_STOCK} (the bays did not have the fluid after all).
      */
     private Optional<PlannedJob<K, L>> planFill(PlannerInput<K, L> input, PlannerInput.OpenRequest<K, L> request,
-            int need, Budget budget, Set<NoJobReason> reasons) {
+            int need, Budget budget, Set<NoJobReason> reasons, NoJobReason fullReason) {
         PlannerInput.FillSupply<K, L> supply = input.fillSupply();
         K filledKey = request.key();
         PlannerInput.FillRecipe<K> recipe = supply.recipe(filledKey).orElse(null);
@@ -733,8 +767,8 @@ public final class JobPlanner<K, L> {
         }
         K emptyKey = recipe.emptyKey();
         int carry = Math.min(input.carryLimit().applyAsInt(emptyKey), input.carryLimit().applyAsInt(filledKey));
-        int limit = stationRoom(input, request.output(), filledKey, limit(need, carry), true, NoJobReason.OUTPUT_FULL,
-                budget, reasons);
+        int limit = stationRoom(input, request.output(), filledKey, limit(need, carry), true, fullReason, budget,
+                reasons);
         if (limit < 1)
             return Optional.empty();
         List<PlannerInput.FillBay<L>> bays = new ArrayList<>();

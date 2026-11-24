@@ -24,13 +24,18 @@ import java.util.UUID;
  * @param delivered items the crane already dropped into the production station, {@code 0..required}
  * @param choice    the filter key of the choice ingredient this line pays, empty for an exact ingredient and for every
  *                  line saved before ADR-082
+ * @param fluid     the fluid id of a <b>fluid line</b> (issue #55, ADR-089): {@code key} is then the filled container the
+ *                  crane delivers and {@code required} counts containers. Empty for every item line and every line saved
+ *                  before ADR-089. It is what keeps an old "water bucket as an item cell" line from being taken for a
+ *                  fluid line, and what the planner routes to a fill trip instead of a retrieval out of the racks
  * @param <K>       item key type
  */
-public record SupplyLine<K>(UUID id, K key, int required, int delivered, Optional<K> choice) {
+public record SupplyLine<K>(UUID id, K key, int required, int delivered, Optional<K> choice, Optional<String> fluid) {
     public SupplyLine {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(choice, "choice");
+        Objects.requireNonNull(fluid, "fluid");
         if (required < 1)
             throw new IllegalArgumentException("required must be at least 1: " + required);
         if (delivered < 0 || delivered > required)
@@ -38,8 +43,18 @@ public record SupplyLine<K>(UUID id, K key, int required, int delivered, Optiona
     }
 
     /** A line of an exact ingredient. */
+    /** A line of an item ingredient: what every line was before ADR-089. */
+    public SupplyLine(UUID id, K key, int required, int delivered, Optional<K> choice) {
+        this(id, key, required, delivered, choice, Optional.empty());
+    }
+
     public SupplyLine(UUID id, K key, int required, int delivered) {
         this(id, key, required, delivered, Optional.empty());
+    }
+
+    /** Whether this is a fluid line (issue #55): filled containers fetched by a fill trip. */
+    public boolean isFluid() {
+        return fluid.isPresent();
     }
 
     /** A line that has not been served yet. */
@@ -67,6 +82,6 @@ public record SupplyLine<K>(UUID id, K key, int required, int delivered, Optiona
         if (amount < 0)
             throw new IllegalArgumentException("amount must not be negative: " + amount);
         int counted = Math.min(amount, remaining());
-        return counted == 0 ? this : new SupplyLine<>(id, key, required, delivered + counted, choice);
+        return counted == 0 ? this : new SupplyLine<>(id, key, required, delivered + counted, choice, fluid);
     }
 }

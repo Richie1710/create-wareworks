@@ -320,7 +320,8 @@ Selector** and the production station: the unfiltered saw cycling, the selector 
 input, stairs and then slabs, the item that comes back unexpected and how to take it out, and the Basin under a Mixer.
 The twenty-eighth, **Setting a Far Factory's Recipe with Recipe Slips**, belongs to the **Ender Recipe Selector** and
 the production station: the four sneak-clicks, the saw set as a package arrives, the slab package waiting in its port
-until the line is empty, and the two ways of bypassing the selector to avoid.
+until the line is empty, and the two ways of bypassing the selector to avoid. **Fluid in a Production Pattern** belongs to the production station: the fluid cell, the filled
+bucket the crane brings, the machine behind the station that needs no arm, and the warnings about arms and depots.
 
 ## Balancing the crane
 
@@ -788,6 +789,41 @@ pattern of the station is now one recipe for the Crafter, cell for cell:
 * Server config: `crafterFeederRequiresRotation` (default on) and `crafterFeederStressImpact` (2.0, like a Mechanical
   Crafter).
 
+**A pattern can name a fluid.** Besides its 3 × 3 items, a pattern has **two fluid cells** (above and below the
+result): click one with a **filled bucket** and it holds that fluid, the mouse wheel sets the millibuckets one run
+takes (50 mB a notch, Shift 250, Ctrl 1000; at most 1000 mB, the size of a Basin's tank), a right-click empties it. That
+is for the recipes of a **Basin under a Mechanical Mixer** that need water or lava, for example mud from dirt and 250
+mB of water. Order the product at the terminal as always:
+
+* **The crane brings the fluid as filled buckets**, never as fluid: it takes empty buckets out of stock, fills them at
+  a fluid bay of that fluid and carries them to the station, whole buckets only (one bucket serves four runs of 250
+  mB). So choose an amount that **divides 1000 mB**; any other amount works, but a rest stays in your machine and the
+  tooltip says so in gold. The warehouse needs the fluid in a bay and **empty buckets in stock**, and it says which is
+  missing ("Not enough fluid for …", "No empty container for …"). At most **two filled buckets** wait at one station,
+  and they count against its buffer slots.
+* **Your own machine turns the bucket into fluid — no Mechanical Arm.** An arm has no way to reach an Item Drain. The
+  layout that is tested: an **extracting brass funnel** at the station with **the filled bucket as its filter**, an
+  **Item Drain** under the funnel, a **pump and a pipe** from the drain into the Basin (every pipe must have exactly two connections: a pipe with a free open end pours
+  half of the water away, so wrench a pipe that shows an open stub), the Mixer two blocks above it, a second filtered funnel for the other ingredients, and
+  the Basin's spout into a Warehouse Input (keep the spout's side free: Create turns the spout away from a blocked
+  side, and then the mud stays in the Basin). The Ponder scene **Fluid in a Production Pattern** shows the principle
+  in a simplified layout; the exact positions the automated test runs are in `docs/manual-test-checklist.md`.
+* **Three warnings.** A **Mechanical Arm that can also reach the Basin** puts filled buckets into the Basin's item
+  slots, and the warehouse cannot stop that. A **depot is no way out for the empty bucket**: it holds one and the drain
+  jams behind it; use a funnel over a chest, a belt, or the Warehouse Input (the drain pushes the empty bucket out of a side you do not
+  choose, so put the sink on every free side). And the drain **stalls on a third bucket**
+  until the Mixer has used some of the fluid; the cap of two buckets and an amount that divides 1000 keep it moving.
+  The empty bucket comes back through the return input like any other item.
+* **Known limits.** Filled buckets that are **left in the station's buffer** after a cancel or a timeout are not taken
+  out by the crane: they count against the cap of two, so take them out (the goggles show "Filled containers left in
+  the buffer" while no order is open), or the next order of that fluid waits. **Shift-clicking a bucket** from your
+  inventory still writes an *item* cell, not a fluid cell; click it onto the fluid cell instead. A fluid cell keeps only
+  the fluid: a potion becomes its base fluid, item components of the container are dropped.
+* **What it does not do:** a pattern cannot **make** a fluid, a Crafter Feeder refuses a pattern with a fluid cell
+  (a Crafter cannot take one), package mode makes nothing so the cells stay inert, and an automatic stock-rule restock
+  skips such a pattern. JEI's "+" lays a recipe's fluid inputs as fluid cells. **Downgrading** to an older Wareworks
+  loses the cells: a pattern that has only fluid cells is empty after the next save there.
+
 **One machine, several products: the Recipe Selector.** Sneak-click the production station with a **Recipe
 Selector**, place it against the saw (facing up) or against the Basin under a Mixer or Press, and sneak-click the
 Warehouse Input the products come back through. From then on:
@@ -811,7 +847,8 @@ Warehouse Input the products come back through. From then on:
   saw and the chest behind the Packager are empty; old packages and packages of another station are refused. Never
   feed packages straight into the saw, and do not let a port push into the chest past the Packager: both bypass the
   selector.
-* Switch a selector or the slips off in the station's screen. Fluid recipes, Deployers, presses on belts and Crafter
+* Switch a selector or the slips off in the station's screen. A Basin's fluid recipe works when the pattern has the matching fluid cells (the
+  Basin's heat is not checked); the Ender tier refuses fluid cells. Deployers, presses on belts and Crafter
   Feeder stations are not supported. Server config: `selector.localRange` (32), `selector.machineRange` (16) and
   `selector.remoteProbe` (by default, after a restart, after the slips were switched on and after a stop, the first
   order of a new product at a far factory sends one run, until the right product has come back).
