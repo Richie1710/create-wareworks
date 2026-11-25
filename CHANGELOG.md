@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Spanish translation** (es_es), contributed by [@albertosaurio65](https://github.com/albertosaurio65)
+  ([#48](https://github.com/Richie1710/create-wareworks/pull/48)).
+
 ## [0.27.0-beta] - 2026-11-24
 
 ### Added

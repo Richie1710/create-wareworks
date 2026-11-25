@@ -37,7 +37,7 @@
   "block.wareworks.recipe_selector.tooltip.behaviour1": "El selector nunca la sobrescribe y espera: saca primero el _objeto de filtro_.",
   "block.wareworks.recipe_selector.tooltip.condition1": "Cuando la máquina tiene un objeto de filtro",
   "block.wareworks.recipe_selector.tooltip.summary": "Establece la receta de una _Sierra Mecánica_ o una _Cuenca_ para cada pedido de una _Estación de Producción_, para que una máquina fabrique varios productos por turnos.",
-  "block.wareworks.schematicannon_requester": "Solicitante de esquematicañçom",
+  "block.wareworks.schematicannon_requester": "Solicitante de esquematicañón",
   "block.wareworks.schematicannon_requester.tooltip.behaviour1": "Lo conserva como su _enlace_. Agáchate con la mano vacía para sacarlo.",
   "block.wareworks.schematicannon_requester.tooltip.behaviour2": "Lo pide _del stock_ y manda _fabricar_ el resto mediante una receta: hasta un stack cada vez, _nunca dos veces_.",
   "block.wareworks.schematicannon_requester.tooltip.behaviour3": "Mira con las _Gafas_. Un cañón colocado a mano _omite los bloques que faltan_: desactiva eso.",
