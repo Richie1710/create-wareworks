@@ -1639,6 +1639,13 @@ you get tired of waiting, and put it back before judging check 160.
 
 ## AA. Order a whole list from a clipboard (M23, issue #19)
 
+> **Making a test list (issue #63).** A clipboard typed by hand does **not** work: its lines carry no item. Where a
+> check below needs a list, either print a Schematicannon checklist of a schematic built from those blocks, or, in a
+> test world with cheats, give one with the items attached. One entry per item, here 64 cobblestone (syntax read from
+> Create's codec, not tried in game):
+> `/give @s create:clipboard[create:clipboard_content={type:"written",pages:[[{checked:false,text:"a",icon:{id:"minecraft:cobblestone",count:1},item_amount:64}]],read_only:false,previously_opened_page:0}]`.
+> Keep each `text` non-empty: Create's clipboard screen removes blank lines when it closes.
+
 167. **Build something from a Schematicannon's checklist, end to end, and say whether the loop is worth it.** Build a
     small house, save it as a schematic, deploy it somewhere else and put the schematic plus a blank clipboard into a
     Schematicannon: it prints the **material checklist**. Carry that clipboard to a warehouse terminal, drop it into
@@ -2720,7 +2727,7 @@ you get tired of waiting, and put it back before judging check 160.
     this question belongs to the fetch and not to a click of yours?**
 262. **A fetch beside a clipboard list, and the terminal's request limit.** Slow the crane down (a low-speed motor),
     empty the terminal's buffer, and make sure the racks hold at least 6 oak planks, 8 cobblestone, 2 iron ingots and 2
-    redstone. Put a **hand-written** clipboard list of four item types, at most one stack of each (16 each of four items
+    redstone. Put a clipboard list of four item types (not typed by hand, see section AA), at most one stack of each (16 each of four items
     that stack to 64; none of them planks, cobblestone, iron ingots or redstone), into the list slot — not a
     Schematicannon checklist: the Fetch is measured with the list's open portions put down first, and the nine buffer
     slots have to hold the list's four stacks and the piston's four ingredients together, so a list of several stacks
@@ -2732,7 +2739,7 @@ you get tired of waiting, and put it back before judging check 160.
     refusal read as a limit you understand, or as a broken terminal?** Both orders finish: the clipboard is ticked
     off, and the terminal holds the list's 4 × 16 items plus exactly 6 planks, 8 cobblestone, 2 iron ingots and 2
     redstone (eight of the nine slots).
-263. **A stuck list says why, and stops saying it.** Take every glass block out of the racks, write a clipboard for
+263. **A stuck list says why, and stops saying it.** Take every glass block out of the racks, make a list (section AA) for
     3 glass and 16 oak planks, press the list button and say Yes to fetching what there is. Once the planks have
     arrived the status row says in **gold** "Glass is missing" instead of the list's progress, and the clipboard slot's
     tooltip names it under the progress.
@@ -3460,7 +3467,7 @@ you get tired of waiting, and put it back before judging check 160.
 
 339. **Every status by eye.** Build an aisle with a production station holding the lantern chain (1 iron ingot → 9 iron
      nuggets, 1 coal + 1 stick → 4 torches, 8 iron nuggets + 1 torch → 1 lantern) and put 1 iron ingot, 2 coal, 2
-     sticks, 20 glass and 64 cobblestone into the racks. Write a clipboard with Cobblestone 64, Glass 64, Lantern 2,
+     sticks, 20 glass and 64 cobblestone into the racks. Make a list (section AA) with Cobblestone 64, Glass 64, Lantern 2,
      Torch 4, Diamond 3 and Iron Nugget 9, put it into the terminal's list slot and press Fetch. The question reads
      "Fetch what there is (89 of 146)?"; Diamond and Iron Nugget are red "Not possible" ("No pattern makes Diamond",
      "Iron Ingot is missing"), Glass and Lantern gold "Partly", Torch blue "Crafted" ("0 from stock, 4 produced"),
@@ -3848,9 +3855,10 @@ you get tired of waiting, and put it back before judging check 160.
      stack does not count as movable. After the moves of check 432 it reads about 192 / 64 / 0. Hover a row: the
      priorities 9 down to 0 that hold it. Are the three short headers understood without hovering, and is a "Best" that
      counts priority 0 before anything moved confusing?
-431. **A clipboard.** Write cobblestone, iron and gold on a Create clipboard and click it onto the list cell left of the
+431. **A clipboard.** Make a list (section AA) of cobblestone, iron and gold and click it onto the list cell left of the
      status line: the missing items are added, the status line says how many; click it again: "Its items are listed
      already". Fill all 16 rows and click a longer clipboard: it says how many found no free row.
+     A clipboard with only typed lines adds nothing and answers "No items on that clipboard" (issue #63).
 432. **Optimise.** Press the play button. The crane carries cobblestone and iron from the overflow chests into the rack
      wall, one trip at a time; the pips turn aqua while it works and green when nothing more fits; the status line
      counts "Moved n, k trips left". The dedicated chest keeps its cobblestone. Does the screen feel alive enough while
@@ -4175,7 +4183,8 @@ you get tired of waiting, and put it back before judging check 160.
 ## BZ. Fluid in a production pattern ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55))
 
 521. **Does a fluid cell feel right?** Open a Warehouse Production station and look at a pattern's screen: two fluid
-    cells sit beside the result cell. Click one with a filled water bucket: it shows water and "1000 mB" and the bucket
+    cells stand between the 3 x 3 grid and the arrow, and the result stands alone right of the arrow (issue #62). Click
+    one with a filled water bucket: it shows water and "1000 mB" and the bucket
     stays in your hand. Scroll: the amount changes by 50, with Shift by 250, with Ctrl by 1000, between 1 and 1000.
     Hover it: the tooltip names the fluid, how many runs one bucket serves, and for 300 mB a gold line that a rest stays
     in your machine. Right-click clears it. Leave the world and rejoin: the cell is still there. **Is it clear that
@@ -4209,3 +4218,29 @@ you get tired of waiting, and put it back before judging check 160.
     read as German sentences and fit the window at GUI scale 4. **Does everything fit?**
 527. **Does going back lose only the fluid?** Open a world saved with a fluid pattern in the previous release (0.26.0): the
     pattern's items and result are there, the fluid cell is gone. **Is that what the CHANGELOG warned about?**
+
+## CA. An empty fluid bay shows its filter ([issue #61](https://github.com/Richie1710/create-wareworks/issues/61))
+
+528. **Does an empty filtered tank say what it is for?** Place a copper and a brass fluid bay, click a water bucket into
+    one filter slot and a List Filter into the other: each shows that item at its front. Fill the first: only the water
+    shows. Empty it again: the bucket is back. Walk more than ten blocks away: the filter items disappear while the
+    fluid in other bays stays visible. Leave the world and rejoin: the items are back. **Is the filter item ever
+    mistaken for contents, does it flicker against the tank at any angle, and does the value box still read well in
+    front of it?**
+
+## CB. The production pattern screen explains itself ([issue #62](https://github.com/Richie1710/create-wareworks/issues/62))
+
+529. **Does a new player read it right?** At stations with 8 and with 36 patterns: what goes in (grid and the two
+    fluid cells with their drops) stands left of the arrow, the result alone right of it, and the tabs read as a
+    separate strip. Fill a water bucket and gravel into the grid and 200 mB of water into a fluid cell, but no result:
+    do the gold "?" in the result cell and on the tab, the tooltips and the goggles make clear why nothing is offered?
+    The bucket's cell has an orange frame and a "!": is it clear from its tooltip that water is paid twice, and what
+    to do? Repeat in German. **Would you have found the missing result by yourself?**
+
+## CC. Which clipboards work as a list ([issue #63](https://github.com/Richie1710/create-wareworks/issues/63))
+
+530. **Confirm the docs in game.** Type two item names on a new Create clipboard, put it into a terminal's list slot and
+    press the list button: it should say "This clipboard asks for nothing". Click the same clipboard onto an
+    optimizer's list cell: "No items on that clipboard". Then do both with a Schematicannon's checklist: the terminal
+    fetches it and the optimizer adds its unticked items. Tick one entry off by hand first: it is left out. **Does the
+    README describe what you saw?**

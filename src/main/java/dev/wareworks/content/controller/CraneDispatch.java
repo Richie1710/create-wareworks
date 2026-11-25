@@ -945,6 +945,10 @@ final class CraneDispatch {
                 // the head already, so the planner must not offer a bay part of it — the crane would arrive, be
                 // refused and be sent to the next bay, and with two of them that never ends (M30 review fix).
                 .allOrNothing(controller::takesFluidContainers)
+                // And what it holds is no item either: the item index counts nothing at a bay, so without this a bay full
+                // of water and an empty one are alike to the planner and the nearer one wins, which spreads one fluid
+                // over several bays (issue #60, ADR-088 D1).
+                .heldAsContents(controller::fluidHeldFor)
                 // A fluid bay is never where a relocation goes, planned or rerouted (issue #46, ADR-079): it takes a
                 // filled container by draining it, which would turn a relocated item into fluid. The rest of the
                 // strictly-better rule is the planner's own (RelocationRule).

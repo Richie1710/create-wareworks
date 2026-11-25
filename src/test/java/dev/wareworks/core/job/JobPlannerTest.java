@@ -449,6 +449,68 @@ class JobPlannerTest {
         assertEquals(near, storeTarget(base, DIAMOND), "the iron reservation does not attract diamonds");
     }
 
+    /**
+     * Issue #60: a fluid bay holds no items, only the contents of the containers brought to it. What it holds that way
+     * ({@link PlannerInput#heldAsContents()}) counts as holding, so a farther bay with water takes the next water
+     * bucket and a nearer empty bay does not become a second water bay.
+     */
+    @Test
+    void aLocationHoldingTheContentsOutranksANearerEmptyOne() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition far = rack(6, 0, Side.LEFT);
+        PlannerInput.Builder<String, RackPosition> base = bays(Map.of(far, Map.of(IRON, 1000L)), near, far);
+        assertEquals(far, storeTarget(base, IRON), "the bay holding the fluid wins over the nearer empty one");
+        assertEquals(near, storeTarget(base, DIAMOND), "another fluid takes the nearer bay");
+
+        // A full bay still holds it, so it is asked first; the live call says no and the next one takes the carry.
+        live.insertable.put(far, 0);
+        assertEquals(near, storeTarget(base, IRON), "a full holding bay falls through to the empty one");
+    }
+
+    /** Issue #60, ADR-088 D1: as for items, holding outranks priority, so an empty higher-priority bay loses. */
+    @Test
+    void aLocationHoldingTheContentsOutranksAnEmptyOneOfHigherPriority() {
+        RackPosition empty = rack(1, 0, Side.LEFT);
+        RackPosition holding = rack(6, 0, Side.LEFT);
+        priority(empty, 5);
+        PlannerInput.Builder<String, RackPosition> base = bays(Map.of(holding, Map.of(IRON, 1000L)), empty, holding);
+        assertEquals(holding, storeTarget(base, IRON), "consolidation is above the priority");
+    }
+
+    /** Issue #60: two holders follow the home rule: priority first, then the most held, a tie the lower index. */
+    @Test
+    void twoLocationsHoldingTheContentsFollowTheHomeRule() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition far = rack(6, 0, Side.LEFT);
+        PlannerInput.Builder<String, RackPosition> more = bays(Map.of(near, Map.of(IRON, 1000L), far,
+                Map.of(IRON, 5000L)), near, far);
+        assertEquals(far, storeTarget(more, IRON), "the fuller bay, although it is farther");
+        priority(near, 2);
+        assertEquals(near, storeTarget(more, IRON), "a higher priority beats the larger amount");
+        priority(near, 0);
+        PlannerInput.Builder<String, RackPosition> tie = bays(Map.of(near, Map.of(IRON, 1000L), far,
+                Map.of(IRON, 1000L)), far, near);
+        assertEquals(far, storeTarget(tie, IRON), "a tie goes to the lower index, not to the shorter way");
+    }
+
+    /** Issue #60: the reroutes into storage share the ranking, so a leftover joins the bay holding its fluid too. */
+    @Test
+    void aStoreRerouteFollowsTheHeldContents() {
+        RackPosition near = rack(1, 0, Side.LEFT);
+        RackPosition far = rack(6, 0, Side.LEFT);
+        PlannerInput.Builder<String, RackPosition> base = bays(Map.of(far, Map.of(IRON, 1000L)), near, far);
+        assertEquals(far, planner.planReroute(base.build(), IRON, 1, JobType.STORE, null).orElseThrow().location());
+    }
+
+    /** A store input over locations that hold {@code contents} and no items, each with room, like fluid bays. */
+    private PlannerInput.Builder<String, RackPosition> bays(Map<RackPosition, Map<String, Long>> contents,
+            RackPosition... locations) {
+        for (RackPosition location : locations)
+            live.insertable.put(location, STACK);
+        return input().inputs(List.of(IN_A)).storageLocations(List.of(locations)).storePriority(this::priorityOf)
+                .heldAsContents((location, key) -> contents.getOrDefault(location, Map.of()).getOrDefault(key, 0L));
+    }
+
     @Test
     void storePrefersLocationsWithoutOtherItemTypes() {
         RackPosition nearMixed = rack(1, 0, Side.LEFT);

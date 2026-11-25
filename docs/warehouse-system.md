@@ -2271,7 +2271,7 @@ Networking decision and reasons: **ADR-019**.
     for a plain item key) means such a key is **not counted** and so reaches neither the store, the save nor the
     screen's payload, and `MAX_USED_SIZE` (64 KiB) bounds the whole written list, keeping the strongest entries.
     Nothing about the **request** changes: this decides what is remembered, never what a player may ask for. It
-    matters most on a clipboard order, whose entry icons are arbitrary stacks a player wrote and need not be anything
+    matters most on a clipboard order, whose entry icons are arbitrary stacks a foreign clipboard brings and need not be anything
     the warehouse ever held. When the cap is reached the **weakest** entry goes: the
     lowest count, and among equal counts the one asked for longest ago. A new item type is therefore always learned —
     a player whose build has moved on has to be able to re-teach the terminal — and the price is that a brand new
@@ -2652,8 +2652,18 @@ whenever the terminal's own buffer is full. The clipboard is the order and its r
 say what arrived.
 
 The obvious source of such a list is Create's **Schematicannon**, whose material checklist can be written onto a
-clipboard (`MaterialChecklist#createWrittenClipboard`). A hand-written clipboard works exactly the same, which is why
-this is a general feature and not a Schematicannon one.
+clipboard (`MaterialChecklist#createWrittenClipboard`). The feature reads any clipboard whose entries carry an item and
+an amount (`ClipboardEntry#icon`, `#itemAmount`), whoever wrote them, and never the text.
+
+**A hand-typed clipboard is not such a list** (issue #63, corrected; read in Create 6.0.10's sources). Typing in
+`ClipboardScreen` changes only an entry's text (`setCurrentEntryText`), and a new line is a `ClipboardEntry` without an
+icon. In Create only `MaterialChecklist#createWrittenClipboard` calls `ClipboardEntry#displayItem` (the entry's codecs
+only restore what was saved), so the Schematicannon's checklist is Create's one way to a list with items; other mods were
+not checked. That checklist is read-only: its text and amounts cannot be edited, but entries can be ticked off by hand,
+which leaves them out of the order. Entries the cannon printed already ticked ask for nothing, even when unticked (their
+amount is 0). Copying entries from a placed clipboard onto the held one (`ClipboardValueSettingsHandler`) copies only
+text and tick, so the copies carry no item. A clipboard of typed lines only is answered with "This clipboard asks for
+nothing".
 
 **Where the clipboard goes.** A one-slot handler on the block entity
 (`WarehouseTerminalBlockEntity.ListSlotHandler`, `isItemValid` accepts a clipboard and nothing else, slot limit 1),
@@ -4815,7 +4825,7 @@ Classes:
   * The window shows **one pattern at a time** with a tab strip beside the grid; showing every pattern's grid at once
     would need `maxProductionPatterns × 54` pixels and could not fit the height vanilla guarantees at every GUI scale.
     The tab strip never grows taller than the grid's three rows (issue #35, ADR-068): up to 9 patterns it has 3
-    columns, exactly the look of every station before; 10 to 18 patterns get `ceil(n / 3)` columns, up to 6; above 18
+    columns, as every station had before (positions since issue #62: §3.13); 10 to 18 patterns get `ceil(n / 3)` columns, up to 6; above 18
     it shows 6 × 3 tabs and **scrolls by rows** with the mouse wheel over it (one row per notch, the event is taken
     even at either end), with a 3 px scroll bar beside it. The scroll position is client-only view state, never sent
     or saved. **Every change of the selection scrolls the selected tab into view** (a click on a tab, a selection the
@@ -6804,10 +6814,12 @@ already answers "how much" — and it is the one place a block entity renderer w
   a furnace shows its front and an item does not change size when the arm sets it down. The light is the brighter of
   the bay's own block and the aisle block in front of it, the rule the arm already uses inside a rack.
 
-A bay's **store filter** is still not drawn on the block the way an interface's is: the renderer is a
-`SafeBlockEntityRenderer`, not Create's `SmartBlockEntityRenderer`, because the filter item would land a hand's breadth
-from the stored one and say something different. It is read through the goggles and in the value box the crosshair
-rests on.
+**An empty bay shows its filter item** ([issue #49](https://github.com/Richie1710/create-wareworks/issues/49)), in
+the place and pose of the stored item, drawn by the same renderer and chosen by `client.render.BayDisplay`: stock
+first, else the filter, else nothing. So a bay never shows two items that say different things, which is why the
+renderer stays a `SafeBlockEntityRenderer` rather than Create's `SmartBlockEntityRenderer`. On a filled bay the filter
+is read through the goggles and in the value box the crosshair rests on. The drawing itself is
+`client.render.BayItemRenderer`, which an empty Fluid Bay uses too (§3.9).
 
 **Where the look is shot, and what each run can and cannot answer** (M29 step 14). Everything above is checked by
 machine somewhere, and the one thing that is not is said out loud:
@@ -6959,6 +6971,18 @@ Copper Fluid Bay, makes it brass where it stands with the fluid, the filter and 
 the block entity and its contents stay, and the column rule is asked downwards as for the rack bays. The fluid bay
 needs the kit more than any rack bay does, because the break that a rack bay survives with a pallet costs a fluid bay
 its whole contents. A pallet on a hand truck never goes into a fluid bay (ADR-084).
+
+**An empty filtered Fluid Bay shows its filter item** ([issue #61](https://github.com/Richie1710/create-wareworks/issues/61)):
+the stack in the slot (a water bucket, an empty bucket, or a List, Attribute or Package Filter), at the mouth of the
+bay on the same anchor planes as a rack bay's item (`client.render.BayItemRenderer`;
+`CraneModelLayoutTest#theItemDrawnInAnEmptyFluidBayStandsClearOfTheArmAndTheVessel`). The rule is the rack bay's
+(`client.render.BayDisplay`): any fluid stored shows the fluid only, else a filter shows that item, else nothing. It is
+the item and **not** a ghost of the fluid, because the drawn fluid is the contents readout and a ghost would read as
+stock. The view distance of the fluid stays at the vanilla 64 blocks; only the filter item, a detail, is cut off at
+Create's `filterItemRenderDistance`, measured as the warehouse interface measures it. A bay without a filter returns
+before the distance is even asked. Render only: no server, save or sync change. The `blocks` visual scenario's
+`bay_filters` exhibit checks on the client what each rack bay and fluid bay really drew, at a close camera and past the
+cut.
 
 #### 3.9.1 Hands, goggles and the break (M30 step 6)
 
@@ -7256,6 +7280,17 @@ part-full bays of the same fluid — which outrank every shelf — it shuttled b
 free on a shelf. Every ordinary inventory is untouched and may still take part of a carry, with the rest rerouted
 after the drop. It is only reachable at `crane.grabberStacks` above 1 or with a stackable modded container, which is
 why the GameTest that pins it raises that config.
+
+**Among the bays, the one holding the fluid wins** ([issue #60](https://github.com/Richie1710/create-wareworks/issues/60),
+ADR-088 amendment). Every bay that accepts a container ranks `DEDICATED`, empty unfiltered ones included, and the item
+index counts nothing at a bay, so until issue #60 travel time decided and one fluid spread over several bays. The
+planner now asks what a location holds of a key's **contents** (`PlannerInput.heldAsContents`; the controller's
+`fluidHeldFor`): the millibuckets of the carried fluid in that bay plus those on their way to it in any filled
+container, 0 for every other location. It feeds consolidation and the home rule exactly like an item count, so a bay
+holding the fluid comes before an empty one **even of higher priority**; between two holding bays the priority decides,
+then the amount, then the index order. A full holding bay fails the live check and the next candidate gets the
+container. Fluid already spread over several bays is not gathered (merge leaves bays out). Tests:
+`FluidBayStoreGateGameTests#aWaterBucketJoinsTheFartherFluidBayThatHoldsWater` and four `JobPlannerTest` cases.
 
 **One rule about the cache that a later reader must not undo.** `AisleFilters.set` keeps a resolved filter while the
 slot's stack is unchanged, and a lava bucket in a bay's slot is byte for byte the same stack as one in an interface's
@@ -7565,8 +7600,9 @@ an item stands in one row at most. Each row shows three read-only numbers and a 
 
 The row tooltip lists every priority from 9 down to 0 that holds the item, the count in unloaded locations and the
 movable figure. The status row has the **list cell** on the left: a filled-in Create clipboard clicked onto it adds the
-orderable entries it lists to the free rows, without duplicates, and says how many found no free row. This is the only
-way in, because a clipboard clicked on the block opens its own editor (`StationScreenClick`, issue #26). **Optimise**
+orderable entries it lists to the free rows, without duplicates, and says how many found no free row (only entries with
+an item attached, such as a Schematicannon's checklist; typed lines add nothing, §3.4.4). This is the only
+way in for a clipboard, because a clipboard clicked on the block opens its own editor (`StationScreenClick`, issue #26). **Optimise**
 (`AllIcons.I_PLAY`) on the right moves every listed item; while an order runs the row reads "Moved n, k trips left"
 with a red cancel mark at its right end, and afterwards "Done", "Out of trips" or "Stopped" with the count. The last
 action's message (added, already listed, no free row, too many optimizers busy, and so on) stays until the next action.
@@ -8094,6 +8130,21 @@ phase; the Ponder scene `warehouse/package_mode`.
 A production pattern may name up to **two fluid ingredients** next to its items (`core.production.FluidCell`: a fluid
 id and 1..1000 mB per run; two different fluids at most). The warehouse never moves fluid by itself: it moves **filled
 buckets**, exactly as the terminal's fluid orders do (§3.9), and the player's own machine turns a bucket into fluid.
+
+* **In the screen** ([issue #62](https://github.com/Richie1710/create-wareworks/issues/62)) the pattern reads from left
+  to right: the 3 x 3 grid, the two fluid cells in a column of their own (2 px off the grid, centred beside it, an
+  empty one marked with a drop), the arrow, and the result alone. With six tab columns the pattern block comes 4 px
+  from the window's edges and the tabs stand at least 5 px from the result (`ProductionMenuLayout`); the window is no
+  wider and no taller than before.
+* **No result.** A slot with an ingredient but no result is incomplete and never offered. The empty result cell shows a
+  gold "?" with a gold frame, the arrow is gold, the slot's tab shows "?", and the tooltips of all three say "No
+  result: this pattern is never ordered" and what to put there. The station's goggles name it ("Pattern 2 has no
+  result", or how many there are) instead of "No patterns set". The screen derives it from its own state; the goggle
+  summary carries two numbers, written only while such a slot exists.
+* **Paid twice.** A grid cell with a filled container whose fluid a fluid cell of the same slot asks for too is framed
+  in orange with a "!"; its tooltip, the fluid cell's and the arrow's say that an order pays both, and that a player who
+  only needs the fluid clears the bucket's cell. Nothing is converted or refused, since a recipe may need the container
+  itself. A filter cell is not looked into.
 
 * **Planning.** `ProductionPlanner.payFluids` plans the fluid lines **before** the item lines, in whole containers of the
   fluid's own bucket (`ControllerFluidSupply`, sized by `FillRecipes`; `ceil(runs × mB / container mB)`). The fluid comes

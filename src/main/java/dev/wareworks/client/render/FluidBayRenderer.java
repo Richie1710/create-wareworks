@@ -4,23 +4,34 @@ import java.util.HashMap;
 import java.util.Map;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.math.Axis;
 import com.simibubi.create.foundation.blockEntity.renderer.SafeBlockEntityRenderer;
+import com.simibubi.create.infrastructure.config.AllConfigs;
 
 import dev.wareworks.content.fluid.FluidKey;
 import dev.wareworks.content.storage.FluidBayBlockEntity;
 import net.createmod.catnip.platform.NeoForgeCatnipServices;
-import net.createmod.catnip.render.SuperByteBuffer;
-import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.Util;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.fluids.FluidStack;
 
 /**
- * Draws the fluid standing in a fluid bay ({@code docs/warehouse-system.md} §3.9, M30 step 5, issue #21).
+ * Draws the fluid standing in a fluid bay ({@code docs/warehouse-system.md} §3.9, M30 step 5, issue #21), and the
+ * filter item of an empty one (issue #61).
+ *
+ * <p>
+ * <b>An empty bay shows its filter</b> (issue #61, the fluid half of issue #49): the filter <b>item</b> (the water
+ * bucket a player clicked in, or a Create filter item) at the mouth of the bay, drawn by the {@link BayItemRenderer} a
+ * rack bay uses and chosen by the same rule ({@link BayDisplay}). Not a ghost of the fluid: the drawn fluid is the
+ * contents readout, so anything fluid-shaped would read as stock. Any stored fluid wins over the filter, and an empty
+ * bay without a filter draws nothing. The item is a <b>detail</b>, so unlike the fluid it is cut off at Create's
+ * {@code filterItemRenderDistance}, measured as {@link WarehouseInterfaceRenderer} measures it.
  *
  * <p>
  * <b>The level is the readout</b>, which is the issue's own phrase and the reason this renderer exists at all. A rack
@@ -71,7 +82,6 @@ public class FluidBayRenderer extends SafeBlockEntityRenderer<FluidBayBlockEntit
      * bound.
      */
     private static final int MAX_DISPLAY_STACKS = 64;
-    private static final float QUARTER_TURN_DEGREES = 90.0F;
     /** {@code renderFluidBox} draws no bottom face: there is a vessel floor under the fluid and nothing to see. */
     private static final boolean RENDER_BOTTOM = false;
     /** Gases are drawn upside down, which is what makes a gas read as a gas; see the class comment. */
@@ -85,27 +95,25 @@ public class FluidBayRenderer extends SafeBlockEntityRenderer<FluidBayBlockEntit
      * render thread only, exactly as {@link RackBayRenderer} keeps its own.
      */
     private final Map<FluidKey, FluidStack> displayStacks = new HashMap<>();
-    /**
-     * The aisle block the fluid's light is read from, reused rather than allocated — the same render-thread-only rule
-     * as {@link #displayStacks}, because {@code BlockPos#relative} would hand back a fresh one per bay per frame.
-     */
-    private final BlockPos.MutableBlockPos lightCursor = new BlockPos.MutableBlockPos();
+    /** Draws the filter item of an empty bay, and reads the light of the open front; shared with the rack bay. */
+    private final BayItemRenderer bayItem;
 
     public FluidBayRenderer(BlockEntityRendererProvider.Context context) {
+        bayItem = new BayItemRenderer(context.getItemRenderer());
     }
 
     @Override
     protected void renderSafe(FluidBayBlockEntity bay, float partialTicks, PoseStack ms, MultiBufferSource buffer,
                               int light, int overlay) {
-        FluidKey stored = bay.storedFluidOrNull();
-        if (stored == null)
-            return;
-        int millibuckets = bay.millibuckets();
-        if (millibuckets <= 0)
-            return;
         Level level = bay.getLevel();
         if (level == null)
             return;
+        FluidKey stored = bay.storedFluidOrNull();
+        int millibuckets = bay.millibuckets();
+        if (stored == null || millibuckets <= 0) {
+            renderFilter(bay, level, ms, buffer, light);
+            return;
+        }
         FluidStack display = displayStack(stored);
         if (display.isEmpty())
             return;
@@ -117,16 +125,58 @@ public class FluidBayRenderer extends SafeBlockEntityRenderer<FluidBayBlockEntit
         Direction facing = bay.facing();
 
         ms.pushPose();
-        // The rotation the multipart blockstate applies to the bay's own models, so the box below is written in the
-        // north frame the models are authored in: quarter turns clockwise about the block's vertical centre axis.
-        ms.translate(0.5F, 0.0F, 0.5F);
-        ms.mulPose(Axis.YP.rotationDegrees(-QUARTER_TURN_DEGREES * quarterTurns(facing)));
+        // The box below is written in the north frame the models are authored in.
+        BayItemRenderer.turnOnto(ms, facing);
         ms.translate(-0.5F, 0.0F, -0.5F);
         NeoForgeCatnipServices.FLUID_RENDERER.renderFluidBox(display,
                 pixels(FluidBayLayout.FLUID_MIN_X_PX), pixels(bottom), pixels(FluidBayLayout.FLUID_MIN_Z_PX),
                 pixels(FluidBayLayout.FLUID_MAX_X_PX), pixels(bottom + film), pixels(FluidBayLayout.FLUID_MAX_Z_PX),
-                buffer, ms, fluidLight(bay, facing, light), RENDER_BOTTOM, INVERT_GASSES);
+                buffer, ms, bayItem.openFrontLight(level, bay.getBlockPos(), facing, light), RENDER_BOTTOM,
+                INVERT_GASSES);
         ms.popPose();
+        // Recorded for the visual harness, which checks what a bay really drew.
+        bay.recordDrawnFluid(stored, Util.getNanos());
+    }
+
+    /**
+     * The filter item an empty bay shows (issue #61), cut off at Create's {@code filterItemRenderDistance}. Most bays
+     * have no filter and return before anything is looked up or allocated.
+     */
+    private void renderFilter(FluidBayBlockEntity bay, Level level, PoseStack ms, MultiBufferSource buffer,
+                              int light) {
+        ItemStack filter = displayedItem(bay);
+        if (filter.isEmpty() || beyondFilterItemDistance(bay, level))
+            return;
+        bayItem.draw(filter, level, bay.getBlockPos(), bay.facing(), ms, buffer, light);
+        // Recorded for the visual harness, which checks that this draw happened, not only what displayedItem decides.
+        bay.recordDrawn(filter, Util.getNanos());
+    }
+
+    /**
+     * The item this renderer draws for {@code bay}, by {@link BayDisplay#choose}: the store filter item of an empty bay,
+     * else {@link ItemStack#EMPTY}. A bay with fluid in it draws that fluid and <b>no</b> item. Allocates nothing: the
+     * filter is the behaviour's own stack ({@code FluidBayBlockEntity#storeFilterView}), which is only read here.
+     * Public so the visual harness can check what a bay shows ({@code dev.wareworks.dev.BlocksVisualScenario}).
+     */
+    public ItemStack displayedItem(FluidBayBlockEntity bay) {
+        ItemStack filter = bay.storeFilterView();
+        boolean holdsFluid = bay.storedFluidOrNull() != null && bay.millibuckets() > 0;
+        return BayDisplay.choose(holdsFluid, !filter.isEmpty()) == BayDisplay.FILTER ? filter : ItemStack.EMPTY;
+    }
+
+    /**
+     * Whether the camera is farther from {@code bay} than the distance Create cuts a filter item off at; the check
+     * {@link WarehouseInterfaceRenderer} makes, which leaves a Ponder scene's virtual block entities alone.
+     */
+    private static boolean beyondFilterItemDistance(FluidBayBlockEntity bay, Level level) {
+        if (bay.isVirtual())
+            return false;
+        Entity camera = Minecraft.getInstance().cameraEntity;
+        float max = AllConfigs.client().filterItemRenderDistance.getF();
+        BlockPos pos = bay.getBlockPos();
+        // distanceToSqr with three doubles, so nothing is allocated per bay per frame.
+        return camera != null && level == camera.level()
+                && camera.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) > max * max;
     }
 
     /** The cached one-millibucket stack of {@code key}, built once and reused; see {@link #displayStacks}. */
@@ -139,35 +189,6 @@ public class FluidBayRenderer extends SafeBlockEntityRenderer<FluidBayBlockEntit
         display = key.toStack();
         displayStacks.put(key, display);
         return display;
-    }
-
-    /**
-     * Quarter turns clockwise from north, i.e. the {@code y} rotation the generated blockstate gives the bay's models
-     * ({@code WareworksBlockStateGen#fluidBayBlockProvider}). A bay whose state somehow carries a vertical facing is
-     * drawn as if it faced north rather than not at all.
-     */
-    private static int quarterTurns(Direction facing) {
-        return switch (facing) {
-            case EAST -> 1;
-            case SOUTH -> 2;
-            case WEST -> 3;
-            default -> 0;
-        };
-    }
-
-    /**
-     * The brighter of the bay's own light (passed in by the dispatcher) and the aisle block's, the rule
-     * {@link RackBayRenderer} and the crane's arm already use: a bay is not a solid block but still attenuates light
-     * like any non-solid one, so deep in a rack wall its own position is dim while its open front faces a lit aisle.
-     * {@code renderFluidBox} then raises the block light further to the fluid's own luminosity, which is what makes
-     * lava light itself.
-     */
-    private int fluidLight(FluidBayBlockEntity bay, Direction facing, int ownLight) {
-        Level level = bay.getLevel();
-        if (level == null)
-            return ownLight;
-        lightCursor.setWithOffset(bay.getBlockPos(), facing.getOpposite());
-        return SuperByteBuffer.maxLight(ownLight, LevelRenderer.getLightColor(level, lightCursor));
     }
 
     private static float pixels(float modelPixels) {

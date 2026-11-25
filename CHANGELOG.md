@@ -12,6 +12,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Spanish translation** (es_es), contributed by [@albertosaurio65](https://github.com/albertosaurio65)
   ([#48](https://github.com/Richie1710/create-wareworks/pull/48)).
 
+### Changed
+
+- **The two fluid cells of a production pattern moved left of the arrow**
+  ([#62](https://github.com/Richie1710/create-wareworks/issues/62)). They stood above and below the result and looked
+  like outputs. Now everything that goes in is left of the arrow (the 3 × 3 items and the two fluid cells, an empty one
+  marked with a drop) and the result stands alone on the right. The window is the same size; with many pattern tabs it
+  sits a little tighter. Saved patterns are unchanged.
+
+### Fixed
+
+- **Corrected the docs: a clipboard typed by hand does not work as a list**
+  ([#63](https://github.com/Richie1710/create-wareworks/issues/63)). The README and the design docs said it works like a
+  Schematicannon's checklist. It does not: the terminal and the Warehouse Optimizer read the item attached to a
+  clipboard entry, never its text, and typing a line attaches no item. In Create, the checklist a Schematicannon writes
+  onto a clipboard carries them; you can tick off what you do not want from it. The in-game tooltips of
+  both blocks and of the terminal's list slot now name that checklist and its unticked entries. The mod itself behaves
+  as before.
+- **A production pattern without a result now says why it is never offered**
+  ([#62](https://github.com/Richie1710/create-wareworks/issues/62)). It was ignored without a word. While a pattern has
+  ingredients but no result, the empty result cell and its tab show a gold "?", their tooltips and the arrow's say
+  that the pattern is never ordered, and the station's goggles name it instead of "No patterns set".
+- **A bucket and a fluid cell for the same fluid are warned about**
+  ([#62](https://github.com/Richie1710/create-wareworks/issues/62)). A filled bucket in the item grid is an item the
+  order pays, on top of the fluid cell. Its cell is now framed in orange with a "!", and the tooltips say that both
+  are paid. Nothing is converted, because some recipes need the bucket itself.
+- **An empty Fluid Bay now shows its filter** ([#61](https://github.com/Richie1710/create-wareworks/issues/61)). The
+  filter worked, but an empty bay drew nothing. It now shows the filter item at its front, as an empty Rack Bay does:
+  the bucket you set, or a List, Attribute or Package Filter. It is the item and not a picture of the fluid, so it
+  cannot be mistaken for contents. A bay with fluid in it keeps showing only the fluid, and an empty bay without a
+  filter still shows nothing. The fluid is visible from as far away as before; the filter item only up to Create's
+  filter item distance.
+- **Storing a fluid no longer spreads it over two Fluid Bays**
+  ([#60](https://github.com/Richie1710/create-wareworks/issues/60)). The crane did not see what a bay already held, so a
+  nearer empty bay could take the next water bucket. It now stores into the bay that holds that fluid, counting buckets
+  other cranes are bringing there, until no whole bucket fits any more. As with items, a bay holding the fluid comes
+  before an empty bay even of a higher priority; between two bays holding it, the higher priority wins, then the fuller
+  one. Fluid already spread over two bays is not moved together (Merge leaves Fluid Bays alone).
+
 ## [0.27.0-beta] - 2026-11-24
 
 ### Added

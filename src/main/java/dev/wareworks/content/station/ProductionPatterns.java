@@ -383,6 +383,26 @@ public final class ProductionPatterns {
         }
     }
 
+    /**
+     * Whether slot {@code pattern} holds an ingredient (a grid cell or a fluid cell) but no result (issue #62). Such a
+     * pattern is incomplete: it is never offered or ordered, and the station says so.
+     */
+    public boolean lacksResult(int pattern) {
+        if (pattern < 0 || pattern >= slots.size() || slots.get(pattern).keys[RESULT_ENTRY] != null)
+            return false;
+        return filledCells(pattern) > 0 || !fluidCells(pattern).isEmpty();
+    }
+
+    /** Every slot that {@linkplain #lacksResult lacks its result}, in slot order. */
+    public List<Integer> slotsWithoutResult() {
+        List<Integer> lacking = new ArrayList<>(0);
+        for (int pattern = 0; pattern < slots.size(); pattern++) {
+            if (lacksResult(pattern))
+                lacking.add(pattern);
+        }
+        return lacking;
+    }
+
     /** Every complete pattern of this station, in slot order. */
     public List<ProductionPattern<ItemKey>> patterns() {
         List<ProductionPattern<ItemKey>> complete = new ArrayList<>(slots.size());

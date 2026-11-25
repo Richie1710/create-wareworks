@@ -40,7 +40,12 @@ class ProductionFluidTextWidthTest {
     /** Tooltip lines without arguments. */
     private static final List<String> PLAIN_LINES = List.of("gui.production.fluid.cell",
             "gui.production.fluid.whole", "gui.production.fluid.rest", "gui.production.fluid.set_hint",
-            "gui.production.fluid.wheel_hint", "gui.production.fluid.clear_hint", "gui.production.fluid.unknown");
+            "gui.production.fluid.wheel_hint", "gui.production.fluid.clear_hint", "gui.production.fluid.unknown",
+            "gui.production.fluid.paid_twice", "gui.production.fluid.also_in_grid",
+            "gui.production.fluid.twice_hint");
+    /** The tooltip lines of a pattern without a result (issue #62): the result cell, the arrow and the tab. */
+    private static final List<String> NO_RESULT_LINES = List.of("gui.production.no_result.reason",
+            "gui.production.no_result.hint");
     /** Tooltip lines whose one argument is an amount. */
     private static final List<String> AMOUNT_LINES = List.of("gui.production.fluid.amount",
             "gui.production.fluid.buckets");
@@ -54,6 +59,8 @@ class ProductionFluidTextWidthTest {
         for (Map.Entry<String, Path> language : languages().entrySet()) {
             String name = language.getKey();
             Map<String, String> lang = ItemTooltipLengthTest.strings(language.getValue());
+            for (String key : NO_RESULT_LINES)
+                check(tooWide, name, key, ItemTooltipLengthTest.width(text(lang, name, key), advances), TOOLTIP_ROOM);
             for (String key : PLAIN_LINES)
                 check(tooWide, name, key, ItemTooltipLengthTest.width(text(lang, name, key), advances), TOOLTIP_ROOM);
             for (String key : AMOUNT_LINES) {
@@ -84,6 +91,12 @@ class ProductionFluidTextWidthTest {
         measured.addAll(AMOUNT_LINES);
         measured.addAll(HOTBAR_LINES);
         assertEquals(own, measured, "every fluid cell text must be measured by the test above");
+        Set<String> noResult = new TreeSet<>();
+        for (String key : ItemTooltipLengthTest.strings(GENERATED_EN_US).keySet()) {
+            if (key.startsWith(PREFIX + "gui.production.no_result."))
+                noResult.add(key.substring(PREFIX.length()));
+        }
+        assertEquals(noResult, new TreeSet<>(NO_RESULT_LINES), "and every line about a missing result");
     }
 
     private static void check(List<String> tooWide, String language, String key, int width, int room) {

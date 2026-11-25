@@ -4860,8 +4860,13 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * reservation ledger, which holds the jobs of one crane, and asked only for a fluid a rule governs.
      */
     long inboundFluid(FluidKey fluid) {
+        return inboundFluid(fluid, dispatch.reservations().reservations());
+    }
+
+    /** {@link #inboundFluid(FluidKey)} over {@code reservations}, which may be those of one location. */
+    private long inboundFluid(FluidKey fluid, List<Reservation<ItemKey, RackPosition>> reservations) {
         long inbound = 0L;
-        for (Reservation<ItemKey, RackPosition> reservation : dispatch.reservations().reservations()) {
+        for (Reservation<ItemKey, RackPosition> reservation : reservations) {
             if (reservation.kind() != Reservation.Kind.CAPACITY || !takesFluidContainers(reservation.location()))
                 continue;
             Optional<FluidContainers.Contents> contents = FluidContainers.contents(reservation.key());
@@ -4869,6 +4874,26 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 inbound += (long) reservation.amount() * contents.get().millibuckets();
         }
         return inbound;
+    }
+
+    /**
+     * Millibuckets of the fluid carried by {@code containerKey} that the fluid bay at {@code rack} holds, or is being
+     * brought by a crane inside filled containers: what the planner counts as the bay's holding when it ranks a place to
+     * store that container (issue #60, ADR-088 D1). 0 for every location that is no fluid bay, and for an item that
+     * carries no fluid.
+     * <p>
+     * The amount on its way counts by <b>fluid</b> and not by container key (issue #51's rule for several cranes), so a
+     * second crane joins the bay a first one is still driving to. The first test is one map read, so a location that is
+     * no fluid bay costs nothing more; the reservations are walked for a bay only.
+     */
+    public long fluidHeldFor(RackPosition rack, ItemKey containerKey) {
+        if (!takesFluidContainers(rack))
+            return 0L;
+        Optional<FluidContainers.Contents> contents = FluidContainers.contents(containerKey);
+        if (contents.isEmpty())
+            return 0L;
+        FluidKey fluid = contents.get().fluid();
+        return fluidStock.countAt(fluid, rack) + inboundFluid(fluid, dispatch.reservations().reservationsAt(rack));
     }
 
     /**

@@ -1501,7 +1501,10 @@ public final class JobPlanner<K, L> {
             // into an empty location the index shows empty until the delivery (the index is refreshed right after it),
             // and without this the two would open two locations for one item. Room reserved for another key attracts
             // nothing. With one crane no job is in flight while one is planned, so nothing changes there.
-            long held = input.stock().countAt(key, location);
+            // A fluid bay holds no items of any key: what it holds of the fluid inside this container, stored or on its
+            // way, is what it holds (issue #60). It is 0 at every other location.
+            long held = Math.max(input.stock().countAt(key, location),
+                    input.heldAsContents().applyAsLong(location, key));
             boolean consolidates = held > 0 || input.reservations().reservedCapacity(location, key) > 0;
             // Nothing of another item type (per index): item types are not mixed while such locations are free.
             boolean compatible = consolidates || holdsOnlyTypeOf(input, location, key);

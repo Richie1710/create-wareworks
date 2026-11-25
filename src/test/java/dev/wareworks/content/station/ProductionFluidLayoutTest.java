@@ -7,8 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Where the two fluid cells of a pattern sit in the production station's window (issue #55, ADR-089): in the column of
- * the result cell, above and below it, so they cost no height at any configuration and overlap nothing.
+ * Where the two fluid cells of a pattern sit in the production station's window (issue #55, ADR-089; moved by issue
+ * #62): a column of their own among the ingredients, left of the arrow; they cost no height at any configuration and
+ * overlap nothing.
  */
 class ProductionFluidLayoutTest {
     private static final int SLOT = ProductionMenuLayout.SLOT;
@@ -48,17 +49,31 @@ class ProductionFluidLayoutTest {
         }
     }
 
-    /** The cells sit above and below the result cell, so a fluid cell adds no row to the window. */
+    /**
+     * The cells are ingredients: a column of their own between the grid and the arrow, so the result stands alone right
+     * of the arrow (issue #62). They add no row to the window.
+     */
     @Test
-    void theCellsFlankTheResultCell() {
+    void theCellsStandLeftOfTheArrowAndTheResultStandsAlone() {
+        for (int patterns = 1; patterns <= ProductionPatterns.MAX_SLOTS; patterns++) {
+            ProductionMenuLayout layout = new ProductionMenuLayout(9, patterns);
+            String where = patterns + " patterns";
+            int gridRight = layout.patternCellX(2) + SLOT;
+            int resultX = layout.patternCellX(ProductionMenuLayout.RESULT_CELL);
+            for (int cell = 0; cell < ProductionPatterns.FLUID_CELLS; cell++) {
+                assertTrue(layout.fluidCellX(cell) > gridRight, where + ": set off from the 3 x 3");
+                assertTrue(layout.fluidCellX(cell) + SLOT <= layout.arrowX(), where + ": left of the arrow");
+            }
+            assertEquals(layout.fluidCellX(0), layout.fluidCellX(1), where + ": one column");
+            assertTrue(layout.fluidCellY(1) >= layout.fluidCellY(0) + SLOT, where + ": the second one below");
+            assertEquals(layout.fluidCellY(0) - layout.patternsY(),
+                    layout.patternsY() + 3 * SLOT - (layout.fluidCellY(1) + SLOT),
+                    where + ": centred beside the grid, so they do not read as a fourth grid column");
+            assertTrue(layout.fluidCellY(0) > layout.patternsY(), where + ": off the grid's rows");
+            assertTrue(resultX >= layout.arrowX() + ProductionMenuLayout.ARROW_WIDTH,
+                    where + ": the result is right of the arrow");
+        }
         ProductionMenuLayout layout = new ProductionMenuLayout(9, 8);
-        int resultX = layout.patternCellX(ProductionMenuLayout.RESULT_CELL);
-        int resultY = layout.patternCellY(ProductionMenuLayout.RESULT_CELL);
-        assertEquals(resultX, layout.fluidCellX(0));
-        assertEquals(resultX, layout.fluidCellX(1));
-        assertEquals(resultY - SLOT, layout.fluidCellY(0), "the first one directly above");
-        assertEquals(resultY + SLOT, layout.fluidCellY(1), "the second one directly below");
-        assertEquals(layout.patternsY(), layout.fluidCellY(0), "flush with the grid's first row");
         // The window is exactly as tall as it was without fluid cells: the height formula names no fluid row.
         assertEquals(layout.playerSlotsY() + ProductionMenuLayout.PLAYER_SLOTS_HEIGHT
                 + ProductionMenuLayout.BOTTOM_MARGIN, layout.height());

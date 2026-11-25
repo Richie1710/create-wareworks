@@ -10,8 +10,9 @@ import dev.wareworks.core.production.ProductionPattern;
  * two numbers both sides know — the station's buffer size and its number of pattern slots — which the server writes
  * into the menu's extra data.
  * <p>
- * <b>One pattern at a time.</b> The window shows the 3 x 3 grid and the result of the <i>selected</i> pattern, with a
- * strip of pattern tabs beside it; showing every pattern's grid at once would need
+ * <b>One pattern at a time.</b> The window shows the <i>selected</i> pattern, read from left to right: the 3 x 3 grid,
+ * the column of the two fluid cells, the arrow and the result alone (issue #62: what goes in stands left of the arrow,
+ * what comes out right of it), with a strip of pattern tabs beside it; showing every pattern's grid at once would need
  * {@code maxProductionPatterns × 54} pixels and could not fit. The tabs always stay inside the grid's own height of
  * {@value #VISIBLE_TAB_ROWS} rows, so they cost no extra row at any configuration (issue #35, ADR-068):
  * <ul>
@@ -46,10 +47,16 @@ public final class ProductionMenuLayout {
     public static final int GAP = 2;
     /** Cells per row of the authoring grid. */
     public static final int GRID_WIDTH = ProductionPattern.GRID_WIDTH;
-    /** Space between the grid and the result cell, where the arrow is drawn. */
-    public static final int ARROW_WIDTH = 14;
-    /** Space between the result cell and the pattern tabs. */
+    /** Space between the grid and the column of the fluid cells (issue #62). */
+    public static final int FLUID_GAP = 2;
+    /** Space between the two fluid cells. */
+    public static final int FLUID_SPACING = 2;
+    /** Space between the fluid column and the result cell, where the arrow is drawn. */
+    public static final int ARROW_WIDTH = 12;
+    /** Space between the result cell and the pattern tabs, while the window has room for it. */
     public static final int TAB_GAP = 12;
+    /** Smallest that space becomes, with the widest tab strips. */
+    public static final int MIN_TAB_GAP = 5;
     /** Columns of the pattern tab strip up to 9 patterns (the look of every station before issue #35). */
     public static final int MIN_TAB_COLUMNS = 3;
     /** Most columns the pattern tab strip widens to; above 3 rows of these the strip scrolls. */
@@ -79,6 +86,11 @@ public final class ProductionMenuLayout {
     /** The cell index of the result cell. */
     public static final int RESULT_CELL = ProductionPatterns.RESULT_ENTRY;
 
+    /** The pattern block left of the tab gap: grid, fluid column, arrow and result. */
+    private static final int PATTERN_WIDTH = GRID_WIDTH * SLOT + FLUID_GAP + SLOT + ARROW_WIDTH + SLOT;
+    /** Height of the two fluid cells with the space between them, centred in the pattern block. */
+    private static final int FLUID_COLUMN_HEIGHT =
+            ProductionPatterns.FLUID_CELLS * SLOT + (ProductionPatterns.FLUID_CELLS - 1) * FLUID_SPACING;
     /** Height of the pattern block: three grid rows, which is also the tallest the tab strip can become. */
     private static final int PATTERN_BLOCK_HEIGHT = GRID_WIDTH * SLOT;
 
@@ -197,9 +209,21 @@ public final class ProductionMenuLayout {
         return patternLabelY() + LABEL_HEIGHT;
     }
 
-    /** Width of the pattern block: grid, arrow, result, gap, tab strip and, when it scrolls, the scroll bar. */
+    /**
+     * Space between the result cell and the tab strip: {@value #TAB_GAP} while the block then keeps the window's margins,
+     * narrowed down to {@value #MIN_TAB_GAP} for the wide strips.
+     */
+    public int tabGap() {
+        int room = WIDTH - 2 * MARGIN - PATTERN_WIDTH - tabStripWidth();
+        return Math.max(MIN_TAB_GAP, Math.min(TAB_GAP, room));
+    }
+
+    /**
+     * Width of the pattern block: grid, fluid column, arrow, result, gap, tab strip and, when it scrolls, the scroll bar.
+     * With six tab columns it is wider than the window less its two margins and stays 4 px inside the window's edges.
+     */
     public int patternBlockWidth() {
-        return GRID_WIDTH * SLOT + ARROW_WIDTH + SLOT + TAB_GAP + tabStripWidth();
+        return PATTERN_WIDTH + tabGap() + tabStripWidth();
     }
 
     /** Left edge of the pattern block, centred in the window. */
@@ -210,7 +234,7 @@ public final class ProductionMenuLayout {
     /** X of a pattern cell: {@code 0..8} are the grid, {@value #RESULT_CELL} is the result. */
     public int patternCellX(int cell) {
         if (cell == RESULT_CELL)
-            return patternsX() + GRID_WIDTH * SLOT + ARROW_WIDTH;
+            return arrowX() + ARROW_WIDTH;
         int index = Math.max(0, Math.min(cell, RESULT_CELL - 1));
         return patternsX() + index % GRID_WIDTH * SLOT;
     }
@@ -224,27 +248,28 @@ public final class ProductionMenuLayout {
     }
 
     /**
-     * X of fluid cell {@code cell} (0 or 1, issue #55, ADR-089): the column of the result cell, whose free space above and
-     * below it is exactly one cell tall. A fluid cell therefore costs the window no height, so every combination the
-     * configuration allows still fits the 320 x {@value #MAX_HEIGHT} floor.
+     * X of fluid cell {@code cell} (0 or 1, issue #55, ADR-089): a column of its own between the grid and the arrow, so a
+     * fluid reads as an ingredient (issue #62). The column is inside the grid's height, so a fluid cell costs the window
+     * no height and every combination the configuration allows still fits the 320 x {@value #MAX_HEIGHT} floor.
      */
     public int fluidCellX(int cell) {
-        return patternCellX(RESULT_CELL);
+        return patternsX() + GRID_WIDTH * SLOT + FLUID_GAP;
     }
 
-    /** Y of fluid cell {@code cell}: 0 is above the result cell, 1 below it (flush with the grid's first and last row). */
+    /** Y of fluid cell {@code cell}: 0 above 1, the two centred beside the grid, off its rows. */
     public int fluidCellY(int cell) {
-        return cell <= 0 ? patternsY() : patternsY() + PATTERN_BLOCK_HEIGHT - SLOT;
+        int top = patternsY() + (PATTERN_BLOCK_HEIGHT - FLUID_COLUMN_HEIGHT) / 2;
+        return cell <= 0 ? top : top + SLOT + FLUID_SPACING;
     }
 
-    /** X of the arrow between the grid and the result cell. */
+    /** X of the arrow between the ingredients and the result cell. */
     public int arrowX() {
-        return patternsX() + GRID_WIDTH * SLOT;
+        return patternsX() + GRID_WIDTH * SLOT + FLUID_GAP + SLOT;
     }
 
     /** Left edge of the pattern tab strip. */
     public int tabsX() {
-        return patternsX() + GRID_WIDTH * SLOT + ARROW_WIDTH + SLOT + TAB_GAP;
+        return patternsX() + PATTERN_WIDTH + tabGap();
     }
 
     /** Row of the pattern tab of slot {@code pattern}; tabs run row by row. */

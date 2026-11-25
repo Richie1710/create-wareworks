@@ -113,8 +113,8 @@ teleported: every item you put in or take out is carried by the crane, where you
   **Packages at the door** sections below.
 * **Warehouse Terminal**: a searchable screen showing the whole warehouse's stock; click an item and the crane
   delivers it into the terminal. Its grid is ordered by what there is most of, by what **you** request most often, or
-  by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard — a Schematicannon's material
-  checklist, or one you wrote yourself — into its list slot, and the warehouse works the list off in portions and ticks
+  by name — your choice, remembered for you. Or hand it a whole **list**: put a clipboard with a Schematicannon's
+  material checklist into its list slot, and the warehouse works the list off in portions and ticks
   each entry off as it delivers it. A **crafting grid** folds out beside the screen: lay a recipe with ghost items (or
   in one click with **JEI**'s **+**, if you play with JEI), press **Fetch** and the crane brings exactly what is missing
   for the crafts you want — an ingredient the warehouse lacks it offers to have **made first** at your own machines —
@@ -406,7 +406,10 @@ can, **ticks each entry off on the clipboard as it delivers it**, and waits when
 refusing — so a whole building's worth of material arrives in portions while you carry the crates to the site. Pick the
 clipboard up at any time and the ticks tell you what arrived and what is still outstanding: the list is the order and
 its receipt in one. A **Schematicannon** writes its material checklist straight onto a clipboard, so "build this
-schematic" becomes "hand the warehouse the shopping list"; a hand-written clipboard works exactly the same. If the list
+schematic" becomes "hand the warehouse the shopping list". **A clipboard you type yourself does not work as a list:**
+the warehouse reads the item attached to an entry and its amount, never the text, and typing a line attaches no item. In
+Create the Schematicannon's checklist is what carries them. That checklist cannot be retyped, but you can tick off what
+you do not want before you hand it in. If the list
 wants more than the warehouse has, or if something on it would have to be **produced** first, the terminal asks before
 it starts and tells you the numbers for the whole list. Underneath it is nothing new: every entry becomes an ordinary
 request, so batching, filters, priorities, reserves and maxima all still apply and the crane fetches every single item
@@ -684,7 +687,8 @@ together down a whole rack wall.
 
 **Tidying up with a Warehouse Optimizer.** Prioritised a rack wall after the warehouse filled, or built new racks beside
 a full overflow? Place a **Warehouse Optimizer** into the rack, right-click it and set the items to move: click an item
-onto a row, or click a filled-in clipboard onto the list cell left of the status line to add everything it lists. Each
+onto a row, or click a clipboard with a Schematicannon's checklist onto the list cell left of the status line to add the
+items it lists that are not ticked off (typed lines carry no item and add nothing). Each
 row shows how many lie at the best priority that holds the item, how many lie below it, and about how many could move
 now. Press **Optimise** (or a row's dot for that item alone) and the crane carries the items up, from the lowest
 priority first, whenever it has no request, production order or arrival to deal with. It moves only the free surplus:
@@ -790,8 +794,8 @@ pattern of the station is now one recipe for the Crafter, cell for cell:
 * Server config: `crafterFeederRequiresRotation` (default on) and `crafterFeederStressImpact` (2.0, like a Mechanical
   Crafter).
 
-**A pattern can name a fluid.** Besides its 3 × 3 items, a pattern has **two fluid cells** (above and below the
-result): click one with a **filled bucket** and it holds that fluid, the mouse wheel sets the millibuckets one run
+**A pattern can name a fluid.** Besides its 3 × 3 items, a pattern has **two fluid cells** (between the grid and the
+arrow, with the other ingredients; the result stands alone right of the arrow): click one with a **filled bucket** and it holds that fluid, the mouse wheel sets the millibuckets one run
 takes (50 mB a notch, Shift 250, Ctrl 1000; at most 1000 mB, the size of a Basin's tank), a right-click empties it. That
 is for the recipes of a **Basin under a Mechanical Mixer** that need water or lava, for example mud from dirt and 250
 mB of water. Order the product at the terminal as always:
@@ -820,6 +824,13 @@ mB of water. Order the product at the terminal as always:
   the buffer" while no order is open), or the next order of that fluid waits. **Shift-clicking a bucket** from your
   inventory still writes an *item* cell, not a fluid cell; click it onto the fluid cell instead. A fluid cell keeps only
   the fluid: a potion becomes its base fluid, item components of the container are dropped.
+* **A bucket in the grid is an item.** It is never turned into a fluid, because some recipes use the bucket itself.
+  While a fluid cell of the same pattern asks for that fluid too, the bucket's cell is framed in orange with a "!"
+  and its tooltip says that an order pays both; if you only need the fluid, clear the bucket's cell.
+* **A pattern needs a result.** While a pattern has ingredients but nothing right of the arrow, it is never offered or
+  ordered: the empty result cell and its tab show a gold "?", their tooltips and the arrow's say why, and the
+  station's goggles name the pattern. Put what the machine makes there (it fills in by itself only for a crafting
+  recipe).
 * **What it does not do:** a pattern cannot **make** a fluid, a Crafter Feeder refuses a pattern with a fluid cell
   (a Crafter cannot take one), package mode makes nothing so the cells stay inert, and an automatic stock-rule restock
   skips such a pattern. JEI's "+" lays a recipe's fluid inputs as fluid cells. **Downgrading** to an older Wareworks

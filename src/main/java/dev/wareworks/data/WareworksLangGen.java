@@ -298,6 +298,9 @@ public final class WareworksLangGen {
                 "Patterns with a fluid: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_FLUID_HELD),
                 "Filled containers left in the buffer: %1$s (take them out)");
+        // Patterns with ingredients but no result (issue #62).
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_NO_RESULT), "Pattern %1$s has no result");
+        lang.accept(WareworksLang.key(WareworksLang.GOGGLES_PRODUCTION_NO_RESULTS), "Patterns without a result: %1$s");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_CRAFTER_FEEDER), "Crafter Feeder:");
         // Count last, with no plural noun after it: the count reaches 1 on every order's last run.
         lang.accept(WareworksLang.key(WareworksLang.CRAFTER_FEEDER_FEEDING), "Crafting %1$s \u00b7 runs left: %2$s");
@@ -938,7 +941,7 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_TERMINAL_CRAFT), "Crafting fetch: %1$s of %2$s (%3$s)");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_LABEL), "Clipboard");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_SLOT),
-                "A clipboard with a list of items - the warehouse fetches it and ticks off what it delivered");
+                "A Schematicannon's checklist - the warehouse fetches unticked items and ticks off deliveries");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_EMPTY),
                 "Put a clipboard in to order a whole list");
         lang.accept(WareworksLang.key(WareworksLang.TERMINAL_LIST_FETCH), "Fetch the whole list");
@@ -1205,6 +1208,17 @@ public final class WareworksLangGen {
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_UNKNOWN), "Unknown fluid (its mod is missing?)");
         lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_SAME),
                 "The other fluid cell already holds this fluid");
+        // A filled bucket in the grid while a fluid cell asks for the same fluid (issue #62), measured with the above.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_PAID_TWICE),
+                "A fluid cell asks for it too: you pay both");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_ALSO_IN_GRID),
+                "A grid cell holds it in a bucket: you pay both");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_FLUID_TWICE_HINT),
+                "Only need the fluid? Clear the bucket's cell");
+        // A pattern without a result (issue #62): tooltip lines, measured by ProductionFluidTextWidthTest.
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_NO_RESULT), "No result: this pattern is never ordered");
+        lang.accept(WareworksLang.key(WareworksLang.PRODUCTION_NO_RESULT_HINT),
+                "Put what the machine makes right of the arrow");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_RULES), "Rules");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_EMPTY_ROW), "Empty row");
         lang.accept(WareworksLang.key(WareworksLang.KEEPER_MINIMUM), "Minimum");
@@ -1502,8 +1516,7 @@ public final class WareworksLangGen {
         tooltip(lang, "block.wareworks.warehouse_terminal",
                 "Orders _items_ from the connected _warehouse_. Works with _funnels_ and _Mechanical Arms_.",
                 "With a clipboard",
-                "A filled-in _clipboard_, such as a _Schematicannon's_ material list, orders the whole list at "
-                        + "once.");
+                "A _Schematicannon's_ checklist _clipboard_ orders all its unticked items at once.");
 
         tooltip(lang, "block.wareworks.warehouse_production",
                 "Supplies your _machines_ with ingredients from a _pattern_. Works with _funnels_ and a _Mechanical "
@@ -1759,7 +1772,8 @@ public final class WareworksLangGen {
                 "The crane moves what fits _now_, whenever it has nothing else to do, for a limited number of "
                         + "_trips_. Reserved items stay put.",
                 "With a clipboard",
-                "Click a filled-in _clipboard_ onto the list cell of its screen to add the items it lists.");
+                "Click a _Schematicannon's_ checklist _clipboard_ onto the list cell of its screen to add its "
+                        + "unticked items.");
 
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_WAREHOUSE_OPTIMIZER), "Warehouse Optimizer:");
         lang.accept(WareworksLang.key(WareworksLang.GOGGLES_OPTIMIZER_ITEMS), "Items: %1$s");

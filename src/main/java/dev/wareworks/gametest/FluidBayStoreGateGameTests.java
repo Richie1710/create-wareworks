@@ -14,6 +14,7 @@ import dev.wareworks.content.storage.FluidBayBlock;
 import dev.wareworks.content.storage.FluidBayBlockEntity;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.crane.CranePhase;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
@@ -25,6 +26,7 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.world.Clearable;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -83,6 +85,8 @@ public final class FluidBayStoreGateGameTests {
      */
     private static final RackPosition CHEST_RACK = new RackPosition(1, 0, Side.LEFT);
     private static final RackPosition BAY_RACK = new RackPosition(4, 0, Side.LEFT);
+    /** A second bay, nearer to the input than {@link #BAY_RACK}, for issue #60. */
+    private static final RackPosition NEAR_BAY_RACK = new RackPosition(2, 0, Side.LEFT);
 
     private static final ItemKey LAVA_BUCKET = ItemKey.of(Items.LAVA_BUCKET);
     private static final ItemKey WATER_BUCKET = ItemKey.of(Items.WATER_BUCKET);
@@ -164,6 +168,86 @@ public final class FluidBayStoreGateGameTests {
                             "the nearer chest never saw it, because a dedication outranks travel time");
                     aisle.assertIdleAndEmpty();
                     retire(helper, aisle, bay, fluid);
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * Issue #60: storing joins the bay that already holds the fluid. Two unfiltered copper bays, the farther one holding
+     * one bucket of water: a water bucket goes to the <b>farther</b> one, although the nearer empty bay accepts it just
+     * as well, and the nearer one therefore stays free for the lava bucket that arrives next. Before the fix the planner
+     * read only the item index, which counts nothing at a fluid bay, so travel time decided and the water spread over
+     * both bays.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void aWaterBucketJoinsTheFartherFluidBayThatHoldsWater(GameTestHelper helper) {
+        AisleFixture aisle = new AisleFixture(helper, AISLE_Z, RAILS);
+        for (RackPosition rack : List.of(NEAR_BAY_RACK, BAY_RACK))
+            helper.setBlock(aisle.rackPos(rack), WareworksBlocks.FLUID_BAY_COPPER.getDefaultState()
+                    .setValue(FluidBayBlock.FACING, aisle.sideDirection(rack)));
+        aisle.build(true);
+        aisle.storage(CHEST_RACK);
+        aisle.input(INPUT_RACK);
+        FluidBayBlockEntity near = bayAt(helper, aisle.rackPos(NEAR_BAY_RACK));
+        FluidBayBlockEntity far = bayAt(helper, aisle.rackPos(BAY_RACK));
+        Map<ItemKey, Long> items = ItemCensus.of();
+        Map<FluidKey, Long> fluid = FluidCensus.of();
+        helper.onEachTick(() -> FluidCensus.assertEquals(helper, fluid, "no fluid appears or disappears"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> aisle.assertReady(3, 1, 0))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(far.fill(new FluidStack(Fluids.WATER, BUCKET_MB), false), BUCKET_MB,
+                            "the farther bay takes the pre-fill");
+                    FluidCensus.change(fluid, WATER, BUCKET_MB);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().fluidStockIndex().count(WATER),
+                        (long) BUCKET_MB, "the warehouse knows about the water"))
+                .thenExecute(() -> aisle.motor().generatedSpeed.setValue(TEST_RPM))
+                .thenExecute(() -> arrive(aisle, items, fluid, WATER_BUCKET, WATER, 1))
+                // While the crane is still driving, the bucket on its way already counts as the bay's holding, which is
+                // what keeps a second crane from opening another water bay (issue #51's rule).
+                .thenWaitUntil(() -> {
+                    aisle.assertCarrying(CranePhase.TRAVEL_TO_TARGET, WATER_BUCKET, 1);
+                    helper.assertValueEqual(aisle.controller().fluidHeldFor(BAY_RACK, WATER_BUCKET),
+                            2L * BUCKET_MB, "the stored bucket and the one on its way");
+                    helper.assertValueEqual(aisle.controller().fluidHeldFor(BAY_RACK, LAVA_BUCKET), 0L,
+                            "none of it is lava");
+                    helper.assertValueEqual(aisle.controller().fluidHeldFor(NEAR_BAY_RACK, WATER_BUCKET), 0L,
+                            "the empty bay holds nothing");
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(near.millibuckets() + far.millibuckets(), 2 * BUCKET_MB,
+                        "one of the bays drained the bucket"))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(far.millibuckets(), 2 * BUCKET_MB,
+                            "the water joins the farther bay that holds water");
+                    helper.assertValueEqual(near.millibuckets(), 0, "and the nearer bay stays empty");
+                    ItemCensus.exchange(helper, items, WATER_BUCKET, EMPTY_BUCKET, 1);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.storedAt(CHEST_RACK, EMPTY_BUCKET), 1L,
+                        "the empty bucket is shelved"))
+                .thenExecute(() -> {
+                    FluidCensus.assertConserved(helper, items, fluid, "after the water was stored");
+                    arrive(aisle, items, fluid, LAVA_BUCKET, LAVA, 1);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(near.millibuckets(), BUCKET_MB,
+                        "the lava takes the nearer bay, which is still free"))
+                .thenExecute(() -> ItemCensus.exchange(helper, items, LAVA_BUCKET, EMPTY_BUCKET, 1))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.storedAt(CHEST_RACK, EMPTY_BUCKET), 2L,
+                        "the second empty bucket is shelved"))
+                .thenExecuteAfter(SETTLE_TICKS, () -> {
+                    helper.assertValueEqual(near.storedFluid().orElse(null), LAVA, "lava in the nearer bay");
+                    helper.assertValueEqual(far.storedFluid().orElse(null), WATER, "water in the farther one");
+                    helper.assertValueEqual(far.millibuckets(), 2 * BUCKET_MB, "all of it");
+                    FluidCensus.assertConserved(helper, items, fluid, "with both stored");
+                    aisle.assertIdleAndEmpty();
+                    helper.assertTrue(helper.getEntities(EntityType.ITEM).isEmpty(), "nothing was dropped");
+                    // retire() empties and removes the bay at BAY_RACK; the nearer one is emptied the same way here.
+                    retire(helper, aisle, far, fluid);
+                    BlockPos nearPos = aisle.rackPos(NEAR_BAY_RACK);
+                    Clearable.tryClear(helper.getLevel().getBlockEntity(helper.absolutePos(nearPos)));
+                    helper.setBlock(nearPos, Blocks.AIR);
+                    FluidCensus.change(fluid, LAVA, -BUCKET_MB);
                 })
                 .thenSucceed();
     }

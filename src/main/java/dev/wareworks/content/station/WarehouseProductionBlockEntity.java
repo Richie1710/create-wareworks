@@ -1397,10 +1397,13 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             for (int slot = 0; slot < patterns.size(); slot++)
                 refused += checkOf(slot).check().refused() ? 1 : 0;
         }
+        // Slots with ingredients but no result (issue #62), counted and the first one named by its tab number.
+        List<Integer> noResult = patterns.slotsWithoutResult();
+        int firstNoResult = noResult.isEmpty() ? 0 : noResult.getFirst() + 1;
         if (found.isEmpty())
             return new ProductionGoggleSummary(patterns.patternCount(), 0, Optional.empty(), 0L, 0L, 0, 0L, false,
                     feeder, refused, ProductionGoggleSummary.SelectorSummary.NONE, fluidPatternCount(),
-                    fluidContainersInBuffer());
+                    fluidContainersInBuffer(), noResult.size(), firstNoResult);
         List<StoppedProduct> stopped = stoppedProducts(found.get());
         long unrecovered = 0L;
         for (StoppedProduct entry : stopped)
@@ -1447,7 +1450,7 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
                 : ProductionGoggleSummary.SelectorSummary.NONE;
         return new ProductionGoggleSummary(patterns.patternCount(), open, oldest, missing, awaited, stopped.size(),
                 unrecovered, oldestWaitingForStep, feeder, refused, selector, fluidPatternCount(),
-                fluidContainersInBuffer());
+                fluidContainersInBuffer(), noResult.size(), firstNoResult);
     }
 
     /**
@@ -1488,9 +1491,16 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
         if (production.patterns() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_PATTERNS, production.patterns())
                     .forGoggles(tooltip, 1);
-        else
+        else if (production.noResultPatterns() == 0)
             WareworksLang.translate(WareworksLang.GOGGLES_PRODUCTION_NO_PATTERNS).style(ChatFormatting.GOLD)
                     .forGoggles(tooltip, 1);
+        // A pattern with ingredients but no result is never ordered, so it is named instead of counting as none (#62).
+        if (production.noResultPatterns() == 1)
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_NO_RESULT, production.firstNoResult())
+                    .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
+        else if (production.noResultPatterns() > 1)
+            WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_NO_RESULTS, production.noResultPatterns())
+                    .style(ChatFormatting.GOLD).forGoggles(tooltip, 1);
         if (production.fluidPatterns() > 0)
             WareworksLang.countLine(WareworksLang.GOGGLES_PRODUCTION_FLUID_PATTERNS, production.fluidPatterns())
                     .forGoggles(tooltip, 1);

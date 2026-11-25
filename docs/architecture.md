@@ -3297,6 +3297,11 @@ safety stop, none of which may be duplicated or bypassed.
   every copy of the stack; `tickOff` therefore puts a **ticked copy** in the entry's place rather than changing it,
   which keeps the mark on the one clipboard it was earned on and makes the new component compare unequal, so an open
   screen is really sent the receipt (M23 review fix, §3.4.4).
+
+  *Correction (issue #63):* the context above says a hand-written clipboard "has to work just as well". It does not,
+  and with this decision it cannot: the item comes from the entry's icon, and a line typed in Create's
+  `ClipboardScreen` has none. In Create 6.0.10 only `MaterialChecklist#createWrittenClipboard` attaches items (§3.4.4
+  of `warehouse-system.md`). The decision is unchanged.
 * **One confirmation mechanism, used twice.** Fetch raises one dialog measured over the **whole** list
   (`ListOrderConfirmation`: what the racks fall short of, what would be produced, what the entry cap left behind), and a
   Yes becomes a consent **budget** that the portions spend down. A portion that costs more than the remainder covers
@@ -4610,6 +4615,9 @@ the warehouse, and goods a player can identify from the aisle.
   draw the bay's **store filter** item on the block, in the value box at (8, 5) — a second item a hand's breadth from
   the stored one, saying something different. ADR-047's consequence therefore stands unchanged: a bay's store filter is
   read through the goggles and in the value box the crosshair rests on, and is not drawn on the block.
+  *Amended by issues #49 and #61:* an **empty** bay now draws its filter item in the stored item's place
+  (`BayDisplay`: stock first, else the filter, else nothing), so there is still never a second item beside the stock.
+  The pose, anchors and light moved into `BayItemRenderer`, which an empty fluid bay uses as well (ADR-053).
 
 *Consequences:*
 
@@ -4866,6 +4874,12 @@ ticker**, which costs a basement of a thousand bays a tick each. **Cutting the v
 tank farm and not the default: it hides the readout at eleven blocks, where the two cuts it copies hide only a detail
 of a block that stays visible. **Declaring `FILL` and never drawing it**, which multiplied the block's states by five
 for nothing and made two comments about a free chunk mesh untrue.
+
+*Amendment ([issue #61](https://github.com/Richie1710/create-wareworks/issues/61)):* the renderer draws a second thing,
+the **filter item of an empty bay** (`BayDisplay`, `BayItemRenderer`, shared with the rack bay). It is the filter
+item and not a ghost fluid, which would read as contents. This item is a detail, so it has a cut of its own inside
+`renderSafe` at `filterItemRenderDistance` (the warehouse interface's measure), while `getViewDistance()` stays vanilla
+for the fluid. Rejected: cutting the whole renderer (the reason above) and a translucent or filmed fluid.
 
 ### ADR-054 — Breaking a full fluid bay loses the fluid, resets the bay and logs the loss (M30, [issue #21](https://github.com/Richie1710/create-wareworks/issues/21))
 
@@ -9209,6 +9223,20 @@ answer is not forced: a live refusal ends the item `HOME_FULL` (a refusal can be
 `JobPlannerTest#storeFollowsTheHomeOfTheItem`, `RelocationRuleTest`, `OptimizerOrdersTest`, `OptimizerTextWidthTest`;
 GameTests `OptimizerMergeGameTests`; the visual scenario `optimizer` (merge in English and German); the robustness run.
 
+*Amendment ([issue #60](https://github.com/Richie1710/create-wareworks/issues/60)): D1 covers fluid bays when storing.*
+D1 read "the most of the item" from the item index, which counts nothing at a fluid bay, so a bay holding water and an
+empty one tied and the nearer one won: water spread over two bays. For a fluid bay, what it **holds** of a filled
+container is now the millibuckets of that fluid in it (fluid stock index) plus the millibuckets of the same fluid on
+their way to it, whatever the container (the reservation ledger, issue #51's rule for several cranes), through one
+planner hook (`PlannerInput#heldAsContents`, `WarehouseControllerBlockEntity#fluidHeldFor`; 0 everywhere else). It
+feeds the consolidation key and `ItemHome`, in the store plan and the reroutes into storage. As for items, consolidation
+is above priority, so **a bay holding the fluid beats an empty bay of higher priority**; between two bays holding it the
+higher priority wins, then the larger amount, then the index order. A bay that cannot take a whole container is passed
+over at the live check as before. Millibuckets are compared with an item count only between a bay and a shelf dedicated
+to that same filled container, of one priority and both holding some: the bay wins. D3 is unchanged: merge leaves fluid
+bays out, so fluid already spread over several bays stays there. No save format change. Tests: JUnit
+`JobPlannerTest` (four cases), GameTest `FluidBayStoreGateGameTests#aWaterBucketJoinsTheFartherFluidBayThatHoldsWater`.
+
 ### ADR-089 — A production pattern may name fluid ingredients: the crane brings them as filled buckets, the player's own machine without an arm turns them into fluid, the Recipe Selector accepts the Basin's fluid recipes (amends ADR-073 D1, ADR-076 D5, ADR-085 D14) ([issue #55](https://github.com/Richie1710/create-wareworks/issues/55))
 
 *Context:* Create's Basin and Mixer have recipes with a fluid ingredient (water for mud and dough, lava for other
@@ -9302,6 +9330,16 @@ empty on its next save, and an open order's fluid line is read as an item line o
 `SelectorVerdictOrdinalTest`, `ProductionFluidLayoutTest`, `ProductionFluidTextWidthTest`; GameTests
 `FluidPatternGameTests`, `FluidSupplyGameTests`, `MultiCraneGameTests`; the visual scenarios `fluidpattern` and
 `patternjei`; the robustness phase "fluid supply in flight"; the Ponder scene `warehouse/fluid_pattern`.
+
+**Amendment ([issue #62](https://github.com/Richie1710/create-wareworks/issues/62)): the screen.** The first layout put
+the fluid cells above and below the result, and a player read the whole column as outputs. They now stand in a column of
+their own between the grid and the arrow, so the result is alone right of it. The window keeps its size: the arrow
+space shrank from 14 to 12 px, the gap before the tabs narrows from 12 down to 5 px as the tab strip widens, and with
+six tab columns the pattern block uses the margins down to 4 px (the brass frame is 3 px); six columns stay (ADR-068).
+Slot indexes, payloads and saves are unchanged. A slot with ingredients but no result stays incomplete and is now said
+so (screen, tooltips, goggles). A filled bucket in the grid beside a fluid cell of its fluid is warned about, and
+**not converted**: a bucket item is a real ingredient of some recipes, and a conversion that depends on what else the
+pattern holds would depend on the order of the clicks.
 
 ## Persistence & sync
 

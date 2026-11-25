@@ -63,15 +63,18 @@ class ProductionMenuLayoutTest {
         return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
     }
 
-    /** The column rule, the block width and where the block starts, literally as ADR-068 states them. */
+    /**
+     * The column rule, as ADR-068 states it, and where the block starts since the fluid cells stand left of the arrow
+     * (issue #62).
+     */
     @Test
     void theTabStripWidensThenScrolls() {
         int[][] table = {
                 // patterns, columns, rows, visible rows, max scroll, patternsX
-                {1, 3, 1, 1, 0, 39}, {4, 3, 2, 2, 0, 39}, {8, 3, 3, 3, 0, 39}, {9, 3, 3, 3, 0, 39},
-                {10, 4, 3, 3, 0, 30}, {12, 4, 3, 3, 0, 30}, {13, 5, 3, 3, 0, 21}, {15, 5, 3, 3, 0, 21},
-                {16, 6, 3, 3, 0, 12}, {18, 6, 3, 3, 0, 12}, {19, 6, 4, 3, 1, 9}, {24, 6, 4, 3, 1, 9},
-                {25, 6, 5, 3, 2, 9}, {36, 6, 6, 3, 3, 9}};
+                {1, 3, 1, 1, 0, 30}, {4, 3, 2, 2, 0, 30}, {8, 3, 3, 3, 0, 30}, {9, 3, 3, 3, 0, 30},
+                {10, 4, 3, 3, 0, 21}, {12, 4, 3, 3, 0, 21}, {13, 5, 3, 3, 0, 12}, {15, 5, 3, 3, 0, 12},
+                {16, 6, 3, 3, 0, 6}, {18, 6, 3, 3, 0, 6}, {19, 6, 4, 3, 1, 4}, {24, 6, 4, 3, 1, 4},
+                {25, 6, 5, 3, 2, 4}, {36, 6, 6, 3, 3, 4}};
         for (int[] row : table) {
             ProductionMenuLayout layout = new ProductionMenuLayout(9, row[0]);
             String where = row[0] + " patterns";
@@ -85,15 +88,16 @@ class ProductionMenuLayoutTest {
     }
 
     /**
-     * Up to 9 patterns the window is pixel for pixel the one every station had while the cap was 8: the feeder and arm
-     * visual runs click these positions.
+     * Up to 9 patterns every station has the same window: grid, fluid column, arrow, result and three tab columns at
+     * the same places.
      */
     @Test
     void upToNinePatternsNothingMoves() {
         for (int patterns = 1; patterns <= 9; patterns++) {
             ProductionMenuLayout layout = new ProductionMenuLayout(9, patterns);
-            assertEquals(39, layout.patternsX());
-            assertEquals(39 + 54 + 14 + 18 + 12, layout.tabsX());
+            assertEquals(30, layout.patternsX());
+            // Grid, gap, fluid column, arrow, result, tab gap (issue #62).
+            assertEquals(30 + 54 + 2 + 18 + 12 + 18 + 12, layout.tabsX());
             for (int p = 0; p < patterns; p++) {
                 assertEquals(layout.tabsX() + p % 3 * SLOT, layout.tabX(p));
                 assertEquals(layout.patternsY() + p / 3 * SLOT, layout.tabY(p, 0));
@@ -111,9 +115,14 @@ class ProductionMenuLayoutTest {
                 String where = "buffer " + buffer + ", patterns " + patterns;
                 assertEquals(230, ProductionMenuLayout.WIDTH);
                 assertTrue(layout.height() <= ProductionMenuLayout.MAX_HEIGHT, where);
-                assertTrue(layout.patternsX() >= ProductionMenuLayout.MARGIN, where + ": left margin");
+                // Up to 15 patterns the block keeps the window's margin. With six tab columns and the fluid column
+                // (issue #62) it may come as close as 4 px to the edge, 1 px clear of the 3 px brass frame.
+                int margin = patterns <= 15 ? ProductionMenuLayout.MARGIN : 4;
+                assertTrue(layout.patternsX() >= margin, where + ": left margin");
                 int right = layout.patternsX() + layout.patternBlockWidth();
-                assertTrue(right <= ProductionMenuLayout.WIDTH - ProductionMenuLayout.MARGIN, where + ": right margin");
+                assertTrue(right <= ProductionMenuLayout.WIDTH - margin, where + ": right margin");
+                assertTrue(layout.tabsX() - (layout.patternCellX(ProductionMenuLayout.RESULT_CELL) + SLOT) >= 5,
+                        where + ": the result stands clear of the tabs");
                 assertEquals(right, layout.tabStripX() + layout.tabStripWidth(), where + ": the strip ends the block");
                 assertTrue(layout.tabStripY() + layout.tabStripHeight() <= layout.bufferLabelY(),
                         where + ": the strip stays above the buffer");

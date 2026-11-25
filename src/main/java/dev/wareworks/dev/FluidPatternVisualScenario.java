@@ -176,6 +176,8 @@ public final class FluidPatternVisualScenario implements VisualScenario {
     private static final int HOTBAR_WATER = 2;
     private static final int SLOT_SELECTOR = 3;
     private static final int PATTERN_SLOT = 0;
+    /** The grid cell the water bucket goes into for a moment, to be warned about (issue #62). */
+    private static final int BUCKET_CELL = 1;
     private static final int MAX_SCROLL_NOTCHES = 40;
     private static final double RAIL_TOP = WarehouseRailBlock.HEIGHT_PIXELS / 16.0;
 
@@ -282,9 +284,10 @@ public final class FluidPatternVisualScenario implements VisualScenario {
                         context -> context.minecraft().screen instanceof WarehouseProductionScreen, SCREEN_TIMEOUT_TICKS)
                 .waitTicks(SETTLE_TICKS);
         FeederVisualScenario.patternEntry(script, PATTERN_SLOT, HOTBAR_DIRT, Items.DIRT, 0);
-        FeederVisualScenario.patternEntry(script, PATTERN_SLOT, HOTBAR_MUD, Items.MUD, ProductionMenuLayout.RESULT_CELL);
         fluidEntry(script);
         scrollFluid(script, RUN_MB);
+        unfinishedChapter(script);
+        FeederVisualScenario.patternEntry(script, PATTERN_SLOT, HOTBAR_MUD, Items.MUD, ProductionMenuLayout.RESULT_CELL);
         script.client("fluidpattern: rest the cursor on the fluid cell",
                         context -> ScreenInput.hover(context.minecraft(),
                                 ScreenInput.productionFluidCell(productionScreen(context), 0)))
@@ -323,6 +326,97 @@ public final class FluidPatternVisualScenario implements VisualScenario {
                             lines);
                 });
         GoggleShots.reach(script, NAME, 0.0);
+    }
+
+    /**
+     * Issue #62, with the pattern still lacking its result: the empty result cell and the tab say why it is never
+     * ordered, a water bucket clicked into the grid beside the water cell is warned about as paid twice, the station's
+     * goggles name the pattern, and clearing the bucket's cell with an empty hand takes the warning away.
+     */
+    private void unfinishedChapter(VisualScript script) {
+        FeederVisualScenario.patternEntry(script, PATTERN_SLOT, HOTBAR_WATER, Items.WATER_BUCKET, BUCKET_CELL);
+        script.client("fluidpattern: rest the cursor on the empty result cell",
+                        context -> ScreenInput.hover(context.minecraft(), ScreenInput.productionCell(
+                                productionScreen(context), ProductionMenuLayout.RESULT_CELL)))
+                .waitTicks(SETTLE_TICKS)
+                .client("fluidpattern: CHECK a pattern without a result says why", context -> {
+                    WarehouseProductionScreen screen = productionScreen(context);
+                    if (!screen.state().lacksResult(PATTERN_SLOT))
+                        throw new VisualTestException("the screen does not know that the result is missing");
+                    requireLines(screen, ScreenInput.productionCell(screen, ProductionMenuLayout.RESULT_CELL),
+                            "the empty result cell", WareworksLang.PRODUCTION_NO_RESULT,
+                            WareworksLang.PRODUCTION_NO_RESULT_HINT);
+                    requireLines(screen, ScreenInput.productionTab(screen, PATTERN_SLOT), "its tab",
+                            WareworksLang.PRODUCTION_NO_RESULT);
+                    requireLines(screen, ScreenInput.productionArrow(screen), "the arrow",
+                            WareworksLang.PRODUCTION_NO_RESULT, WareworksLang.PRODUCTION_FLUID_ALSO_IN_GRID);
+                })
+                .shot("fluidpattern-noresult")
+                .client("fluidpattern: rest the cursor on the bucket in the grid",
+                        context -> ScreenInput.hover(context.minecraft(),
+                                ScreenInput.productionCell(productionScreen(context), BUCKET_CELL)))
+                .waitTicks(SETTLE_TICKS)
+                .client("fluidpattern: CHECK a bucket of the fluid cell's fluid is warned about", context -> {
+                    WarehouseProductionScreen screen = productionScreen(context);
+                    if (!screen.state().paidTwice(PATTERN_SLOT, BUCKET_CELL).equals(Optional.of(WATER_ID))
+                            || screen.state().paidTwice(PATTERN_SLOT, 0).isPresent())
+                        throw new VisualTestException("the screen does not warn about the water bucket alone");
+                    requireLines(screen, ScreenInput.productionCell(screen, BUCKET_CELL), "the bucket's cell",
+                            WareworksLang.PRODUCTION_FLUID_PAID_TWICE, WareworksLang.PRODUCTION_FLUID_TWICE_HINT);
+                    requireLines(screen, ScreenInput.productionFluidCell(screen, 0), "the fluid cell",
+                            WareworksLang.PRODUCTION_FLUID_ALSO_IN_GRID);
+                })
+                .shot("fluidpattern-paidtwice")
+                .client("fluidpattern: close the station screen", FluidPatternVisualScenario::closeScreen)
+                .until("fluidpattern: wait until the station screen is closed",
+                        context -> context.minecraft().screen == null, SCREEN_TIMEOUT_TICKS);
+        GoggleShots.reach(script, NAME, GoggleShots.vanillaReach());
+        script.client("fluidpattern: clear the toasts", context -> context.minecraft().getToasts().clear());
+        GoggleShots.shot(script, NAME, AT_STATION, "station-goggles-noresult", pos -> stationPos(pos),
+                FluidPatternVisualScenario::noResultSynced, context -> {
+                    List<String> lines = GoggleShots.lines(context, stationPos(context.origin()));
+                    GoggleShots.requireLine(lines, GoggleShots.count(WareworksLang.GOGGLES_PRODUCTION_NO_RESULT, 1));
+                    String none = WareworksLang.translateDirect(WareworksLang.GOGGLES_PRODUCTION_NO_PATTERNS)
+                            .getString();
+                    if (lines.stream().anyMatch(line -> line.contains(none)))
+                        throw new VisualTestException("the goggles still say '" + none + "': " + lines);
+                    LOGGER.info(PREFIX + "fluidpattern: CHECK PASS the station's goggles name the pattern without a "
+                            + "result: {}", lines);
+                });
+        GoggleShots.reach(script, NAME, 0.0);
+        script.camera(AT_STATION)
+                .server("fluidpattern: open the station's screen again", FluidPatternVisualScenario::openStationScreen)
+                .until("fluidpattern: wait for the station screen with the bucket",
+                        context -> context.minecraft().screen instanceof WarehouseProductionScreen screen
+                                && screen.state().entry(PATTERN_SLOT, BUCKET_CELL).isPresent(), SCREEN_TIMEOUT_TICKS)
+                .waitTicks(SETTLE_TICKS)
+                .client("fluidpattern: click the bucket's cell with an empty hand",
+                        context -> ScreenInput.click(context.minecraft(),
+                                ScreenInput.productionCell(productionScreen(context), BUCKET_CELL)))
+                .until("fluidpattern: the server cleared the bucket's cell",
+                        context -> productionScreen(context).state().entry(PATTERN_SLOT, BUCKET_CELL).isEmpty()
+                                && !productionScreen(context).state().fluidAlsoInGrid(PATTERN_SLOT, WATER_ID),
+                        SCREEN_TIMEOUT_TICKS)
+                .waitTicks(CLICK_GAP_TICKS);
+    }
+
+    /** The tooltip the screen draws at {@code point} holds each of the argumentless lines {@code keys}. */
+    private static void requireLines(WarehouseProductionScreen screen, ScreenInput.Point point, String where,
+            String... keys) {
+        List<String> tooltip = ScreenInput.productionTooltip(screen, point).stream().map(Component::getString).toList();
+        for (String key : keys) {
+            String line = WareworksLang.translateDirect(key).getString();
+            if (!tooltip.contains(line))
+                throw new VisualTestException("the tooltip of " + where + " lacks '" + line + "': " + tooltip);
+        }
+        LOGGER.info(PREFIX + "fluidpattern: CHECK PASS the tooltip of {} reads {}", where, tooltip);
+    }
+
+    private static boolean noResultSynced(VisualContext context) {
+        ClientLevel level = context.minecraft().level;
+        return level != null && level.getBlockEntity(stationPos(context.origin()))
+                instanceof WarehouseProductionBlockEntity station
+                && station.productionSummary().noResultPatterns() == 1;
     }
 
     /** Picks the water bucket up, clicks it into fluid cell 0 and puts it back: the cell is a ghost, nothing is taken. */

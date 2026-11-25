@@ -337,6 +337,71 @@ public final class FluidPatternGameTests {
     }
 
     /**
+     * A pattern with ingredients but no result is never ordered and says so (issue #62): the model and the screen's state
+     * name the slot, the goggle summary counts it with its tab number (the lines themselves are the fluidpattern visual
+     * run's: a goggle tooltip cannot be built on a server), the synced tag keeps it, and a result clears it. A filled water bucket in the grid beside a water cell is marked as paid twice; an empty
+     * bucket, a lava bucket and a slot without a fluid cell are not. Nothing is converted: the grid keeps the bucket.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void fluidpatternwithoutresultissaid(GameTestHelper helper) {
+        AisleFixture aisle = aisle(helper);
+        helper.startSequence()
+                .thenExecute(() -> {
+                    WarehouseProductionBlockEntity station = aisle.productionAt(MUD_RACK);
+                    ClickingPlayer player = ClickingPlayer.at(helper, aisle.rackPos(MUD_RACK));
+                    ProductionMenu menu = openMenu(player, station);
+                    station.onGoggleObserved();
+                    helper.assertValueEqual(station.productionSummary().noResultPatterns(), 0, "an untouched station");
+
+                    // The reporter's pattern: a water bucket and gravel in the grid, 200 mB of water, no result.
+                    helper.assertTrue(station.setPatternEntry(1, 0, ItemKey.of(Items.WATER_BUCKET), 1), "a bucket");
+                    helper.assertTrue(station.setPatternEntry(1, 1, ItemKey.of(Items.GRAVEL), 1), "gravel");
+                    helper.assertValueEqual(station.editFluidCell(1, 0, WATER, 200),
+                            WarehouseProductionBlockEntity.EditOutcome.CHANGED, "and a water cell");
+                    helper.assertValueEqual(station.activePatterns().size(), 0, "it is not offered");
+                    helper.assertValueEqual(station.patterns().slotsWithoutResult(), List.of(1), "and it is named");
+                    station.onGoggleObserved();
+                    helper.assertValueEqual(station.productionSummary().noResultPatterns(), 1, "one such pattern");
+                    helper.assertValueEqual(station.productionSummary().firstNoResult(), 2, "pattern 2, as its tab");
+                    helper.assertValueEqual(station.productionSummary().patterns(), 0, "no complete pattern");
+                    CompoundTag synced = new CompoundTag();
+                    station.productionSummary().write(synced);
+                    helper.assertValueEqual(ProductionGoggleSummary.read(synced), station.productionSummary(),
+                            "and the client reads the same");
+
+                    ProductionScreenState state = roundTrip(helper, menu.screenState());
+                    helper.assertTrue(state.lacksResult(1), "the screen knows the slot lacks a result");
+                    helper.assertFalse(state.lacksResult(0), "an empty slot lacks nothing");
+                    helper.assertValueEqual(state.paidTwice(1, 0), Optional.of(WATER), "the bucket is paid twice");
+                    helper.assertValueEqual(state.paidTwice(1, 1), Optional.empty(), "gravel is not");
+                    helper.assertTrue(state.fluidAlsoInGrid(1, WATER), "and the water cell is told");
+
+                    // A fluid cell alone is an ingredient too.
+                    helper.assertValueEqual(station.editFluidCell(3, 0, LAVA, 100),
+                            WarehouseProductionBlockEntity.EditOutcome.CHANGED, "a lone fluid cell");
+                    station.onGoggleObserved();
+                    helper.assertValueEqual(station.productionSummary().noResultPatterns(), 2, "two are counted");
+                    helper.assertTrue(station.setPatternEntry(3, 0, ItemKey.of(Items.WATER_BUCKET), 1), "water");
+                    helper.assertValueEqual(menu.screenState().paidTwice(3, 0), Optional.empty(),
+                            "another fluid is not paid twice");
+                    helper.assertTrue(station.setPatternEntry(3, 0, ItemKey.of(Items.BUCKET), 1), "an empty bucket");
+                    helper.assertValueEqual(menu.screenState().paidTwice(3, 0), Optional.empty(), "nor is it");
+                    helper.assertTrue(station.setPatternEntry(2, 0, ItemKey.of(Items.WATER_BUCKET), 1), "no cell");
+                    helper.assertValueEqual(menu.screenState().paidTwice(2, 0), Optional.empty(),
+                            "a bucket without a fluid cell is an ordinary item");
+
+                    helper.assertTrue(station.setPatternEntry(1, ProductionPatterns.RESULT_ENTRY, MUD, 1), "a result");
+                    helper.assertValueEqual(station.activePatterns().size(), 1, "now it is offered");
+                    helper.assertFalse(menu.screenState().lacksResult(1), "and lacks nothing");
+                    helper.assertValueEqual(menu.screenState().paidTwice(1, 0), Optional.of(WATER),
+                            "the double payment is still said, and the bucket stays an item");
+                    station.onGoggleObserved();
+                    helper.assertValueEqual(station.productionSummary().firstNoResult(), 3, "the next one is named");
+                })
+                .thenSucceed();
+    }
+
+    /**
      * A fluid whose mod was removed stays in the cell and is shown (the screen draws it as unknown), it cannot be set
      * again, and it can be cleared: an unknown fluid is never a crash.
      */

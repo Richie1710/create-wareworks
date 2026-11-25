@@ -1780,6 +1780,20 @@ public final class WareworksLang {
     public static final String GOGGLES_PRODUCTION_FLUID_PATTERNS = "gui.goggles.production_fluid_patterns";
     /** {@code "Filled containers left in the buffer: %1$s (take them out)"}: leftovers that count against the cap of two. */
     public static final String GOGGLES_PRODUCTION_FLUID_HELD = "gui.goggles.production_fluid_held";
+    /** {@code "Pattern %1$s has no result"}: the one slot with ingredients but no result, by tab number (issue #62). */
+    public static final String GOGGLES_PRODUCTION_NO_RESULT = "gui.goggles.production_no_result";
+    /** {@code "Patterns without a result: %1$s"}: the same while there are several. */
+    public static final String GOGGLES_PRODUCTION_NO_RESULTS = "gui.goggles.production_no_results";
+    /** {@code "No result: this pattern is never ordered"}: tooltip line of such a pattern in the station's screen. */
+    public static final String PRODUCTION_NO_RESULT = "gui.production.no_result.reason";
+    /** {@code "Put what the machine makes right of the arrow"}: what to do about it. */
+    public static final String PRODUCTION_NO_RESULT_HINT = "gui.production.no_result.hint";
+    /** {@code "A fluid cell asks for it too: you pay both"}: a filled bucket in the grid (issue #62). */
+    public static final String PRODUCTION_FLUID_PAID_TWICE = "gui.production.fluid.paid_twice";
+    /** {@code "A grid cell holds it in a bucket: you pay both"}: the same, said at the fluid cell and the arrow. */
+    public static final String PRODUCTION_FLUID_ALSO_IN_GRID = "gui.production.fluid.also_in_grid";
+    /** {@code "Only need the fluid? Clear the bucket's cell"}: what to do, unless the recipe needs the bucket itself. */
+    public static final String PRODUCTION_FLUID_TWICE_HINT = "gui.production.fluid.twice_hint";
     /** {@code "Can be produced here"}: a terminal item that is not in stock but has a pattern. */
     public static final String TERMINAL_PRODUCIBLE = "gui.terminal.producible";
     /** {@code "Can be made now: %1$s"}: how many of a producible item the ingredients in stock allow right now. */

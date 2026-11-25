@@ -8,6 +8,7 @@ import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.ToLongBiFunction;
 import java.util.function.ToIntFunction;
 import java.util.function.ToLongFunction;
 
@@ -174,6 +175,15 @@ import dev.wareworks.core.inventory.StockView;
  *                             costs no estimate and no live call and adds no reason. The default excludes nothing,
  *                             which makes an input built without it <b>literally</b> the input the planner received
  *                             before package mode
+ * @param heldAsContents       how much of what a key <b>carries</b> a storage location holds or is being brought, for a
+ *                             place that stores a container's contents instead of the container (issue #60, ADR-088
+ *                             D1): a fluid bay, which the item index counts nothing at, answers the millibuckets of the
+ *                             fluid inside {@code key} that it holds plus those on their way to it. A value above 0
+ *                             counts as the location's holding when storing (consolidation and the home rule), so the
+ *                             unit is only ever compared as "more" or "less". Asked by every path that stores into a
+ *                             location ({@code JobPlanner#collectStorage}), only for a location that may take the key.
+ *                             The default is 0 everywhere, which makes an input built without it <b>literally</b> the
+ *                             input the planner received before
  * @param liveSimulationBudget maximum number of live callback calls per planner run (bounds the cost of a full
  *                             warehouse or a long fall-through)
  * @param <K>                  item key type
@@ -194,7 +204,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, FillSupply<K, L> fillSupply,
         List<RelocateNeed<K>> relocations, BiPredicate<? super L, ? super K> relocateTarget,
         BiPredicate<? super L, ? super K> storeHeld, BiPredicate<? super L, ? super K> storeExcluded,
-        int liveSimulationBudget) {
+        ToLongBiFunction<? super L, ? super K> heldAsContents, int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
      * the builder's default, so an aisle without rules plans exactly as it did before M15.
@@ -290,6 +300,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Objects.requireNonNull(relocateTarget, "relocateTarget");
         Objects.requireNonNull(storeHeld, "storeHeld");
         Objects.requireNonNull(storeExcluded, "storeExcluded");
+        Objects.requireNonNull(heldAsContents, "heldAsContents");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
     }
@@ -551,6 +562,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private BiPredicate<? super L, ? super K> relocateTarget = (location, key) -> true;
         private BiPredicate<? super L, ? super K> storeHeld = (location, key) -> false;
         private BiPredicate<? super L, ? super K> storeExcluded = (location, key) -> false;
+        private ToLongBiFunction<? super L, ? super K> heldAsContents = (location, key) -> 0L;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
         private Builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
@@ -805,6 +817,15 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * What a location holds of the contents of a key ({@link PlannerInput#heldAsContents()}, issue #60). Left out,
+         * nothing holds anything that way.
+         */
+        public Builder<K, L> heldAsContents(ToLongBiFunction<? super L, ? super K> heldAsContents) {
+            this.heldAsContents = heldAsContents;
+            return this;
+        }
+
         public PlannerInput<K, L> build() {
             return new PlannerInput<>(craneBranch, craneX, craneY, speeds,
                     travel != null ? travel : TravelCost.straight(speeds), transferTicks, carryLimit, itemType, stock,
@@ -814,7 +835,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, roomBound,
                     stackSize, storeFilter, storePriority,
                     portRank, storeHeadroom, fillSupply, relocations, relocateTarget, storeHeld, storeExcluded,
-                    liveSimulationBudget);
+                    heldAsContents, liveSimulationBudget);
         }
     }
 }

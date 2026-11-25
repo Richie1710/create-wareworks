@@ -45,12 +45,14 @@ import net.minecraft.resources.ResourceLocation;
  *                          before it, which then writes nothing for it
  * @param fluidContainersHeld filled containers of those patterns' fluids that stand in the station's buffer (issue
  *                          #55 review): shown while no order is open, because then nothing takes them any more
+ * @param noResultPatterns  pattern slots that hold an ingredient but no result (issue #62): never offered or ordered
+ * @param firstNoResult     the number (counted from 1, as the tabs are named) of the first such slot, 0 without one
  */
 public record ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
                                       long missingIngredients, long awaitedResult, int stoppedProducts,
                                       long unrecovered, boolean oldestWaitingForStep, boolean feeder,
                                       int refusedPatterns, SelectorSummary selector, int fluidPatterns,
-                                      int fluidContainersHeld) {
+                                      int fluidContainersHeld, int noResultPatterns, int firstNoResult) {
     public static final ProductionGoggleSummary NONE =
             new ProductionGoggleSummary(0, 0, Optional.empty(), 0L, 0L, 0, 0L, false, false, 0);
 
@@ -67,6 +69,8 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
     private static final String SELECTOR = "Selector";
     private static final String FLUID_PATTERNS = "FluidPatterns";
     private static final String FLUID_HELD = "FluidHeld";
+    private static final String NO_RESULT = "NoResult";
+    private static final String FIRST_NO_RESULT = "FirstNoResult";
 
     public ProductionGoggleSummary {
         patterns = Math.max(0, patterns);
@@ -86,6 +90,17 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
             selector = SelectorSummary.NONE;
         fluidPatterns = Math.max(0, fluidPatterns);
         fluidContainersHeld = fluidPatterns > 0 ? Math.max(0, fluidContainersHeld) : 0;
+        noResultPatterns = Math.max(0, noResultPatterns);
+        firstNoResult = noResultPatterns > 0 ? Math.max(1, firstNoResult) : 0;
+    }
+
+    /** A summary in which every filled pattern slot has its result: the shape before issue #62. */
+    public ProductionGoggleSummary(int patterns, int openOrders, Optional<ProductionOrderState> oldestState,
+            long missingIngredients, long awaitedResult, int stoppedProducts, long unrecovered,
+            boolean oldestWaitingForStep, boolean feeder, int refusedPatterns, SelectorSummary selector,
+            int fluidPatterns, int fluidContainersHeld) {
+        this(patterns, openOrders, oldestState, missingIngredients, awaitedResult, stoppedProducts, unrecovered,
+                oldestWaitingForStep, feeder, refusedPatterns, selector, fluidPatterns, fluidContainersHeld, 0, 0);
     }
 
     /** A summary that knows no filled container in the buffer: the shape before the issue #55 review. */
@@ -168,6 +183,11 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
             tag.putInt(FLUID_PATTERNS, fluidPatterns);
         if (fluidContainersHeld > 0)
             tag.putInt(FLUID_HELD, fluidContainersHeld);
+        // And one whose patterns all have their result pays nothing for this (issue #62).
+        if (noResultPatterns > 0) {
+            tag.putInt(NO_RESULT, noResultPatterns);
+            tag.putInt(FIRST_NO_RESULT, firstNoResult);
+        }
         // And a station without a Recipe Selector pays nothing for it (ADR-085).
         if (selector.on()) {
             CompoundTag selectorTag = new CompoundTag();
@@ -185,7 +205,8 @@ public record ProductionGoggleSummary(int patterns, int openOrders, Optional<Pro
                 tag.getBoolean(WAITING_FOR_STEP), tag.getBoolean(FEEDER), tag.getInt(REFUSED),
                 tag.contains(SELECTOR, Tag.TAG_COMPOUND) ? SelectorSummary.read(tag.getCompound(SELECTOR))
                         : SelectorSummary.NONE,
-                tag.getInt(FLUID_PATTERNS), tag.getInt(FLUID_HELD));
+                tag.getInt(FLUID_PATTERNS), tag.getInt(FLUID_HELD), tag.getInt(NO_RESULT),
+                tag.getInt(FIRST_NO_RESULT));
     }
 
     /**

@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import com.tterrag.registrate.util.entry.BlockEntry;
 
-import dev.wareworks.client.render.RackBayRenderer;
+import dev.wareworks.client.render.BayItemRenderer;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.storage.PalletEntity;
 import dev.wareworks.content.storage.BayColumn;
@@ -658,7 +658,7 @@ public final class BaysVisualScenario implements VisualScenario {
 
     /** Keeps the renderer's own anchor constants in the dev harness's sight, so a shot can be read against them. */
     static String anchorDescription() {
-        return String.format(Locale.ROOT, "item x=%.1f y=%.1f backZ=%.1f px", RackBayRenderer.ITEM_X_PX,
-                RackBayRenderer.ITEM_BASE_Y_PX, RackBayRenderer.ITEM_BACK_Z_PX);
+        return String.format(Locale.ROOT, "item x=%.1f y=%.1f backZ=%.1f px", BayItemRenderer.ITEM_X_PX,
+                BayItemRenderer.ITEM_BASE_Y_PX, BayItemRenderer.ITEM_BACK_Z_PX);
     }
 }

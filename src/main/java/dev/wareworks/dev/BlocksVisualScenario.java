@@ -15,6 +15,7 @@ import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
 import com.tterrag.registrate.util.entry.BlockEntry;
 
 import dev.wareworks.Wareworks;
+import dev.wareworks.client.render.FluidBayRenderer;
 import dev.wareworks.client.render.RackBayRenderer;
 import dev.wareworks.content.controller.WarehouseControllerBlock;
 import dev.wareworks.content.crane.WarehouseRailBlock;
@@ -200,7 +201,8 @@ public final class BlocksVisualScenario implements VisualScenario {
     /**
      * The filter exhibit (issue #49): an empty bay with a filter has to show the filter where the stock would stand,
      * a filled bay its stock, an empty bay without a filter nothing. Checked on the client against what
-     * {@code RackBayRenderer#displayedItem} decides, not only shot.
+     * {@code RackBayRenderer#displayedItem} decides, not only shot. Right of the rack bays stand the fluid bays (issue
+     * #61), asked the same through {@code FluidBayRenderer}, with the fluid in place of the stored item.
      */
     private static final String BAY_FILTERS_LABEL = "bay_filters";
     private static final int BAY_FILTER_COLUMNS = 4;
@@ -215,8 +217,24 @@ public final class BlocksVisualScenario implements VisualScenario {
             WareworksBlocks.RACK_BAY_ANDESITE, WareworksBlocks.RACK_BAY_WOOD);
     /** The plain item filter of each row's first column: a block item, then two flat items. */
     private static final List<Item> BAY_FILTER_ITEMS = List.of(Items.OAK_LOG, Items.IRON_INGOT, Items.REDSTONE);
-    /** The close camera of the filter exhibit: near enough that the items read, far enough for all twelve bays. */
-    private static final double BAY_FILTER_CLOSE_DISTANCE = 3.4;
+    /** The tank columns of the filter exhibit, counted from the first one right of the rack bays (issue #61). */
+    private static final int TANK_FILTER_COLUMNS = 4;
+    private static final int TANK_FILTER_BUCKET_COLUMN = 0;
+    private static final int TANK_FILTER_FILLED_COLUMN = 1;
+    private static final int TANK_FILTER_NONE_COLUMN = 2;
+    private static final int TANK_FILTER_LIST_COLUMN = 3;
+    /** Rows bottom to top; brass under copper is the one order the column rule allows. */
+    private static final List<BlockEntry<FluidBayBlock>> TANK_FILTER_ROWS =
+            List.of(WareworksBlocks.FLUID_BAY_BRASS, WareworksBlocks.FLUID_BAY_COPPER);
+    private static final double TANK_FILTER_SHARE = 0.5;
+    private static final int BAY_FILTER_WIDTH = BAY_FILTER_COLUMNS + TANK_FILTER_COLUMNS;
+    /**
+     * The front camera of the filter exhibit. Its own distance, because the yard's width rule would stand it past the
+     * {@code filterItemRenderDistance} the filter items are cut off at.
+     */
+    private static final double BAY_FILTER_FRONT_DISTANCE = 5.6;
+    /** The close camera of the filter exhibit: near enough that the items read, far enough for all twenty bays. */
+    private static final double BAY_FILTER_CLOSE_DISTANCE = 4.2;
     private static final double BAY_FILTER_CLOSE_HEIGHT = 1.5;
     /** Ticks the client gets for the filters' update packets before the display check fails. */
     private static final int BAY_FILTER_SYNC_TIMEOUT_TICKS = 100;
@@ -295,7 +313,9 @@ public final class BlocksVisualScenario implements VisualScenario {
             // Issue #49: what an empty bay shows. Rows brass, andesite and wood (the legal order); columns an empty bay
             // with an item filter, a filled bay whose filter is a List Filter (the stock must win), an empty bay
             // without a filter (nothing) and an empty bay whose filter is a Create filter item (drawn as that item).
-            new YardExhibit(BAY_FILTERS_LABEL, BAY_FILTER_COLUMNS, BlocksVisualScenario::filterWall),
+            // Right of them (issue #61), rows brass and copper tank: empty with a water bucket (the bucket), water with
+            // a lava bucket filter (only the water), empty without a filter (nothing) and empty with a List Filter.
+            new YardExhibit(BAY_FILTERS_LABEL, BAY_FILTER_WIDTH, BlocksVisualScenario::filterWall),
             // Two runs meeting at a right angle. They face different ways, so they do not join - which is the point:
             // a corner is two racks, and it has to look like two racks.
             new YardExhibit(CORNER_LABEL, 4, BlocksVisualScenario::corner),
@@ -575,7 +595,8 @@ public final class BlocksVisualScenario implements VisualScenario {
     }
 
     /**
-     * The filter exhibit (issue #49): {@value #BAY_FILTER_COLUMNS} columns by three tiers, see {@link #YARD}. The filled
+     * The filter exhibit (issues #49 and #61): {@value #BAY_FILTER_COLUMNS} rack columns by three tiers and
+     * {@value #TANK_FILTER_COLUMNS} tank columns by two, see {@link #YARD}. The filled
      * bay is filled first and given its List Filter afterwards, a filter its cobblestone would not pass: the stock must
      * still be what the bay shows. Every filter is checked to have been taken.
      */
@@ -593,11 +614,35 @@ public final class BlocksVisualScenario implements VisualScenario {
             setBayFilter(level, along(pos, Direction.NORTH, BAY_FILTER_CREATE_COLUMN).above(row),
                     new ItemStack(createFilter(row)));
         }
-        for (int row = 0; row < BAY_FILTER_ROWS.size(); row++) {
-            for (int column = 0; column < BAY_FILTER_COLUMNS; column++)
-                assertBayJoins(level, along(pos, Direction.NORTH, column).above(row), column > 0,
-                        column < BAY_FILTER_COLUMNS - 1);
+        for (int row = 0; row < TANK_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < TANK_FILTER_COLUMNS; column++) {
+                tank(level, tankFilterPos(pos, row, column), TANK_FILTER_ROWS.get(row), Direction.NORTH,
+                        TANK_SECOND_FLUID, column == TANK_FILTER_FILLED_COLUMN ? TANK_FILTER_SHARE : 0.0);
+            }
+            setTankFilter(level, tankFilterPos(pos, row, TANK_FILTER_BUCKET_COLUMN),
+                    new ItemStack(Items.WATER_BUCKET));
+            setTankFilter(level, tankFilterPos(pos, row, TANK_FILTER_FILLED_COLUMN),
+                    new ItemStack(Items.LAVA_BUCKET));
+            setTankFilter(level, tankFilterPos(pos, row, TANK_FILTER_LIST_COLUMN),
+                    new ItemStack(AllItems.FILTER.get()));
         }
+        // The top row has no tanks above the rack bays' third row, so there the rack run ends with its last column.
+        for (int row = 0; row < BAY_FILTER_ROWS.size(); row++) {
+            int width = row < TANK_FILTER_ROWS.size() ? BAY_FILTER_WIDTH : BAY_FILTER_COLUMNS;
+            for (int column = 0; column < width; column++)
+                assertBayJoins(level, along(pos, Direction.NORTH, column).above(row), column > 0, column < width - 1);
+        }
+    }
+
+    private static BlockPos tankFilterPos(BlockPos base, int row, int column) {
+        return along(base, Direction.NORTH, BAY_FILTER_COLUMNS + column).above(row);
+    }
+
+    private static void setTankFilter(ServerLevel level, BlockPos pos, ItemStack filter) {
+        if (!(level.getBlockEntity(pos) instanceof FluidBayBlockEntity bay))
+            throw new VisualTestException("no fluid bay block entity at " + pos);
+        if (!bay.setStoreFilter(filter) || !bay.storeFilterView().is(filter.getItem()))
+            throw new VisualTestException("the fluid bay at " + pos + " did not take the filter " + filter);
     }
 
     private static void setBayFilter(ServerLevel level, BlockPos pos, ItemStack filter) {
@@ -757,7 +802,8 @@ public final class BlocksVisualScenario implements VisualScenario {
         for (int i = 0; i < YARD.size(); i++) {
             YardExhibit exhibit = YARD.get(i);
             double center = yardX(i) + (exhibit.width() - 1) / 2.0 + BLOCK_CENTER;
-            double distance = BLOCK_CENTER + YARD_MARGIN + exhibit.width();
+            double distance = exhibit.label().equals(BAY_FILTERS_LABEL) ? BAY_FILTER_FRONT_DISTANCE
+                    : BLOCK_CENTER + YARD_MARGIN + exhibit.width();
             script.shotFrom(CameraView.of("front", center, EYE_HEIGHT, distance, center, YARD_LOOK_HEIGHT,
                     BLOCK_CENTER), exhibit.label());
             if (exhibit.label().equals(RUN_LABEL)) {
@@ -791,6 +837,15 @@ public final class BlocksVisualScenario implements VisualScenario {
                         .client("blocks: check what every bay of the filter exhibit shows",
                                 BlocksVisualScenario::checkBayFilters)
                         .shot(BAY_FILTERS_LABEL + "-close");
+                // Issue #61: past filterItemRenderDistance an empty tank draws no filter item, while a filled one still
+                // draws its fluid. No shot, the check reads the draw records.
+                script.camera(CameraView.of("beyond", center, TANK_FAR_EYE_HEIGHT, BLOCK_CENTER + TANK_FAR_DISTANCE,
+                                center, YARD_LOOK_HEIGHT, BLOCK_CENTER))
+                        .client("blocks: clear what the filter exhibit's bays drew so far",
+                                BlocksVisualScenario::forgetBayFilterDraws)
+                        .waitTicks(BAY_FILTER_DRAW_WAIT_TICKS)
+                        .client("blocks: check the tanks of the filter exhibit past the filter cap",
+                                BlocksVisualScenario::checkTankFiltersBeyondCap);
             }
             if (exhibit.label().equals(CORNER_LABEL)) {
                 // The inside of the L, where the aisles of both runs meet: the second run starts at the first one's
@@ -978,7 +1033,94 @@ public final class BlocksVisualScenario implements VisualScenario {
                             + " (stored " + bay.storedKeyOrNull() + ", filter " + bay.storeFilterView() + ")";
             }
         }
+        return tankFilterMismatch(context, level, base);
+    }
+
+    /** The item an empty tank of the filter exhibit has to show in {@code column}, or {@code null} for none. */
+    private static Item expectedTankItem(int column) {
+        return switch (column) {
+            case TANK_FILTER_BUCKET_COLUMN -> Items.WATER_BUCKET;
+            case TANK_FILTER_LIST_COLUMN -> AllItems.FILTER.get();
+            default -> null;
+        };
+    }
+
+    /** {@link #bayFilterMismatch} for the tanks (issue #61): the filled one holds water and shows no item. */
+    private static String tankFilterMismatch(VisualContext context, ClientLevel level, BlockPos base) {
+        for (int row = 0; row < TANK_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < TANK_FILTER_COLUMNS; column++) {
+                BlockPos pos = tankFilterPos(base, row, column);
+                if (!(level.getBlockEntity(pos) instanceof FluidBayBlockEntity bay))
+                    return "no client fluid bay at " + pos;
+                if (!(context.minecraft().getBlockEntityRenderDispatcher().getRenderer(bay)
+                        instanceof FluidBayRenderer renderer))
+                    return "the fluid bay at " + pos + " has no FluidBayRenderer";
+                boolean filled = column == TANK_FILTER_FILLED_COLUMN;
+                FluidKey stored = bay.storedFluidOrNull();
+                if (filled ? !FluidKey.of(TANK_SECOND_FLUID).equals(stored) || !bay.storeFilterView()
+                        .is(Items.LAVA_BUCKET) : stored != null)
+                    return "the tank at row " + row + " column " + column + " holds " + stored + " with filter "
+                            + bay.storeFilterView() + " on the client";
+                ItemStack shown = renderer.displayedItem(bay);
+                Item expected = expectedTankItem(column);
+                boolean right = expected == null ? shown.isEmpty() : !shown.isEmpty() && shown.is(expected);
+                if (!right)
+                    return "the tank at row " + row + " column " + column + " shows " + shown + " instead of "
+                            + (expected == null ? "no item" : BuiltInRegistries.ITEM.getKey(expected))
+                            + " (filter " + bay.storeFilterView() + ")";
+            }
+        }
         return null;
+    }
+
+    /**
+     * What every tank of the filter exhibit really drew since {@link #forgetBayFilterDraws}, at a camera where all of
+     * them are in the frustum: the fluid exactly where there is fluid, and the filter item exactly where the tank is
+     * empty and filtered and {@code withinCap}. Returns one entry per tank.
+     */
+    private static List<String> checkTankDraws(VisualContext context, boolean withinCap) {
+        Minecraft minecraft = context.minecraft();
+        ClientLevel level = minecraft.level;
+        BlockPos base = context.origin().offset(yardX(yardIndex(BAY_FILTERS_LABEL)), 0, 0);
+        Frustum frustum = minecraft.levelRenderer.getFrustum();
+        Vec3 camera = minecraft.gameRenderer.getMainCamera().getPosition();
+        List<String> shown = new ArrayList<>();
+        for (int row = 0; row < TANK_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < TANK_FILTER_COLUMNS; column++) {
+                String where = "the tank at row " + row + " column " + column;
+                FluidBayBlockEntity bay = (FluidBayBlockEntity) level.getBlockEntity(tankFilterPos(base, row, column));
+                FluidBayRenderer renderer =
+                        (FluidBayRenderer) minecraft.getBlockEntityRenderDispatcher().getRenderer(bay);
+                if (!frustum.isVisible(renderer.getRenderBoundingBox(bay)) || !renderer.shouldRender(bay, camera))
+                    throw new VisualTestException(where + " is not drawn at this camera of the filter exhibit");
+                ItemStack item = withinCap ? renderer.displayedItem(bay) : ItemStack.EMPTY;
+                ItemStack drawn = bay.lastDrawnItem();
+                boolean drawnSince = drawn != null && bay.lastDrawnNanos() >= bayFilterDrawsSince;
+                if (item.isEmpty() && drawnSince)
+                    throw new VisualTestException(where + " should draw no item but drew " + drawn);
+                if (!item.isEmpty() && !drawnSince)
+                    throw new VisualTestException(where + " should show " + item + " but drew nothing in the "
+                            + BAY_FILTER_DRAW_WAIT_TICKS + " ticks at the camera");
+                if (!item.isEmpty() && !ItemStack.matches(drawn, item))
+                    throw new VisualTestException(where + " drew " + drawn + " instead of " + item);
+                boolean filled = column == TANK_FILTER_FILLED_COLUMN;
+                boolean fluidSince = bay.lastDrawnFluid() != null && bay.lastDrawnFluidNanos() >= bayFilterDrawsSince;
+                if (filled != fluidSince || filled && !FluidKey.of(TANK_SECOND_FLUID).equals(bay.lastDrawnFluid()))
+                    throw new VisualTestException(where + (filled ? " should have drawn its water but drew "
+                            : " should draw no fluid but drew ") + (fluidSince ? bay.lastDrawnFluid() : "none"));
+                shown.add(row + "/" + column + "=" + (filled ? "fluid " : "")
+                        + (item.isEmpty() ? (filled ? "only" : "nothing")
+                                : BuiltInRegistries.ITEM.getKey(item.getItem()).toString()));
+            }
+        }
+        return shown;
+    }
+
+    /** Issue #61: past {@code filterItemRenderDistance} no tank draws an item, and the filled ones keep their fluid. */
+    private static void checkTankFiltersBeyondCap(VisualContext context) {
+        List<String> shown = checkTankDraws(context, false);
+        LOGGER.info(PREFIX + "blocks: CHECK PASS past the filter item distance no fluid bay draws its filter and the "
+                + "filled ones still draw their fluid (issue #61): {}", shown);
     }
 
     /**
@@ -995,6 +1137,14 @@ public final class BlocksVisualScenario implements VisualScenario {
                 BlockPos pos = along(base, Direction.NORTH, column).above(row);
                 if (!(level.getBlockEntity(pos) instanceof RackBayBlockEntity bay))
                     throw new VisualTestException("no client rack bay at " + pos);
+                bay.forgetDrawn();
+            }
+        }
+        for (int row = 0; row < TANK_FILTER_ROWS.size(); row++) {
+            for (int column = 0; column < TANK_FILTER_COLUMNS; column++) {
+                BlockPos pos = tankFilterPos(base, row, column);
+                if (!(level.getBlockEntity(pos) instanceof FluidBayBlockEntity bay))
+                    throw new VisualTestException("no client fluid bay at " + pos);
                 bay.forgetDrawn();
             }
         }
@@ -1046,6 +1196,9 @@ public final class BlocksVisualScenario implements VisualScenario {
         }
         LOGGER.info(PREFIX + "blocks: CHECK PASS rack bays show stock first, else their filter, else nothing, "
                 + "and drew exactly that (issue #49): {}", shown);
+        List<String> tanks = checkTankDraws(context, true);
+        LOGGER.info(PREFIX + "blocks: CHECK PASS fluid bays show their fluid first, else their filter item, else "
+                + "nothing, and drew exactly that (issue #61): {}", tanks);
     }
 
     /** How far a Recipe Selector's model reaches from the face it is set against at most: its lamp (6 px). */

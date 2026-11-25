@@ -103,6 +103,12 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * matches in pick order with what a player may have of each. An order that took items for a filter says which in its
  * tooltip ({@link #usesLines}), here and at the terminal.
  * <p>
+ * <b>A pattern without a result says so</b> (issue #62). While a slot holds an ingredient but no result, its empty
+ * result cell and its tab show a gold "?", the arrow is gold, and the tooltips of the three say that the pattern is
+ * never ordered. A filled bucket in the grid whose fluid a fluid cell of the same pattern asks for too is framed in
+ * orange with a "!", and the tooltips of that cell, of the fluid cell and of the arrow say that an order pays both;
+ * nothing is converted.
+ * <p>
  * <b>A Recipe Selector has a row of its own</b> (ADR-085). While the station selects (a local selector or recipe
  * slips), one text row says what the line is set to, or the fault that stops it, or that the station holds; a click on
  * a held row releases the hold like Resume, and the red mark at its right end switches the selector off (refused by
@@ -153,6 +159,12 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
     /** The amount of a four-digit fluid cell ("1000") is drawn smaller, so it stays inside the cell (issue #55). */
     private static final float FLUID_COUNT_SCALE = 0.6F;
     private static final int COLOR_FLUID_FRAME = 0xFF4F8FD8;
+    /** The drop drawn in an empty fluid cell, so it does not read as one more grid cell (issue #62). */
+    private static final int COLOR_FLUID_EMPTY = 0x904F8FD8;
+    /** What stands in the empty result cell and on the tab of a pattern without a result (issue #62). */
+    private static final String NO_RESULT_MARK = "?";
+    /** The corner mark of a grid cell whose filled bucket a fluid cell pays a second time (issue #62). */
+    private static final String PAID_TWICE_MARK = "!";
     /** The badge lies above the item and below the amount ({@link #COUNT_SHIFT_Z}). */
     private static final int FILTER_BADGE_Z = 60;
 
@@ -487,16 +499,26 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             if (entry.isPresent() && entry.get().filter())
                 graphics.renderOutline(cellX, cellY, ProductionMenuLayout.SLOT, ProductionMenuLayout.SLOT,
                         COLOR_FILTER_FRAME);
+            if (state.paidTwice(selectedPattern, cell).isPresent())
+                renderPaidTwice(graphics, cellX, cellY);
         }
         renderFluidCells(graphics, mouseX, mouseY);
-        // The arrow between the grid and the result: this is a pattern, not a crafting grid. A pattern the Crafter
+        boolean noResult = state.lacksResult(selectedPattern);
+        if (noResult) {
+            int cellX = leftPos + layout.patternCellX(ProductionMenuLayout.RESULT_CELL);
+            int cellY = topPos + layout.patternCellY(ProductionMenuLayout.RESULT_CELL);
+            renderNoResultMark(graphics, cellX, cellY);
+            graphics.renderOutline(cellX, cellY, ProductionMenuLayout.SLOT, ProductionMenuLayout.SLOT, COLOR_LOST);
+        }
+        // The arrow between the ingredients and the result: this is a pattern, not a crafting grid. A pattern the Crafter
         // Feeder refuses gets a red frame round grid and result and a red cross where the arrow was (issue #34).
         boolean refused = isRed(selectedPattern);
         String arrow = refused ? REFUSED_ARROW : ">";
         int arrowX = leftPos + layout.arrowX() + ProductionMenuLayout.ARROW_WIDTH / 2 - font.width(arrow) / 2;
         int arrowY = topPos + layout.patternCellY(ProductionMenuLayout.RESULT_CELL)
                 + ProductionMenuLayout.SLOT / 2 - font.lineHeight / 2;
-        graphics.drawString(font, arrow, arrowX, arrowY, refused ? COLOR_REFUSED : COLOR_ARROW, false);
+        graphics.drawString(font, arrow, arrowX, arrowY,
+                refused ? COLOR_REFUSED : noResult ? COLOR_LOST : COLOR_ARROW, false);
         if (refused) {
             int left = leftPos + layout.patternCellX(0) - 1;
             int top = topPos + layout.patternCellY(0) - 1;
@@ -507,9 +529,35 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         }
     }
 
+    /** The gold "?" of a pattern without a result, centred in the slot at {@code x}, {@code y} (issue #62). */
+    private void renderNoResultMark(GuiGraphics graphics, int x, int y) {
+        graphics.drawString(font, NO_RESULT_MARK, x + (ProductionMenuLayout.SLOT - font.width(NO_RESULT_MARK)) / 2 + 1,
+                y + (ProductionMenuLayout.SLOT - font.lineHeight) / 2 + 1, COLOR_LOST, true);
+    }
+
+    /** The orange frame and the "!" in the top-right corner of a bucket cell that is paid twice (issue #62). */
+    private void renderPaidTwice(GuiGraphics graphics, int x, int y) {
+        PoseStack pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(0, 0, COUNT_SHIFT_Z);
+        graphics.renderOutline(x, y, ProductionMenuLayout.SLOT, ProductionMenuLayout.SLOT, COLOR_LOST);
+        graphics.drawString(font, PAID_TWICE_MARK, x + ProductionMenuLayout.SLOT - font.width(PAID_TWICE_MARK) - 1,
+                y + 2, COLOR_LOST, true);
+        pose.popPose();
+    }
+
+    /** A small drop: what an empty fluid cell shows (issue #62). */
+    private static void renderEmptyDrop(GuiGraphics graphics, int x, int y) {
+        // Left and right edge of each pixel row of the drop, inside the 18 px cell.
+        int[][] rows = {{8, 10}, {8, 10}, {7, 11}, {6, 12}, {5, 13}, {5, 13}, {5, 13}, {6, 12}, {7, 11}};
+        for (int row = 0; row < rows.length; row++)
+            graphics.fill(x + rows[row][0], y + 4 + row, x + rows[row][1], y + 5 + row, COLOR_FLUID_EMPTY);
+    }
+
     /**
      * The two fluid cells of the selected pattern (issue #55): the fluid's own sprite in its colour with the amount in
-     * millibuckets, in the column of the result cell above and below it. An unknown fluid is drawn as a red cross.
+     * millibuckets, in their column left of the arrow (issue #62). An empty cell shows a drop; an unknown fluid is drawn
+     * as a red question mark.
      */
     private void renderFluidCells(GuiGraphics graphics, int mouseX, int mouseY) {
         int hovered = fluidCellAt(mouseX, mouseY);
@@ -521,8 +569,10 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
                 graphics.fill(cellX, cellY, cellX + ProductionMenuLayout.SLOT, cellY + ProductionMenuLayout.SLOT,
                         COLOR_CELL_HOVER);
             Optional<FluidCell> fluid = state.fluid(selectedPattern, cell);
-            if (fluid.isEmpty())
+            if (fluid.isEmpty()) {
+                renderEmptyDrop(graphics, cellX, cellY);
                 continue;
+            }
             renderFluid(graphics, fluid.get(), cellX + ITEM_INSET, cellY + ITEM_INSET);
             graphics.renderOutline(cellX, cellY, ProductionMenuLayout.SLOT, ProductionMenuLayout.SLOT,
                     COLOR_FLUID_FRAME);
@@ -580,6 +630,9 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             int tabPattern = pattern;
             state.result(pattern).ifPresent(view -> renderEntry(graphics, tabPattern, view, tabX + ITEM_INSET,
                     tabY + ITEM_INSET));
+            // A pattern with ingredients but no result has nothing to show on its tab but the question (issue #62).
+            if (state.lacksResult(pattern))
+                renderNoResultMark(graphics, tabX, tabY);
             // A pattern the Crafter Feeder refuses is marked under its own tab, whichever pattern is selected, as a
             // stopped product is (issue #34); a bar rather than a tint, so a tab can say both at once.
             if (isRed(pattern))
@@ -903,6 +956,7 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             });
             refusedAt(tab).ifPresent(check -> tooltip.addAll(refusalLines(check)));
             tooltip.addAll(selectorRefusalLines(tab));
+            tooltip.addAll(noResultLines(tab));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_TAB_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             return tooltip;
@@ -923,16 +977,28 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         }
         if (isOverSelectorRow(mouseX, mouseY))
             return selectorRowTooltip(state.selector());
-        // The arrow of a refused pattern says why it is red (issue #34); a pattern that is fine has nothing to say there.
+        // The arrow of a refused pattern says why it is red (issue #34), and of a pattern without a result why it is
+        // gold (issue #62), with the double payment warning; a pattern that is fine has nothing to say there.
         if (isOverArrow(mouseX, mouseY)) {
             refusedAt(selectedPattern).ifPresent(check -> tooltip.addAll(refusalLines(check)));
             tooltip.addAll(selectorRefusalLines(selectedPattern));
+            tooltip.addAll(noResultLines(selectedPattern));
+            for (int cell = 0; cell < ProductionPatterns.GRID_CELLS; cell++) {
+                if (state.paidTwice(selectedPattern, cell).isPresent()) {
+                    tooltip.addAll(paidTwiceLines(WareworksLang.PRODUCTION_FLUID_ALSO_IN_GRID));
+                    break;
+                }
+            }
             return tooltip;
         }
         int fluidCell = fluidCellAt(mouseX, mouseY);
-        if (fluidCell != NONE)
-            return fluidLines(state.fluid(selectedPattern, fluidCell), refusedAt(selectedPattern),
-                    PackageModeGate.enabledOnClient());
+        if (fluidCell != NONE) {
+            Optional<FluidCell> shown = state.fluid(selectedPattern, fluidCell);
+            tooltip.addAll(fluidLines(shown, refusedAt(selectedPattern), PackageModeGate.enabledOnClient()));
+            if (shown.filter(fluid -> state.fluidAlsoInGrid(selectedPattern, fluid.fluid())).isPresent())
+                tooltip.addAll(paidTwiceLines(WareworksLang.PRODUCTION_FLUID_ALSO_IN_GRID));
+            return tooltip;
+        }
         int cell = cellAt(mouseX, mouseY);
         if (cell != NONE) {
             Optional<ProductionScreenState.EntryView> entry = state.entry(selectedPattern, cell);
@@ -942,6 +1008,10 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
             tooltip.add(WareworksLang.translateDirect(cell == ProductionMenuLayout.RESULT_CELL
                     ? WareworksLang.PRODUCTION_RESULT : WareworksLang.PRODUCTION_INGREDIENT).copy()
                     .withStyle(ChatFormatting.GRAY));
+            if (cell == ProductionMenuLayout.RESULT_CELL)
+                tooltip.addAll(noResultLines(selectedPattern));
+            if (state.paidTwice(selectedPattern, cell).isPresent())
+                tooltip.addAll(paidTwiceLines(WareworksLang.PRODUCTION_FLUID_PAID_TWICE));
             tooltip.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_HINT).copy()
                     .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
             // An empty grid cell also teaches that a filter may go in (ADR-082).
@@ -1017,6 +1087,21 @@ public class WarehouseProductionScreen extends AbstractSimiContainerScreen<Produ
         lines.add(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_CLEAR_HINT).copy()
                 .withStyle(ChatFormatting.ITALIC, ChatFormatting.DARK_GRAY));
         return lines;
+    }
+
+    /** Why pattern slot {@code pattern} is never ordered, while it has ingredients but no result (issue #62). */
+    private List<Component> noResultLines(int pattern) {
+        if (!state.lacksResult(pattern))
+            return List.of();
+        return List.of(WareworksLang.translateDirect(WareworksLang.PRODUCTION_NO_RESULT).copy()
+                        .withStyle(ChatFormatting.GOLD),
+                gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_NO_RESULT_HINT)));
+    }
+
+    /** The double payment warning (issue #62): {@code key} says it for what is hovered, then what to do. */
+    private static List<Component> paidTwiceLines(String key) {
+        return List.of(WareworksLang.translateDirect(key).copy().withStyle(ChatFormatting.GOLD),
+                gray(WareworksLang.translateDirect(WareworksLang.PRODUCTION_FLUID_TWICE_HINT)));
     }
 
     /**

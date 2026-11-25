@@ -794,6 +794,42 @@ public record ProductionScreenState(List<PatternView> patterns, List<OrderView> 
         return entry(pattern, ProductionPatterns.RESULT_ENTRY);
     }
 
+    /**
+     * Whether pattern slot {@code pattern} holds an ingredient (an item or a fluid) but no result (issue #62): it is
+     * never offered or ordered, and the screen says so.
+     */
+    public boolean lacksResult(int pattern) {
+        if (pattern < 0 || pattern >= patterns.size() || result(pattern).isPresent())
+            return false;
+        return !patterns.get(pattern).entries().isEmpty() || !patterns.get(pattern).fluids().isEmpty();
+    }
+
+    /**
+     * The fluid, as a fluid cell names it, that grid cell {@code cell} of pattern slot {@code pattern} holds in a filled
+     * container while a fluid cell of the same slot asks for it too (issue #62): an order then pays for both, the
+     * container as an item and the fluid in filled buckets. Empty for any other cell, and for a filter cell. A warning
+     * only; a recipe may really need the container as an item.
+     */
+    public Optional<String> paidTwice(int pattern, int cell) {
+        if (cell < 0 || cell >= ProductionPatterns.GRID_CELLS || pattern < 0 || pattern >= patterns.size()
+                || patterns.get(pattern).fluids().isEmpty())
+            return Optional.empty();
+        List<FluidCell> fluids = patterns.get(pattern).fluids();
+        return entry(pattern, cell).filter(view -> !view.filter())
+                .flatMap(view -> PatternFluids.contained(view.key().toStack()))
+                .map(PatternFluids.Contained::fluid)
+                .filter(held -> fluids.stream().anyMatch(fluid -> fluid.fluid().equals(held)));
+    }
+
+    /** Whether a grid cell of pattern slot {@code pattern} already pays {@code fluid} as an item (issue #62). */
+    public boolean fluidAlsoInGrid(int pattern, String fluid) {
+        for (int cell = 0; cell < ProductionPatterns.GRID_CELLS; cell++) {
+            if (paidTwice(pattern, cell).filter(fluid::equals).isPresent())
+                return true;
+        }
+        return false;
+    }
+
     /** Whether the safety stop is holding anything this station makes (M20). */
     public boolean anyStopped() {
         return !stopped.isEmpty();

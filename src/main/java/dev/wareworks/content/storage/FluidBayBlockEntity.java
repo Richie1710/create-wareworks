@@ -152,6 +152,18 @@ public class FluidBayBlockEntity extends SmartBlockEntity
     @Nullable
     private FluidKey publishedDedication;
 
+    /**
+     * Client only, never saved or synced: the filter item and the fluid {@code client.render.FluidBayRenderer} last
+     * drew for this bay, and when ({@code Util#getNanos}). The visual harness reads them to check what the bay really
+     * drew (issue #61). References and longs, written per drawn frame without allocating.
+     */
+    @Nullable
+    private ItemStack lastDrawnItem;
+    private long lastDrawnNanos = Long.MIN_VALUE;
+    @Nullable
+    private FluidKey lastDrawnFluid;
+    private long lastDrawnFluidNanos = Long.MIN_VALUE;
+
     /** Address of this bay as of the last goggle observation (server) or sync (client). */
     private AisleAssignment assignment = AisleAssignment.NONE;
     /** What is reserved at this bay as of the last goggle observation (server) or sync (client). */
@@ -403,6 +415,57 @@ public class FluidBayBlockEntity extends SmartBlockEntity
     @Override
     public ItemStack storeFilter() {
         return storeFilterBehaviour.getFilter().copy();
+    }
+
+    /**
+     * The store filter stack itself, <b>not a copy</b>, for the one caller that runs per bay per frame
+     * ({@code client.render.FluidBayRenderer}, issue #61: an empty bay shows its filter). The caller only reads it and
+     * never modifies or keeps it; on the client it is what the last update packet carried.
+     */
+    public ItemStack storeFilterView() {
+        return storeFilterBehaviour.getFilter();
+    }
+
+    /** Records that the renderer just drew the item {@code drawn} for this bay at {@code nanos}; render thread only. */
+    public void recordDrawn(ItemStack drawn, long nanos) {
+        lastDrawnItem = drawn;
+        lastDrawnNanos = nanos;
+    }
+
+    /** Records that the renderer just drew the fluid {@code drawn} for this bay at {@code nanos}; render thread only. */
+    public void recordDrawnFluid(FluidKey drawn, long nanos) {
+        lastDrawnFluid = drawn;
+        lastDrawnFluidNanos = nanos;
+    }
+
+    /** The item last drawn for this bay, or {@code null} if none was drawn since {@link #forgetDrawn()}. */
+    @Nullable
+    public ItemStack lastDrawnItem() {
+        return lastDrawnItem;
+    }
+
+    /** When {@link #lastDrawnItem()} was drawn, {@link Long#MIN_VALUE} if never. */
+    public long lastDrawnNanos() {
+        return lastDrawnNanos;
+    }
+
+    /** The fluid last drawn for this bay, or {@code null} if none was drawn since {@link #forgetDrawn()}. */
+    @Nullable
+    public FluidKey lastDrawnFluid() {
+        return lastDrawnFluid;
+    }
+
+    /** When {@link #lastDrawnFluid()} was drawn, {@link Long#MIN_VALUE} if never. */
+    public long lastDrawnFluidNanos() {
+        return lastDrawnFluidNanos;
+    }
+
+    /** Forgets what was drawn, so a later check sees only what is drawn from now on. */
+    public void forgetDrawn() {
+        lastDrawnItem = null;
+        lastDrawnNanos = Long.MIN_VALUE;
+        lastDrawnFluid = null;
+        lastDrawnFluidNanos = Long.MIN_VALUE;
     }
 
     /**

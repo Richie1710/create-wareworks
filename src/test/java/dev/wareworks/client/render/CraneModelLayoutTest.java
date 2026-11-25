@@ -783,11 +783,11 @@ class CraneModelLayoutTest {
                     beamTop = Math.max(beamTop, box.max(Y));
             }
         }
-        assertEquals(beamTop, RackBayRenderer.ITEM_BASE_Y_PX, EPSILON,
+        assertEquals(beamTop, BayItemRenderer.ITEM_BASE_Y_PX, EPSILON,
                 "the drawn item stands on the load beam the pallet stands on");
-        assertEquals(loadFront, RackBayRenderer.ITEM_BACK_Z_PX, EPSILON,
+        assertEquals(loadFront, BayItemRenderer.ITEM_BACK_Z_PX, EPSILON,
                 "the drawn item's back face is the front plane of the pallet and of the widest load step");
-        assertEquals(BLOCK, RackBayRenderer.AISLE_FACE_Z_PX, EPSILON, "the aisle face is the block's own face");
+        assertEquals(BLOCK, BayItemRenderer.AISLE_FACE_Z_PX, EPSILON, "the aisle face is the block's own face");
 
         // The two shapes an item model has in its fixed display transform, as the renderer measures them: a block item
         // is a cube, a flat one a sheet one block across standing in the plane of the aisle face.
@@ -800,19 +800,60 @@ class CraneModelLayoutTest {
                     item + " reaches into the arm's path, which starts at y " + armFloor);
             assertTrue(item.min(Z) >= loadFront - EPSILON,
                     item + " stands inside the load, whose front plane is z " + loadFront);
-            assertTrue(item.max(Z) <= RackBayRenderer.AISLE_FACE_Z_PX + EPSILON,
+            assertTrue(item.max(Z) <= BayItemRenderer.AISLE_FACE_Z_PX + EPSILON,
                     item + " pokes out of the bay's aisle face");
             assertTrue(item.min(X) >= RACK_BAY_WINDOW_MIN_PX - EPSILON
                     && item.max(X) <= RACK_BAY_WINDOW_MAX_PX + EPSILON,
                     item + " leaves the bay's window on axis x");
-            assertTrue(item.min(Y) >= RackBayRenderer.ITEM_BASE_Y_PX - EPSILON, item + " floats below the load beam");
+            assertTrue(item.min(Y) >= BayItemRenderer.ITEM_BASE_Y_PX - EPSILON, item + " floats below the load beam");
         }
         // And the reason a flat item is stood up rather than laid down the way the arm lays one: laid down it is a
         // whole block deep and the bay has loadFront..16 px to give it. If this ever stops being true, the bay may
         // follow the crane's convention again.
-        assertTrue(loadFront + sheetEdge > RackBayRenderer.AISLE_FACE_Z_PX,
+        assertTrue(loadFront + sheetEdge > BayItemRenderer.AISLE_FACE_Z_PX,
                 "a flat item laid down would fit in front of the load after all: " + sheetEdge + " px into "
-                        + (RackBayRenderer.AISLE_FACE_Z_PX - loadFront) + " px");
+                        + (BayItemRenderer.AISLE_FACE_Z_PX - loadFront) + " px");
+    }
+
+    /**
+     * <b>The filter item of an empty fluid bay stands clear of the crane and of the vessel</b> (issue #61). It is drawn
+     * by the same {@code BayItemRenderer} as a rack bay's item, on the same anchor planes, so the planes are held to the
+     * fluid bay's own models as well: the item stands on the load beam, in front of every vessel element and of the
+     * plane the fluid box ends on, below the arm floor and the vessel's rim, inside the bay's window and behind its
+     * aisle face. Both item shapes are checked.
+     */
+    @Test
+    void theItemDrawnInAnEmptyFluidBayStandsClearOfTheArmAndTheVessel() throws IOException {
+        float armFloor = armFloorPx();
+        float blockEdge = CraneModelLayout.BLOCK_ITEM_SIZE_PX * CraneModelLayout.ITEM_SCALE;
+        float sheetEdge = BLOCK * CraneModelLayout.ITEM_SCALE;
+        float sheetThickness = CraneModelLayout.FLAT_ITEM_THICKNESS_PX * CraneModelLayout.ITEM_SCALE;
+        for (String tier : FLUID_BAY_TIERS) {
+            float vesselFront = FluidBayLayout.FLUID_MAX_Z_PX;
+            float beamTop = 0.0F;
+            for (Box box : memberBoxes(tier)) {
+                if (FLUID_BAY_VESSEL.contains(box.name()))
+                    vesselFront = Math.max(vesselFront, box.max(Z));
+                if (box.name().equals(RACK_BAY_BEAM))
+                    beamTop = Math.max(beamTop, box.max(Y));
+            }
+            assertEquals(beamTop, BayItemRenderer.ITEM_BASE_Y_PX, EPSILON, tier + ": the item stands on the load beam");
+            assertEquals(vesselFront, BayItemRenderer.ITEM_BACK_Z_PX, EPSILON,
+                    tier + ": the item's back face is the vessel's front plane");
+            for (Box item : List.of(drawnBayItem("block item", blockEdge, blockEdge, blockEdge),
+                    drawnBayItem("standing flat item", sheetEdge, sheetEdge, sheetThickness))) {
+                assertTrue(item.max(Y) <= armFloor,
+                        item + " reaches into the arm's path, which starts at y " + armFloor);
+                assertTrue(item.max(Y) <= FluidBayLayout.VESSEL_RIM_PX + EPSILON, item + " reaches into the arm port");
+                assertTrue(item.max(Z) <= BayItemRenderer.AISLE_FACE_Z_PX + EPSILON,
+                        item + " pokes out of the bay's aisle face");
+                assertTrue(item.min(X) >= RACK_BAY_WINDOW_MIN_PX - EPSILON
+                        && item.max(X) <= RACK_BAY_WINDOW_MAX_PX + EPSILON,
+                        item + " leaves the bay's window on axis x");
+                for (Box box : memberBoxes(tier))
+                    assertFalse(item.overlaps(box), item + " is drawn inside " + box);
+            }
+        }
     }
 
     /** The lowest point the arm or anything it carries ever reaches, in model pixels. */
@@ -828,16 +869,16 @@ class CraneModelLayoutTest {
 
     /**
      * The box the stored item of a bay covers, from the renderer's own anchor planes: centred in x on the window,
-     * standing on {@code RackBayRenderer.ITEM_BASE_Y_PX} and with its back face on {@code RackBayRenderer.ITEM_BACK_Z_PX}
-     * — exactly the three translations {@code RackBayRenderer#renderSafe} applies.
+     * standing on {@code BayItemRenderer.ITEM_BASE_Y_PX} and with its back face on {@code BayItemRenderer.ITEM_BACK_Z_PX}
+     * — exactly the three translations {@code BayItemRenderer#draw} applies.
      */
     private static Box drawnBayItem(String name, float width, float height, float depth) {
         float halfWidth = width / 2.0F;
         return new Box("rack bay renderer", name,
-                new float[] {RackBayRenderer.ITEM_X_PX - halfWidth, RackBayRenderer.ITEM_BASE_Y_PX,
-                        RackBayRenderer.ITEM_BACK_Z_PX},
-                new float[] {RackBayRenderer.ITEM_X_PX + halfWidth, RackBayRenderer.ITEM_BASE_Y_PX + height,
-                        RackBayRenderer.ITEM_BACK_Z_PX + depth},
+                new float[] {BayItemRenderer.ITEM_X_PX - halfWidth, BayItemRenderer.ITEM_BASE_Y_PX,
+                        BayItemRenderer.ITEM_BACK_Z_PX},
+                new float[] {BayItemRenderer.ITEM_X_PX + halfWidth, BayItemRenderer.ITEM_BASE_Y_PX + height,
+                        BayItemRenderer.ITEM_BACK_Z_PX + depth},
                 false, Set.of());
     }
 
