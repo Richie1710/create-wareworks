@@ -632,7 +632,7 @@
   "wareworks.gui.optimizer.item_hint": "Gegenstand setzt ihn, leere Hand leert",
   "wareworks.gui.optimizer.items": "Gegenstände",
   "wareworks.gui.optimizer.list": "Klemmbrett",
-  "wareworks.gui.optimizer.list_hint": "Klicke ein Klemmbrett hierher",
+  "wareworks.gui.optimizer.list_hint": "Klemmbrett hier klicken: fügt Liste hinzu",
   "wareworks.gui.optimizer.merge": "Zusammenführen",
   "wareworks.gui.optimizer.merge_hint": "Sammelt jeden Gegenstand in seinem Hauptplatz",
   "wareworks.gui.optimizer.merge_now": "Nur Plätze, die ganz passen, bei freiem Kran",

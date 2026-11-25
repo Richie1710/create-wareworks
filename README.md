@@ -196,7 +196,8 @@ item, and the warehouse even orders it from your own machines), a **maximum** it
 never hands to your automation. Details are in the **Stock rules** section below.
 
 Also included: goggle information on every block, Create-style item descriptions, Ponder scenes for nearly all of them (not
-yet for the home point and the optimizer), English and German translations, and recipes at mid-game Create tier.
+yet for the home point and the optimizer), English, German and Spanish translations (Spanish by
+[@albertosaurio65](https://github.com/albertosaurio65)), and recipes at mid-game Create tier.
 
 Items only ever move in the crane's grabber, and nothing is lost or duplicated when blocks break, chunks unload or the
 server restarts.
