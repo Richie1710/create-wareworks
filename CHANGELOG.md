@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.1-beta] - 2026-11-26
+
 ### Fixed
 
 - **A recipe that makes a filled bucket no longer gets stuck.** If a production pattern's result was a water bucket,
@@ -1893,7 +1895,8 @@ First public alpha. Please back up your world before trying it.
 - Production station: patterns deliver ingredients to your own Create machines and collect the result
 - Ponder scenes, English and German translations
 
-[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.28.0-beta...HEAD
+[unreleased]: https://github.com/Richie1710/create-wareworks/compare/v0.28.1-beta...HEAD
+[0.28.1-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.28.0-beta...v0.28.1-beta
 [0.28.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.27.0-beta...v0.28.0-beta
 [0.27.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.26.0-beta...v0.27.0-beta
 [0.26.0-beta]: https://github.com/Richie1710/create-wareworks/compare/v0.25.0-beta...v0.26.0-beta
