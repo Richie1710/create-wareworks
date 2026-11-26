@@ -36,6 +36,7 @@ import dev.wareworks.core.inventory.LocationCount;
 import dev.wareworks.core.job.CraneSpeeds;
 import dev.wareworks.core.job.JobPlanner;
 import dev.wareworks.core.job.JobType;
+import dev.wareworks.core.job.Reservation;
 import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.job.PlanResult;
 import dev.wareworks.core.job.PlannedJob;
@@ -204,6 +205,32 @@ final class CraneDispatch {
 
     ReservationView<ItemKey, RackPosition> reservations() {
         return ledgerView;
+    }
+
+    /**
+     * Jobs whose drop into a fluid bay was just refused ({@link #hasPlaceKeepingItem}), with that bay, until their next
+     * reroute. Not saved: after a rejoin that reroute asks afresh.
+     */
+    private final Map<UUID, RackPosition> refusedAtBay = new HashMap<>();
+
+    /**
+     * Items of {@code key} that jobs are bringing into storage locations that keep them as items (ADR-089 amendment),
+     * from the ledger's room reservations: with {@code arrivals} the jobs that bring items into the warehouse (a store
+     * or collect trip, which production orders are credited for), otherwise the ones that put items back (a retrieve,
+     * supply or fill leftover). A relocation is neither, and a fluid bay or a port keeps nothing.
+     */
+    long boundForShelves(ItemKey key, boolean arrivals) {
+        long bound = 0L;
+        for (Reservation<ItemKey, RackPosition> reservation : ledger.reservations()) {
+            if (reservation.kind() != Reservation.Kind.CAPACITY || !reservation.key().equals(key))
+                continue;
+            TransportJob<ItemKey, RackPosition> job = tracked.get(reservation.jobId());
+            if (job != null && job.type() != JobType.RELOCATE && job.targetKind() == LocationKind.STORAGE
+                    && job.type().bringsItemsIn() == arrivals
+                    && !controller.takesFluidContainers(reservation.location()))
+                bound += reservation.amount();
+        }
+        return bound;
     }
 
     /** The jobs the ledger holds reservations for (unmodifiable copy): the crane's current job, if any. */
@@ -421,7 +448,9 @@ final class CraneDispatch {
         // NoJobReason.NO_EMPTY_CONTAINERS stays out too (M31, issue #21): a fill request that lacks an empty container
         // is answered by index lookups before any live call, and backing off would stop storing from every input
         // of the aisle — including the input a bucket arriving would cure the request through.
+        // NoJobReason.AWAITED_AS_ITEM belongs here as WAREHOUSE_FULL does: it ends the same candidate walk.
         if (result.reasons().contains(NoJobReason.WAREHOUSE_FULL)
+                || result.reasons().contains(NoJobReason.AWAITED_AS_ITEM)
                 || result.reasons().contains(NoJobReason.NO_MATCHING_FILTER)
                 || result.reasons().contains(NoJobReason.NO_LOCATION_FOR_TYPE)
                 || result.reasons().contains(NoJobReason.PACKAGE_BAY_NEEDS_FILTER)
@@ -911,6 +940,10 @@ final class CraneDispatch {
         // because the planner asks it per storage candidate per key.
         JobPlanner.InsertEstimate<ItemKey, RackPosition> snapshots =
                 JobPlanner.InsertEstimate.fromSnapshots(controller.stockIndex(), ItemKey::getMaxStackSize);
+        // Whether a filled container is awaited as an item (ADR-089 amendment), worked out once per key and planner
+        // input and only when a fluid bay is a candidate for it. A reroute builds its input with the job's own
+        // reservation released, so the containers in the head never count as already on their way.
+        Map<ItemKey, Boolean> awaited = new HashMap<>();
         return PlannerInput.builder(controller.stockIndex(), ledgerView)
                 .crane(craneBranch, craneX, pose.y())
                 .speeds(dock.currentSpeeds())
@@ -949,6 +982,10 @@ final class CraneDispatch {
                 // of water and an empty one are alike to the planner and the nearer one wins, which spreads one fluid
                 // over several bays (issue #60, ADR-088 D1).
                 .heldAsContents(controller::fluidHeldFor)
+                // And it keeps no item: a filled container something is waiting for is never taken to a bay, on any path
+                // that stores (ADR-089 amendment).
+                .keptAsItem((rack, key) -> controller.takesFluidContainers(rack)
+                        && awaited.computeIfAbsent(key, controller::awaitsAsItem))
                 // A fluid bay is never where a relocation goes, planned or rerouted (issue #46, ADR-079): it takes a
                 // filled container by draining it, which would turn a relocated item into fluid. The rest of the
                 // strictly-better rule is the planner's own (RelocationRule).
@@ -1264,6 +1301,7 @@ final class CraneDispatch {
     }
 
     void release(UUID jobId) {
+        refusedAtBay.remove(jobId);
         ledger.releaseJob(jobId);
         tracked.remove(jobId);
     }
@@ -1361,6 +1399,50 @@ final class CraneDispatch {
     }
 
     /**
+     * Whether the {@code amount} items {@code job} carries to the fluid bay at {@code bay} could be put somewhere that
+     * keeps them as items instead ({@code JobPlanner#planRerouteKeepingItem}, ADR-089 amendment): the question
+     * {@link #planReroute} answers next, with the job's own reservation left out in the same way.
+     */
+    boolean hasPlaceKeepingItem(Level level, WarehouseLayout layout, StackerCraneBlockEntity dock,
+            TransportJob<ItemKey, RackPosition> job, RackPosition bay, int amount) {
+        if (amount < 1 || !isOnTheWarehouse(layout, dock.craneState().pose()))
+            return false;
+        ledger.releaseJob(job.id());
+        try {
+            boolean found = planner.planRerouteKeepingItem(rerouteInput(level, layout, dock, job, false),
+                    job.key(), amount, job.type(), bay).isPresent();
+            if (found)
+                refusedAtBay.put(job.id(), bay);
+            return found;
+        } catch (RuntimeException e) {
+            if (planningFailures.tryLog(level.getGameTime()))
+                LOGGER.error("Warehouse controller at {} could not plan a reroute", controller.getBlockPos(), e);
+            return false;
+        } finally {
+            track(job);
+        }
+    }
+
+    /**
+     * The planner input of a reroute of {@code job}. While its key is awaited as an item ({@code afterRefusal} counts
+     * as awaited), {@code keptAsItem} also names every input that may not let the item go again: one that holds it
+     * ({@code PlannerInput#storeHeld}), and every Recipe Selector return input but the one it came from, where a later
+     * store could credit that station's order with it. Such an input comes after the fluid bays (ADR-089 amendment).
+     */
+    private PlannerInput<ItemKey, RackPosition> rerouteInput(Level level, WarehouseLayout layout,
+            StackerCraneBlockEntity dock, TransportJob<ItemKey, RackPosition> job, boolean afterRefusal) {
+        Map<ItemKey, Boolean> awaited = new HashMap<>();
+        if (afterRefusal)
+            awaited.put(job.key(), true);
+        return input(level, layout, dock, List.of())
+                .keptAsItem((rack, key) -> (controller.takesFluidContainers(rack)
+                        || controller.storeHeld(rack, key)
+                        || !rack.equals(job.source()) && controller.isSelectorReturnInput(rack))
+                        && awaited.computeIfAbsent(key, controller::awaitsAsItem))
+                .build();
+    }
+
+    /**
      * A new target for the {@code amount} items {@code job} holds. The job's own reservation (capacity or transit at
      * its current target) is left out while planning: it stands for these very items, and would otherwise keep a former
      * target that has room for exactly them from ever qualifying again. It is tracked again afterwards (a found target
@@ -1370,6 +1452,11 @@ final class CraneDispatch {
      */
     Optional<RerouteTarget<RackPosition>> planReroute(Level level, WarehouseLayout layout, StackerCraneBlockEntity dock,
             TransportJob<ItemKey, RackPosition> job, @Nullable RackPosition failedTarget, int amount) {
+        // The reroute right after a refused drop answers as the drop check did: the key still counts as awaited, even
+        // if the wait ended while the arm retracted. Otherwise a port or an output could take the container although
+        // the refused bay takes it (ADR-089 amendment).
+        RackPosition refused = refusedAtBay.remove(job.id());
+        boolean afterRefusal = refused != null && refused.equals(failedTarget);
         if (amount < 1)
             return Optional.empty();
         // A machine on rails this warehouse does not contain can drive to nothing, so a reroute would only name a
@@ -1382,7 +1469,7 @@ final class CraneDispatch {
             // No collect sources: a reroute looks for a new home for items the crane already holds and never plans a
             // collect job, so gating the ports here would spend the world lookups of that pass on nothing (M18 review).
             Optional<RerouteTarget<RackPosition>> target = planner.planReroute(
-                    input(level, layout, dock, List.of()).build(), job.key(), amount, job.type(), failedTarget);
+                    rerouteInput(level, layout, dock, job, afterRefusal), job.key(), amount, job.type(), failedTarget);
             // The last resort of a store reroute may be an accepting port, and that spends its pulse token too, so a
             // single edge can never export one trip's leftovers and then a whole trip of its own (M17). The kind comes
             // from the target that was found, never from the job, which still names the target that failed.

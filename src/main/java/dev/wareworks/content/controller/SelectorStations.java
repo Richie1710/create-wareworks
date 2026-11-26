@@ -56,14 +56,17 @@ final class SelectorStations {
      * @param returnRack  the station's return input as a rack position of this aisle, if it has one
      * @param inputMember whether {@code returnRack} is a loaded Warehouse Input of this aisle
      * @param decision    the gate's answer, {@code null} without a loaded selecting station
-     * @param expected    the items the return input may store: the selection and the results of the station's open
+     * @param expected    the items the return input may store: the selection, the results of the station's open
      *                    selector orders that have handed something over (review fix: a queued order's result is no
-     *                    reason to store it, nothing of that order is in the line)
+     *                    reason to store it, nothing of that order is in the line) and the empty containers of the
+     *                    station's own fluid ingredients ({@link #viewOf})
+     * @param containers  the part of {@code expected} that is expected <b>only</b> as such an empty container, so it is
+     *                    nobody's product ({@link #returnedContainer})
      * @param fault       the station's fault the gate was given (empty without a loaded selecting station)
      */
     record View(RackPosition rack, @Nullable WarehouseProductionBlockEntity station, Optional<RackPosition> returnRack,
                 boolean inputMember, @Nullable SelectorGate.Decision<ItemKey> decision, Set<ItemKey> expected,
-                Optional<SelectorWait> fault) {
+                Set<ItemKey> containers, Optional<SelectorWait> fault) {
     }
 
     private final WarehouseControllerBlockEntity controller;
@@ -230,6 +233,19 @@ final class SelectorStations {
             return false;
         View view = byReturn.get(input);
         return view != null && !view.expected().contains(key);
+    }
+
+    /**
+     * Whether the items of {@code key} that leave the input at {@code input} are the <b>empty containers coming back</b>
+     * to a selector station: it is that station's return input, and it takes {@code key} only as the container of its
+     * fluid ingredients, not as its selection or as the result of an order in its line. Such an arrival is no machine's
+     * product, so it credits no production order.
+     */
+    boolean returnedContainer(RackPosition input, ItemKey key) {
+        if (views().isEmpty())
+            return false;
+        View view = byReturn.get(input);
+        return view != null && view.containers().contains(key);
     }
 
     /** The selector station whose return input is at {@code input}, if one is. */
@@ -550,11 +566,26 @@ final class SelectorStations {
         }
     }
 
+    /**
+     * The view of the station at {@code rack}.
+     * <p>
+     * <b>Empty containers</b> (ADR-085 D9 as amended for ADR-089). A fluid reaches the player's machine in a filled
+     * container, and the empty one comes back out of it, often through the return input. It is therefore expected, from
+     * two sources: every listed selector order of the station that has delivered a container (open, or ended and not
+     * yet forgotten, so a pattern edited meanwhile or an unloaded station changes nothing), and, while a station in
+     * local mode is loaded, the fluid cells of the patterns it offers (a container that comes back after its order is
+     * forgotten). A container expected for this reason alone credits no order ({@link #returnedContainer}); if the
+     * station is also making that very item, it counts as the result. Nothing is added for the crafting remainder of an
+     * item ingredient, because Create's Basin and Saw hand none back.
+     */
     private View viewOf(Level level, RackPosition rack) {
         List<ProductionOrder<ItemKey, RackPosition>> open = new ArrayList<>();
         Set<ItemKey> expected = new LinkedHashSet<>();
+        Set<ItemKey> containers = new LinkedHashSet<>();
         Optional<RackPosition> orderReturn = Optional.empty();
         for (ProductionOrder<ItemKey, RackPosition> order : orders.ordersFor(rack)) {
+            if (order.selectorBound())
+                addDeliveredContainers(order, containers);
             if (!order.isOpen())
                 continue;
             open.add(order);
@@ -575,15 +606,19 @@ final class SelectorStations {
             if (seen != null)
                 seen.selection().ifPresent(expected::add);
             Optional<RackPosition> guarded = orderReturn.isPresent() || seen == null ? orderReturn : seen.returnRack();
-            return new View(rack, null, guarded, false, null, Set.copyOf(expected), Optional.empty());
+            return viewWithout(rack, guarded, expected, containers);
         }
         if (!found.get().selectorMode().selects()) {
             if (lastSeen.remove(rack) != null)
                 controller.setChanged();
-            return new View(rack, null, orderReturn, false, null, Set.copyOf(expected), Optional.empty());
+            return viewWithout(rack, orderReturn, expected, containers);
         }
         WarehouseProductionBlockEntity station = found.get();
         station.selection().ifPresent(expected::add);
+        if (station.selectorMode() == SelectorMode.LOCAL) {
+            for (String fluid : station.offeredFluids())
+                controller.emptyContainerOfFluid(fluid).ifPresent(containers::add);
+        }
         Optional<RackPosition> returnRack = station.selectorReturnInput().flatMap(controller::rackAt);
         LastSeen seen = new LastSeen(returnRack, station.selection());
         if (!seen.equals(lastSeen.put(rack, seen)))
@@ -602,7 +637,28 @@ final class SelectorStations {
                 station.bufferIsEmpty(), controller.reservations().reservedInbound(rack) == 0L,
                 !slips || PackageHandover.packagersIdle(level, packagers));
         SelectorGate.Decision<ItemKey> decision = SelectorGate.decide(open, orders::hasOpenChildren, facts);
-        return new View(rack, station, returnRack, inputMember, decision, Set.copyOf(expected), fault);
+        containers.removeAll(expected);
+        expected.addAll(containers);
+        return new View(rack, station, returnRack, inputMember, decision, Set.copyOf(expected),
+                Set.copyOf(containers), fault);
+    }
+
+    /** The view of a station that gets no decision: not loaded, or not selecting any more. */
+    private static View viewWithout(RackPosition rack, Optional<RackPosition> returnRack, Set<ItemKey> results,
+            Set<ItemKey> containers) {
+        Set<ItemKey> only = new LinkedHashSet<>(containers);
+        only.removeAll(results);
+        Set<ItemKey> expected = new LinkedHashSet<>(results);
+        expected.addAll(only);
+        return new View(rack, null, returnRack, false, null, Set.copyOf(expected), Set.copyOf(only), Optional.empty());
+    }
+
+    /** The empty forms of the filled containers {@code order} has brought to its station ({@link #viewOf}). */
+    private void addDeliveredContainers(ProductionOrder<ItemKey, RackPosition> order, Set<ItemKey> containers) {
+        for (SupplyLine<ItemKey> line : order.lines()) {
+            if (line.isFluid() && line.delivered() > 0)
+                controller.emptyContainerOf(line.key()).ifPresent(containers::add);
+        }
     }
 
     /** The station's fault, in the order a player has to fix them. */

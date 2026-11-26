@@ -458,6 +458,13 @@ class RestockPlannerTest {
         assertFalse(RestockOutcome.SATISFIED.isBlocked());
         assertFalse(RestockOutcome.DEFERRED.isBlocked());
         assertTrue(RestockOutcome.NO_ROOM.isBlocked());
+        assertTrue(RestockOutcome.FLUID_PATTERN.isBlocked());
+        assertFalse(RestockOutcome.FLUID_PATTERN.isOrdering());
+        assertEquals(StockRuleStatus.BELOW_MINIMUM, RestockOutcome.FLUID_PATTERN.refine(StockRuleStatus.BELOW_MINIMUM),
+                "the rule keeps calling for its item");
+        // The keeper's screen sends the outcome by ordinal: a new value is appended, never inserted.
+        assertEquals(11, RestockOutcome.ORDERED.ordinal());
+        assertEquals(12, RestockOutcome.FLUID_PATTERN.ordinal());
         // Every outcome has a text of its own, because every one of them is shown to a player: the status folds several
         // of them back into a bare "below the minimum", and this line is what tells them apart (M15 review fix).
         for (RestockOutcome outcome : RestockOutcome.values())

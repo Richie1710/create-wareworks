@@ -761,6 +761,7 @@ public final class WareworksLangGen {
             lang.accept(WareworksLang.key(WareworksLang.noJobReasonKey(reason)), switch (reason) {
                 // No origin is named in these four (M18 review): a collecting port reports the same three of them as a
                 // warehouse input, and a collect-only aisle need not contain an input at all.
+                case AWAITED_AS_ITEM -> "awaited as an item: needs shelf room, not a Fluid Bay";
                 case WAREHOUSE_FULL -> "no storage location accepts these items";
                 case NO_MATCHING_FILTER -> "no storage location takes these items, whatever room it has";
                 case NO_LOCATION_FOR_TYPE -> "no free place for this item type";
@@ -1275,6 +1276,7 @@ public final class WareworksLangGen {
                 case WAITING_FOR_INGREDIENTS -> "The ingredients are not available";
                 case DEFERRED -> "Will be ordered next";
                 case ORDERED -> "Ordered from a production station";
+                case FLUID_PATTERN -> "Uses a fluid: not auto-restocked. Order it at the terminal";
             });
         }
         for (StockRulePause.Cause cause : StockRulePause.Cause.values()) {

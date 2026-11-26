@@ -717,7 +717,15 @@ final class CraneExecution {
                 // as in M30; an empty one is filled, and only for a fill trip — an empty container at a bay on any other
                 // job is a planner defect and is refused like a full bay, never filled.
                 if (target.exchangesOnly()) {
-                    if (FluidContainers.carriesFluid(job.key()))
+                    // Something may have started to wait for this very container since the trip was planned (ADR-089
+                    // amendment): it is not drained then, but refused like a full bay, and the reroute takes it to a
+                    // place that keeps it an item. Only while there is one: otherwise it is poured, and that is also
+                    // how a carry rerouted to a bay for want of such a place is accepted here.
+                    if (FluidContainers.carriesFluid(job.key()) && crane.linkedControllerEntity()
+                            .map(controller -> controller.keepsOffFluidBay(crane, job, drop.target(), drop.amount()))
+                            .orElse(false))
+                        events.add(CraneEvent.dropResult(0, drop.amount()));
+                    else if (FluidContainers.carriesFluid(job.key()))
                         performExchange(level, job, target, drop.amount(), events);
                     else if (job.type() == JobType.FILL)
                         performFill(level, job, target, drop.amount(), events);

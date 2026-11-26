@@ -12,6 +12,7 @@ import dev.wareworks.content.controller.WarehouseControllerBlockEntity;
 import dev.wareworks.content.item.ItemKey;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.StockKeeperRules;
+import dev.wareworks.content.station.StockKeeperScreenState;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
 import dev.wareworks.content.station.WarehouseStockKeeperBlock;
 import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
@@ -21,18 +22,22 @@ import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.core.stock.StockAccess;
+import dev.wareworks.core.stock.StockRuleAdjustment;
 import dev.wareworks.core.stock.StockRulePause;
 import dev.wareworks.core.stock.StockRuleStatus;
+import io.netty.buffer.Unpooled;
 import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.network.connection.ConnectionType;
 
 /**
  * GameTests of <b>automatic restocking</b> and its safety stop ({@code docs/warehouse-system.md} §3.6.3, M15 part 2,
@@ -523,6 +528,75 @@ public final class StockRestockGameTests {
                     helper.assertFalse(helper.getBlockState(aisle.rackPos(KEEPER_RACK))
                             .getValue(WarehouseStockKeeperBlock.PAUSED), "the keeper's pause lamp goes out");
                 })
+                .thenSucceed();
+    }
+
+    // --- patterns with a fluid cell --------------------------------------------------------------------------------
+
+    /**
+     * A rule whose only pattern has a fluid cell: automatic restocking skips it on purpose (ADR-089 D8), and the rule
+     * says so instead of "No production station here makes this", while the terminal still offers the item. A second
+     * pattern without a fluid makes the rule order as ever; with no pattern at all it is {@code NO_PATTERN} again.
+     */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void restocksaysafluidpatternisskipped(GameTestHelper helper) {
+        AisleFixture aisle = stockedAisle(helper);
+        Map<ItemKey, Long> conserved = ItemCensus.of(LOG, LOGS_IN_STOCK);
+        helper.onEachTick(() -> ItemCensus.assertEquals(helper, conserved, "while a fluid pattern is skipped"));
+
+        helper.startSequence()
+                .thenWaitUntil(() -> assertReady(helper, aisle))
+                .thenExecute(() -> {
+                    setPattern(helper, aisle);
+                    helper.assertValueEqual(aisle.productionAt(PRODUCTION_RACK)
+                            .editFluidCell(0, 0, "minecraft:water", 250),
+                            WarehouseProductionBlockEntity.EditOutcome.CHANGED, "the pattern gets a water cell");
+                    keep(aisle, PLANK_MINIMUM);
+                })
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().restockOutcomeOf(PLANK).name(),
+                        "FLUID_PATTERN", "a station makes it, but only with a fluid"))
+                .thenIdle(SETTLE_TICKS)
+                .thenExecute(() -> {
+                    WarehouseControllerBlockEntity controller = aisle.controller();
+                    helper.assertValueEqual(controller.restockOutcomeOf(PLANK).name(), "FLUID_PATTERN", "and stays so");
+                    helper.assertTrue(controller.restockOutcomeOf(PLANK).isBlocked(), "a player can act on it");
+                    helper.assertTrue(controller.openProductionOrders().isEmpty(), "nothing is ordered by itself");
+                    helper.assertTrue(controller.producibleAmounts().containsKey(PLANK),
+                            "while the terminal still offers the item");
+                    helper.assertValueEqual(status(helper, aisle), StockRuleStatus.BELOW_MINIMUM,
+                            "the rule still calls for its item");
+                    StockKeeperScreenState.RowView row = aisle.stockKeeperAt(KEEPER_RACK)
+                            .screenState(StockRuleAdjustment.NONE, StockKeeperScreenState.NO_ROW).row(0).orElseThrow();
+                    RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(Unpooled.buffer(),
+                            helper.getLevel().registryAccess(), ConnectionType.NEOFORGE);
+                    row.write(buffer);
+                    helper.assertValueEqual(StockKeeperScreenState.RowView.read(buffer).restock().name(),
+                            "FLUID_PATTERN", "and the keeper's screen is told");
+
+                    // A second pattern for the same item without a fluid: the rule orders as it always did.
+                    WarehouseProductionBlockEntity station = aisle.productionAt(PRODUCTION_RACK);
+                    helper.assertTrue(station.setPatternEntry(1, 0, LOG, 1), "a plain ingredient");
+                    helper.assertTrue(station.setPatternEntry(1, ProductionPatterns.RESULT_ENTRY, PLANK,
+                            PLANKS_PER_LOG), "and its result");
+                })
+                .thenWaitUntil(() -> {
+                    helper.assertValueEqual(aisle.controller().openProductionOrders().size(), 1,
+                            "the plain pattern is ordered");
+                    helper.assertValueEqual(aisle.controller().restockOutcomeOf(PLANK), RestockOutcome.ORDER_OPEN,
+                            "and the rule says it is being made");
+                })
+                .thenSucceed();
+    }
+
+    /** No pattern at all keeps its old answer. */
+    @GameTest(template = AISLE_16X10X7, timeoutTicks = TIMEOUT_TICKS)
+    public static void restocksaysnopatternwithoutone(GameTestHelper helper) {
+        AisleFixture aisle = stockedAisle(helper);
+        helper.startSequence()
+                .thenWaitUntil(() -> assertReady(helper, aisle))
+                .thenExecute(() -> keep(aisle, PLANK_MINIMUM))
+                .thenWaitUntil(() -> helper.assertValueEqual(aisle.controller().restockOutcomeOf(PLANK),
+                        RestockOutcome.NO_PATTERN, "no station here makes it"))
                 .thenSucceed();
     }
 

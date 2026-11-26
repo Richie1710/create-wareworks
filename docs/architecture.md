@@ -8989,6 +8989,8 @@ player confirms it.
   the station and is taken out with an empty-hand click on the input. What was last seen of each selector station
   (return input and selection) is saved with the controller and carried through a remap, so the guard holds while the
   station is unloaded, across a restart.
+  **Amended for ADR-089:** it also stores the empty containers of the station's own fluid ingredients, see ADR-089,
+  *Amendment: the empty container at a selector station*.
 * **D10 Holds stop the station.** An order that ends after handing ingredients over without completing, or an
   unexpected return, arms a `SelectorHold`: nothing fetches, nothing switches, no deadline runs, the selection is kept.
   Only the player releases it (empty-hand sneak-click on the station or Resume), and only once the buffer, the return
@@ -9331,6 +9333,16 @@ empty on its next save, and an open order's fluid line is read as an item line o
 `FluidPatternGameTests`, `FluidSupplyGameTests`, `MultiCraneGameTests`; the visual scenarios `fluidpattern` and
 `patternjei`; the robustness phase "fluid supply in flight"; the Ponder scene `warehouse/fluid_pattern`.
 
+**Amendment: the Stock Keeper says why a fluid pattern is not restocked (amends D8).** D8 stands: restocking skips a
+pattern with fluid cells. But a rule whose item had only such patterns then reported `NO_PATTERN` ("No production
+station here makes this") while the terminal offered the item. The controller now remembers the results of the patterns
+it skipped and puts the new `RestockOutcome.FLUID_PATTERN` in place of the planner's `NO_PATTERN` about one of them, as
+`PACKAGE_MODE` replaces `DISABLED`; the planner never answers it, and an item with a pattern without a fluid is decided
+as before. The keeper's screen carries the outcome **by ordinal** (ADR-027's note that it is saved by name was wrong: it
+is not saved at all), so the value is appended and the network version is raised to 32 for the unreleased version.
+Tests: GameTests `restocksaysafluidpatternisskipped`, `restocksaysnopatternwithoutone`, JUnit `RestockPlannerTest`,
+`KeeperRestockTextWidthTest` (EN, DE, ES).
+
 **Amendment ([issue #62](https://github.com/Richie1710/create-wareworks/issues/62)): the screen.** The first layout put
 the fluid cells above and below the result, and a player read the whole column as outputs. They now stand in a column of
 their own between the grid and the arrow, so the result is alone right of it. The window keeps its size: the arrow
@@ -9340,6 +9352,133 @@ Slot indexes, payloads and saves are unchanged. A slot with ingredients but no r
 so (screen, tooltips, goggles). A filled bucket in the grid beside a fluid cell of its fluid is warned about, and
 **not converted**: a bucket item is a real ingredient of some recipes, and a conversion that depends on what else the
 pattern holds would depend on the order of the clicks.
+
+**Amendment: the empty container at a selector station (amends ADR-085 D9).** D4 sends the empty bucket out through the
+return input, but D9 let a selector's return input store only the selection and the results of engaged orders, so the
+station's own bucket armed an `UNEXPECTED_RETURN` hold and stopped the whole station (reproduced by GameTests before the
+fix, also for a bucket arriving after the order completed; after a cancel it also refused the release). The return input
+now also expects the **empty form** of a fluid container, from two sources and nothing else:
+
+* every **listed** selector order of the station that has **delivered** a container (a fluid line with `delivered > 0`),
+  open or ended and not yet forgotten. It needs only what the controller saves already, so it works while the station is
+  unloaded and after its pattern was edited or removed;
+* while a station in **local** mode is loaded, the fluid cells of the patterns it **offers** (`activeSlots`, so a pattern
+  the machine check refuses adds nothing): the bucket that comes back after its order is forgotten (30 s after it ended).
+  A station in slip mode adds none, because fluid cells are refused there (`FLUID_FAR`).
+
+It is stored as ordinary stock. **It credits no order.** Letting it in is not enough for that: an arrival stored out of
+an input counts for any order without a selector whose result it is, so a returned bucket would complete an open bucket
+order (an automatic one of a stock rule included, which would disarm its safety stop). What the return input takes
+**only** as a container is therefore not reported as an arrival, and its rise of the stock level is discounted from the
+stock-level channel (`SelectorStations#returnedContainer`). An item that is also the station's selection or the result of
+an order in its line counts as a result. A bucket through an ordinary input credits as it always did. Everything else is
+quarantined as before, a filled bucket and other containers included. **Decided limits:** (1) such a station takes that
+empty container from any source at its return input, which is harmless because it completes nothing; a station that is
+itself making that item cannot tell a late returned bucket from its product, and counts it; (2) at an **unloaded** station with no listed
+order that delivered one, the patterns cannot be read: the bucket waits in the input, no hold is armed (the selector pass
+skips unloaded stations), and it is stored once the station is loaded. Saving the containers in `SelectorLastSeen` was
+rejected: a save format change for a wait that ends by itself; (3) a pattern edited or removed **and** its order
+forgotten leaves nothing that names the bucket, so it holds the station like any foreign item (the player takes it out
+with an empty hand and releases). A per-station allowance (containers delivered minus returned) was rejected: new
+persistence, and wrong holds for leftovers after a cancel.
+
+**Item cells with a crafting remainder need no such rule.** Create 6.0.10's `BasinRecipe#apply` asks a recipe for its
+remainders with the crafting input of its `DummyCraftingContainer`, which is empty, so a Basin hands **no** remainder
+back, and a saw's cutting and stonecutting leave none. Four honey bottles pressed into a honey block return no glass
+bottle (`SelectorReturnContainerGameTests#selectorReturnedNoRemainderFromABasin`, which fails if a Create update changes
+this). The quarantine therefore expects no remainder item. No save, network or lang change. Tests:
+`SelectorReturnContainerGameTests`, with the real selector block.
+
+**Amendment: a filled container something waits for stays an item (amends ADR-073 and ADR-088 D1).** A bay is a filled
+container's home (`FilterMatch.DEDICATED`), so the crane drained every one into it, also the water bucket a pattern with
+the result "water bucket" had made. The exchange credits nothing and a bay adds nothing to the item index, so neither
+crediting channel saw the product: the order timed out and the safety stop paused the item, with the fluid in the bay.
+The same drain starved a chain's parent line and let a Stock Keeper minimum of the bucket order for ever.
+
+* **D1 Decided at store time** (owner's decision). While something waits for the container **as an item**, no path takes
+  it into a fluid bay; otherwise nothing changes (issue #60's rule included). Rejected: *crediting the exchange* (the
+  order completes while its request, parent line or minimum still waits for a bucket that no longer exists, and a
+  keeper would order again and again) and *refusing such patterns while a bay would take the bucket* (a bay placed later
+  brings the stall back, and the pattern works today where no bay takes the fluid).
+* **D2 What waits** (`core.stock.AwaitedItems`, `WarehouseControllerBlockEntity#awaitsAsItem`), in whole items, the
+  largest of three because they regularly mean the same bucket:
+  1. **production:** the outstanding result of every open order with this result, whatever its state or depth (player,
+     redstone, terminal, ComputerCraft and requester roots, chain steps, automatic restock orders, queued, blocked and
+     held Recipe Selector orders), less what store and collect trips are bringing to shelves. Stock does not reduce it:
+     an order waits for new items;
+  2. **takers:** what open item requests and open orders' item ingredient lines are still owed from the racks and the
+     shelves cannot cover (the terms of `availableStock`, unclamped), less what any trip is bringing to a shelf. A fill
+     request and a fluid cell wait for nothing here: a bay makes their container;
+  3. **a minimum** of the governing stock rule that counts **items** (what is missing below it, less what is on its
+     way), paused or with restocking off included. A row counting **fluid**, which a filled container's row does by
+     default, waits for nothing.
+* **D3 One predicate, every storing path.** `PlannerInput#keptAsItem` is asked by `JobPlanner#collectStorage`, so the
+  store plan, the collect plan and every reroute into storage leave fluid bays out, the advisory-filter reroutes too
+  (D5 says when a reroute offers them after all). While an available bay whose filter allows the container is left out,
+  whatever its room, the **store plan** offers **no overflow port** either: the bay outranked every overflow, so without
+  this the awaited bucket and its water left the warehouse (review fix). In a plan, diversion ports, a maximum (no
+  storage candidate at all) and a warehouse without such a bay are as before. The container is still at its source
+  then, so waiting costs nothing; a reroute is different, because its items are in the crane (D5). A reroute is planned
+  with its own job released, so what is in the head never counts as already coming. A trip **already on its way** to a bay when the wait starts is checked at the drop
+  (`CraneExecution#performDrop`): while another place keeps the item (D5) the bay is not drained, and the carry is
+  rerouted there (a store trip to a shelf, else back into an input). A trip already on its way to a shelf when the wait ends goes on, and the container stays an item. With
+  several cranes the ledger's room reservations make one trip enough. Relocation and merge never target a bay anyway.
+* **D4 The warehouse's own container credits nothing.** A filled container put back into storage by a fill, retrieve or
+  supply trip (the leftover of a cancelled or refused one) is discounted from the stock-level channel like a selector's
+  returned container, so no order counts it as its machine's product: kept off the bay because an order awaits it, it
+  would otherwise complete that order with nothing made (retrieve and supply: review fix). A waiting request may still
+  take it from the shelf.
+* **D5 No shelf room: it waits.** The container stays in its input (or the machine behind a collecting port) with
+  `NoJobReason.AWAITED_AS_ITEM` ("awaited as an item: needs shelf room, not a Fluid Bay") in that block's goggles and
+  the controller's planning line, with the full-warehouse back-off. When the wait ends it is poured as usual.
+  **A crane that already holds one loses no target to the wait** (review fixes). `JobPlanner#planReroute` asks in
+  three steps: (1) the places that keep the item in the warehouse, `planRerouteKeepingItem`: storage with every such bay
+  out, and for a store or collect trip the inputs that keep it (below); (2) a bay that really takes the carry (not a
+  full, capped or differently filled one), then, for a store or collect trip, the inputs left out of (1); (3) the places that take it out of the racks, as the job type had them before this amendment:
+  the accepting ports, overflow and diversion alike and with no hold-back, for a store trip, and the outputs that did not
+  ask for it for a retrieve or fill trip. So everything the ladder offered before is still offered, only shelves and
+  inputs move ahead of the bay, and the bay stays ahead of every export. The drop check
+  (`WarehouseControllerBlockEntity#keepsOffFluidBay`) refuses a bay only while step 1 finds a place, and the reroute
+  asks the same step first. A refused bay is the reroute's failed target and is **never answered**, so no reroute can
+  send the crane straight back. If step 1's place is gone when the crane reroutes, step 3 has a target and the refused
+  bay would take the whole carry, the answer is empty (`refusedBayStillTakes`): the crane holds for one
+  `holdRetryTicks`, and the retry, which names no failed target, offers the bay before the export, where the drop check
+  accepts it. The same holds when only an input left out of (1) is left. A bay that cannot take the carry delays
+  neither. **Inputs left out of (1)** while the key is awaited: one that holds it (`storeHeld`: a Recipe Selector's
+  quarantine, package mode's backstop) and every selector return input but the one the trip came from, where the
+  quarantine would stop the station or a later store could credit its order with a foreign container. They stay behind
+  the bay, not removed, so no carry loses a target. **The wait ending while the arm retracts** changes nothing for the
+  reroute right after a refused drop: it still counts the key as awaited (remembered per job in `CraneDispatch`, not
+  saved), so no port or output overtakes the refused bay. When only a bay takes it, the water is kept
+  and the waiter gets nothing from this bucket, as before this amendment. Rejected: holding as with any item (a holding
+  crane takes no job, so it could not fetch anything to free a shelf, and a minimum that nothing restocks would never
+  end the wait); no overflow port on a reroute either (a full or capped bay then left the crane holding with an overflow
+  open); a diversion port or another output ahead of the bay on a reroute (both take the container out of the racks
+  where the bay kept the water).
+* **D6 No save or network change.** All of it is derived from the saved orders, requests, rules and crane jobs, so it
+  holds after a restart. The new reason travels by name.
+
+**Limits, decided.** The warehouse cannot tell the machine's bucket from a player's, so whichever arrives first is
+shelved. A shelved one that an order may not count (a step, restock or selector order before it has handed anything
+over, or a selector order and another input) leaves the order waiting, so further ones are shelved too. A trip carrying
+more stackable containers than are awaited shelves all of them. An order's deadline runs on while its product waits for
+shelf room: it can time out and pause the item, and only then is the container poured. A cancelled or refused carry
+ranks every shelf ahead of the bay, one whose filter now rejects the container included where filters are advisory
+(retrieve, fill, supply), and a store or collect carry ranks an input ahead of it too. The one-retry hold of D5 needs
+the bay to accept in the simulation; a container item whose real exchange then refused what the simulation took would
+keep such a crane retrying instead of reaching the export (this mod's bay does both with the same arithmetic). With
+**two cranes**, a store or collect trip already carrying an identical container of **other origin** to a shelf counts as
+on its way, so the other crane may pour the real product of a **Recipe Selector** order, which only its own return
+input can complete, into a bay before the first one lands; the order then waits until it times out. Before this
+amendment that product was poured too. A product arriving after its
+order was cancelled or timed out is poured unless something else waits. A keeper minimum without shelf room waits until
+there is room or the minimum changes. A stock rule maximum on the item, accepting ports, hands and pipes act as before.
+A crane that has no linked controller at the drop drains as before. With **package mode** on, the "holds it" term of D5
+also covers every shelf for a loose container, so a reroute and the drop check of such a trip rank shelves and bays
+together and may drain an awaited one, as before this amendment (planning a pick still shelves it). With **two cranes**,
+the reroute after a refused drop counts the key as awaited even if the other crane has meanwhile covered the wait, so
+one container more than awaited may be shelved. Tests: GameTests `AwaitedContainerGameTests`, JUnit
+`AwaitedItemsTest`, `JobPlannerKeptAsItemTest`.
 
 ## Persistence & sync
 

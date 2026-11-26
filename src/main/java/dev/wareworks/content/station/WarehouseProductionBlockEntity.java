@@ -7,10 +7,12 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 
@@ -248,6 +250,25 @@ public class WarehouseProductionBlockEntity extends WarehouseDeliveryStationBloc
             usable.add(new SlotPattern(slot, pattern.get()));
         }
         return List.copyOf(usable);
+    }
+
+    /**
+     * Server: the fluids named by the patterns the station offers ({@link #activeSlots()}), which the selector side
+     * asks for the empty containers its return input has to expect (ADR-085 D9, ADR-089). Free for a station without
+     * a fluid cell.
+     */
+    public Set<String> offeredFluids() {
+        boolean any = false;
+        for (int slot = 0; slot < patterns.size() && !any; slot++)
+            any = !patterns.fluidCells(slot).isEmpty();
+        if (!any)
+            return Set.of();
+        Set<String> fluids = new LinkedHashSet<>();
+        for (SlotPattern slot : activeSlots()) {
+            for (FluidCell fluid : slot.pattern().fluids())
+                fluids.add(fluid.fluid());
+        }
+        return fluids;
     }
 
     /**

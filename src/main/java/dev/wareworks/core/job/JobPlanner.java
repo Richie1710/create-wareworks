@@ -115,7 +115,8 @@ import dev.wareworks.core.warehouse.LocationKind;
  * output station (refinement: an output that did not request the items only as the last resort) and <b>never</b> to an
  * accepting port; otherwise the result is empty (the crane holds). The station fallback and the port fallback have a
  * live simulation budget of their own, so storage candidates that used up the budget never hide a station or a port that
- * accepts the items.
+ * accepts the items. A fluid bay kept out because its container is awaited comes after shelves and inputs and before
+ * every port and output ({@link #planReroute}, ADR-089 amendment).
  * <p>
  * <b>Store filters and the retrieve reroute</b> (M8 review fix, §8): a {@code RETRIEVE} reroute puts items back that
  * already came <i>out</i> of the warehouse, so a rejecting filter is advisory there — such locations are ranked
@@ -488,6 +489,28 @@ public final class JobPlanner<K, L> {
     /**
      * Finds a new target for {@code amount} items of {@code key} left in the handling head of a job of {@code type}
      * whose target {@code failedTarget} failed (§8). The crane position of {@code input} is the travel origin.
+     * <p>
+     * Four steps, in this order:
+     * <ol>
+     * <li>every place that keeps the items as items in the warehouse ({@link #planRerouteKeepingItem}): storage, and for
+     * a {@code STORE} or a {@code COLLECT} job the input stations;</li>
+     * <li>a storage location {@link PlannerInput#keptAsItem()} left out of the first step, if it really takes them (a
+     * fluid bay, which drains the container; ADR-089 amendment). A crane that holds takes no job, so it could not even
+     * fetch something to free a shelf. Never for a {@code RELOCATE}, whose targets exclude such places anyway;</li>
+     * <li>for a {@code STORE} or a {@code COLLECT} job, an input station {@link PlannerInput#keptAsItem()} left out of
+     * the first step (a Recipe Selector's return input, whose quarantine may keep the item there);</li>
+     * <li>the places that take the items out of the racks for somebody else ({@link #selectExport}): the accepting
+     * ports for a {@code STORE} job, the output stations that did not ask for them for a {@code RETRIEVE} or a
+     * {@code FILL} one.</li>
+     * </ol>
+     * With nothing {@linkplain PlannerInput#keptAsItem() kept as an item} the second step has no candidate, and the
+     * ladder is the one of the job type alone. So the rule never takes a target away from a reroute, and a bay stays
+     * ahead of every export.
+     * <p>
+     * One empty answer is not "nothing takes them": when only one of the last two steps is left although the
+     * {@code failedTarget} is a kept location that takes the whole carry, nothing is answered. That is a fluid bay refused at the drop for a place
+     * that is gone by now ({@link #refusedBayStillTakes}). The failed target is never answered, so the crane holds for
+     * one retry, which names no failed target and finds that location in the second step.
      *
      * A location that takes a carry {@linkplain PlannerInput#allOrNothing() whole or not at all} is offered the carry
      * only when it takes <b>all</b> of it, and is skipped otherwise (M30 review fix, issue #21): the amount is already
@@ -496,16 +519,64 @@ public final class JobPlanner<K, L> {
      * still take part of the carry.
      *
      * @param failedTarget the target to exclude, or {@code null} (a hold retry: every location may be chosen)
-     * @return the best target that accepts at least one item in the live simulation, or empty (hold the items); at most
-     * three times {@link PlannerInput#liveSimulationBudget()} live calls for a {@code STORE} reroute (storage, then the
-     * input stations, then the accepting ports), twice for a {@code RETRIEVE} or a {@code FILL} one (storage, then the
-     * output stations) and
-     * for a {@code COLLECT} one (storage, then the input stations), and once for a {@code SUPPLY} or a {@code RELOCATE}
-     * one (storage alone)
+     * @return the best target that accepts at least one item in the live simulation, or empty (hold the items); each
+     * part of the ladder has its own {@link PlannerInput#liveSimulationBudget()}: four for a {@code STORE} reroute
+     * (storage, the input stations, the locations kept as items, the accepting ports), three for a {@code RETRIEVE} or a
+     * {@code FILL} one (storage, the kept locations, the output stations) and for a {@code COLLECT} one (storage, the
+     * input stations, the kept locations), two for a {@code SUPPLY} one (storage, the kept locations) and one for a
+     * {@code RELOCATE} one, plus one call at the failed target before an export. Without a kept location its budget is
+     * not touched. A kept input station adds one part, with its own budget, to a {@code STORE} or a {@code COLLECT}
+     * reroute
      * @throws IllegalArgumentException if {@code amount < 1}
      */
     public Optional<RerouteTarget<L>> planReroute(PlannerInput<K, L> input, K key, int amount, JobType type,
             @Nullable L failedTarget) {
+        Optional<RerouteTarget<L>> keeping = planRerouteKeepingItem(input, key, amount, type, failedTarget);
+        if (keeping.isPresent() || type == JobType.RELOCATE)
+            return keeping;
+        List<Candidate<L>> draining = new ArrayList<>();
+        collectStorage(input, draining, key, amount, failedTarget, input.craneBranch(), input.craneX(), input.craneY(),
+                0L, advisoryFilters(type), null, Integer.MIN_VALUE, true);
+        draining.sort(RANKING);
+        Optional<RerouteTarget<L>> kept = tryInsert(input, draining, key, new Budget(input.liveSimulationBudget()), true)
+                .map(Selection::target);
+        if (kept.isPresent())
+            return kept;
+        Optional<RerouteTarget<L>> last = selectKeptInput(input, key, amount, type, failedTarget)
+                .or(() -> selectExport(input, key, amount, type, failedTarget));
+        if (last.isPresent() && refusedBayStillTakes(input, key, amount, type, failedTarget))
+            return Optional.empty();
+        return last;
+    }
+
+    /** The third step of {@link #planReroute}: the input stations {@link PlannerInput#keptAsItem()} names. */
+    private Optional<RerouteTarget<L>> selectKeptInput(PlannerInput<K, L> input, K key, int amount, JobType type,
+            @Nullable L failedTarget) {
+        if (type != JobType.STORE && type != JobType.COLLECT)
+            return Optional.empty();
+        return selectStation(input, inputsByRule(input, key, true), LocationKind.INPUT, key, amount, failedTarget,
+                new Budget(input.liveSimulationBudget()), true).map(Selection::target);
+    }
+
+    /** The input stations {@link PlannerInput#keptAsItem()} names for {@code key} ({@code named}), or all others. */
+    private static <K, L> List<L> inputsByRule(PlannerInput<K, L> input, K key, boolean named) {
+        List<L> result = new ArrayList<>(input.inputs().size());
+        for (L station : input.inputs()) {
+            if (input.keptAsItem().test(station, key) == named)
+                result.add(station);
+        }
+        return result;
+    }
+
+    /**
+     * The first step of {@link #planReroute}: the best target that keeps the items as items in the warehouse, so a
+     * storage location {@link PlannerInput#keptAsItem()} does not name or, for a {@code STORE} or a {@code COLLECT}
+     * job, an input station it does not name; never an output station or a port. Asked on its own at a drop into a fluid bay: only while
+     * this finds a place is the bay refused (ADR-089 amendment), so a carry sent to a bay in the second step is
+     * accepted there.
+     */
+    public Optional<RerouteTarget<L>> planRerouteKeepingItem(PlannerInput<K, L> input, K key, int amount,
+            JobType type, @Nullable L failedTarget) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(type, "type");
@@ -516,20 +587,17 @@ public final class JobPlanner<K, L> {
         double x = input.craneX();
         double y = input.craneY();
         return switch (type) {
-            // Storing leftovers is still storing, so a rejecting filter drops the location here as in the store plan.
-            // An accepting port is the LAST resort, after the input buffers and whatever its rank says (M17): putting
-            // items back into an input is reversible and exporting them is not, and it converges to the same outcome
-            // anyway, because the next store plan offers them to the port. The port list is the gated one, so "off means
-            // off" holds on a reroute too, and a port's filter is hard here — which cannot park the crane, because
-            // advisory-filter storage is still a target and HOLDING is still the floor.
-            case STORE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null, true)
+            // Storing leftovers is still storing, so a rejecting filter drops the location here as in the store plan,
+            // and the fallback is an input buffer. The accepting ports come last of all (selectExport).
+            case STORE -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget,
+                    advisoryFilters(type), null, true)
                     .map(Selection::target)
-                    .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
-                            new Budget(input.liveSimulationBudget()), true).map(Selection::target))
-                    .or(() -> selectPorts(input, key, amount, failedTarget, branch, x, y,
+                    .or(() -> selectStation(input, inputsByRule(input, key, false), LocationKind.INPUT, key,
+                            amount, failedTarget,
                             new Budget(input.liveSimulationBudget()), true).map(Selection::target));
             // Back into storage first: another output never asked for these items (its own requests are served by
-            // their own jobs), so delivering there would over-deliver. Only when no storage location accepts them.
+            // their own jobs), so delivering there would over-deliver. Only when no storage location accepts them
+            // (selectExport).
             // Store filters are advisory here (M8 review fix): these items already left the warehouse, so a location
             // whose filter rejects them is ranked last rather than dropped — otherwise a location that was
             // re-dedicated while its stock was inside could not take that stock back, and a fully partitioned aisle
@@ -537,20 +605,19 @@ public final class JobPlanner<K, L> {
             // A fill trip's leftovers are a retrieve's (M31, ADR-073): storage first with advisory filters, then an output
             // that did not ask for them, never a port. With empties in the head that is a shelf — a bay never takes an
             // empty container (its insert answer is drain-only) — and with a filled container a bay dedicated to its
-            // fluid outranks every shelf, so cancelled lava goes back where it came from (the owner's decision 2).
-            case RETRIEVE, FILL -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null,
-                    true)
-                    .map(Selection::target)
-                    .or(() -> selectStation(input, withoutPorts(input, input.outputs()), LocationKind.OUTPUT, key,
-                            amount, failedTarget, new Budget(input.liveSimulationBudget()), true)
-                            .map(Selection::target));
+            // fluid outranks every shelf, so cancelled lava goes back where it came from (the owner's decision 2). While
+            // that lava bucket is awaited as an item, the shelves come first and the bay right after them.
+            case RETRIEVE, FILL -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget,
+                    advisoryFilters(type), null, true)
+                    .map(Selection::target);
             // Supply leftovers go back into storage and nowhere else: nobody requested them at a station, and putting
             // them into an output would hand a player ingredients they never asked for (ADR-024). Rejecting filters
             // are advisory here for the same reason as on a retrieve reroute — these items already left the warehouse.
             // Retrieve and supply leftovers are never offered to an accepting port (M17): only items the warehouse chose
             // not to store may leave through one, so a player can reason that what comes out of a port is surplus and
             // the mod never quietly feeds a shredder with items somebody requested.
-            case SUPPLY -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, true, null, true)
+            case SUPPLY -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget,
+                    advisoryFilters(type), null, true)
                     .map(Selection::target);
             // Relocated items go back into storage and nowhere else, exactly like supply leftovers (issue #46, ADR-079):
             // JobType.RELOCATE allows no other target, so they can never leave the warehouse. Filters are advisory for
@@ -565,12 +632,62 @@ public final class JobPlanner<K, L> {
             // OUTPUT target at all, which is what keeps a diversion from defeating the headroom that stopped the
             // collecting in the first place (§5, guard 2). The station fallback gets its own budget, so storage
             // candidates that used it up never hide an input that accepts the items.
-            case COLLECT -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget, false, null,
-                    true)
+            case COLLECT -> selectStorage(input, key, amount, failedTarget, branch, x, y, 0L, budget,
+                    advisoryFilters(type), null, true)
                     .map(Selection::target)
-                    .or(() -> selectStation(input, input.inputs(), LocationKind.INPUT, key, amount, failedTarget,
+                    .or(() -> selectStation(input, inputsByRule(input, key, false), LocationKind.INPUT, key,
+                            amount, failedTarget,
                             new Budget(input.liveSimulationBudget()), true).map(Selection::target));
         };
+    }
+
+    /**
+     * Whether a reroute of {@code type} ranks a rejecting store filter last instead of dropping the location: true for
+     * items that had already left storage.
+     */
+    private static boolean advisoryFilters(JobType type) {
+        return type == JobType.RETRIEVE || type == JobType.FILL || type == JobType.SUPPLY;
+    }
+
+    /**
+     * The last step of {@link #planReroute}: the places that take the carry out of the racks.
+     * <p>
+     * For a {@code STORE} job the accepting ports, whatever their rank says (M17): putting items back into an input is
+     * reversible and exporting them is not, and it converges to the same outcome anyway, because the next store plan
+     * offers them to the port. The port list is the gated one, so "off means off" holds on a reroute too, and a port's
+     * filter is hard here — which cannot park the crane, because advisory-filter storage is still a target and HOLDING
+     * is still the floor. For a {@code RETRIEVE} or a {@code FILL} job the output stations, never a port. No other job
+     * type has such a step.
+     */
+    private Optional<RerouteTarget<L>> selectExport(PlannerInput<K, L> input, K key, int amount, JobType type,
+            @Nullable L failedTarget) {
+        Budget budget = new Budget(input.liveSimulationBudget());
+        return switch (type) {
+            case STORE -> selectPorts(input, key, amount, failedTarget, input.craneBranch(), input.craneX(),
+                    input.craneY(), budget, true).map(Selection::target);
+            case RETRIEVE, FILL -> selectStation(input, withoutPorts(input, input.outputs()), LocationKind.OUTPUT, key,
+                    amount, failedTarget, budget, true).map(Selection::target);
+            case SUPPLY, COLLECT, RELOCATE -> Optional.empty();
+        };
+    }
+
+    /**
+     * Whether {@code failedTarget} is a storage location {@link PlannerInput#keptAsItem()} names that would take all of
+     * this carry now. A fluid bay that is full, capped or of another fluid answers no, and so does every location while
+     * nothing is awaited. One that answers yes was refused only because there was a better place for the container, and
+     * an export must not take its turn: it ranks ahead of every export (ADR-089 amendment). It is not answered either,
+     * since the failed target never is, which keeps a reroute from sending the crane straight back; the hold retry asks
+     * again with no failed target.
+     */
+    private boolean refusedBayStillTakes(PlannerInput<K, L> input, K key, int amount, JobType type,
+            @Nullable L failedTarget) {
+        if (failedTarget == null || !input.keptAsItem().test(failedTarget, key))
+            return false;
+        List<Candidate<L>> candidates = new ArrayList<>();
+        collectStorage(input, candidates, key, amount, null, input.craneBranch(), input.craneX(), input.craneY(), 0L,
+                advisoryFilters(type), null, Integer.MIN_VALUE, true);
+        candidates.removeIf(candidate -> !candidate.location().equals(failedTarget));
+        return tryInsert(input, candidates, key, new Budget(input.liveSimulationBudget()), true).isPresent();
     }
 
     // --- retrieve ------------------------------------------------------------------------------------------------
@@ -1040,7 +1157,7 @@ public final class JobPlanner<K, L> {
         RackPosition firstPos = position(first.location());
         List<Candidate<L>> targets = new ArrayList<>();
         collectStorage(input, targets, key, limit, null, firstPos.branch(), firstPos.x(), firstPos.y(),
-                first.travelTicks(), false, null, first.priority());
+                first.travelTicks(), false, null, first.priority(), false);
         targets.removeIf(candidate -> !input.relocateTarget().test(candidate.location(), key));
         if (targets.isEmpty()) {
             why[0] = whyNothingBetter(input, key, sources);
@@ -1355,9 +1472,11 @@ public final class JobPlanner<K, L> {
             @Nullable L excluded, int fromBranch, double fromX, double fromY, long baseTravel, Budget budget,
             @Nullable StoreSurvey survey) {
         List<Candidate<L>> candidates = new ArrayList<>();
-        collectPorts(input, candidates, key, portLimit, excluded, fromBranch, fromX, fromY, baseTravel, survey);
+        // At a stock rule's maximum (storageLimit 0) no storage location is a candidate, so no bay is passed over.
+        collectPorts(input, candidates, key, portLimit, excluded, fromBranch, fromX, fromY, baseTravel,
+                storageLimit > 0, survey);
         collectStorage(input, candidates, key, storageLimit, excluded, fromBranch, fromX, fromY, baseTravel, false,
-                survey, Integer.MIN_VALUE);
+                survey, Integer.MIN_VALUE, false);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget, false);
     }
@@ -1381,7 +1500,7 @@ public final class JobPlanner<K, L> {
             @Nullable StoreSurvey survey, boolean wholeCarry) {
         List<Candidate<L>> candidates = new ArrayList<>();
         collectStorage(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, baseTravel, allowRejected,
-                survey, Integer.MIN_VALUE);
+                survey, Integer.MIN_VALUE, false);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget, wholeCarry);
     }
@@ -1395,7 +1514,7 @@ public final class JobPlanner<K, L> {
             @Nullable L excluded, int fromBranch, double fromX, double fromY, Budget budget) {
         List<Candidate<L>> candidates = new ArrayList<>();
         collectStorage(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, 0L, true, null,
-                Integer.MIN_VALUE);
+                Integer.MIN_VALUE, false);
         candidates.removeIf(candidate -> !input.relocateTarget().test(candidate.location(), key));
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget, true);
@@ -1429,7 +1548,7 @@ public final class JobPlanner<K, L> {
     private Optional<Selection<L>> selectPorts(PlannerInput<K, L> input, K key, int limit, @Nullable L excluded,
             int fromBranch, double fromX, double fromY, Budget budget, boolean wholeCarry) {
         List<Candidate<L>> candidates = new ArrayList<>();
-        collectPorts(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, 0L, null);
+        collectPorts(input, candidates, key, limit, excluded, fromBranch, fromX, fromY, 0L, false, null);
         candidates.sort(RANKING);
         return tryInsert(input, candidates, key, budget, wholeCarry);
     }
@@ -1440,10 +1559,12 @@ public final class JobPlanner<K, L> {
      * @param minPriorityExclusive only locations whose storage priority is <b>above</b> this are added: the lowest
      *                             source priority of a relocation (issue #46), {@link Integer#MIN_VALUE} for every other
      *                             caller, which no priority is at or below
+     * @param drainingOnly         {@code false}: leave out the locations {@link PlannerInput#keptAsItem()} names.
+     *                             {@code true}: add only those, the second step of {@link #planReroute}
      */
     private void collectStorage(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
             @Nullable L excluded, int fromBranch, double fromX, double fromY, long baseTravel, boolean allowRejected,
-            @Nullable StoreSurvey survey, int minPriorityExclusive) {
+            @Nullable StoreSurvey survey, int minPriorityExclusive, boolean drainingOnly) {
         if (limit < 1)
             return;
         // The available storage locations, derived once for the whole pass rather than per (station x item type)
@@ -1485,6 +1606,16 @@ public final class JobPlanner<K, L> {
                     noteTypeTaken(survey);
                 else
                     note(survey, true);
+                continue;
+            }
+            // A location that would turn the item into its contents while something waits for the item (ADR-089
+            // amendment). Dropped even where a rejecting filter is only advisory: such a location is offered only by
+            // the pass that asks for nothing else (planReroute's second step). Noted only when it would have taken the
+            // key, so a bay of another fluid never claims to be the reason.
+            boolean draining = input.keptAsItem().test(location, key);
+            if (draining != drainingOnly) {
+                if (draining && filter.allowsStoring())
+                    noteAwaited(survey);
                 continue;
             }
             // A pre-filter, never a verdict: the estimate is an upper bound and answers UNKNOWN_CAPACITY when the
@@ -1547,16 +1678,27 @@ public final class JobPlanner<K, L> {
      * A port's <b>filter is hard</b> everywhere, including the reroute path: an unfiltered port takes anything, a
      * filtered one only its item, and a rejected one is dropped before any live call, so a rack wall of filtered ports
      * can no more eat the live-simulation budget than a partitioned warehouse can (ADR-021).
+     * <p>
+     * <b>No overflow for a container a bay is passed over for, while it waits at its source</b> (ADR-089 amendment): a
+     * storage location outranks every overflow, so leaving a bay out because the key is awaited as an item would hand
+     * the awaited item out of the warehouse. While a location {@link #keptFromABay} finds exists, the store plan makes
+     * no overflow port a candidate, and the container stays where it is. A diversion outranks every storage location
+     * anyway and is offered as ever. A reroute is different: its items are in the crane already, and it asks the ports
+     * only after the bays ({@link #planReroute}).
+     *
+     * @param holdBackOverflow whether this is a planning pass with storage locations among its candidates, so an
+     *                         overflow must not overtake a bay that was left out
      */
     private void collectPorts(PlannerInput<K, L> input, List<Candidate<L>> candidates, K key, int limit,
             @Nullable L excluded, int fromBranch, double fromX, double fromY, long baseTravel,
-            @Nullable StoreSurvey survey) {
+            boolean holdBackOverflow, @Nullable StoreSurvey survey) {
         if (limit < 1 || input.ports().isEmpty())
             return;
         // Collected apart from the caller's list so the cap can be applied by rank; merged unsorted when it does not bite,
         // which makes an aisle with at most MAX_PORT_CANDIDATES accepting ports the same function it was.
         List<Candidate<L>> ports = new ArrayList<>();
         int order = 0;
+        Boolean overflowShut = null; // asked once, and only when an overflow would be a candidate
         for (L port : input.ports()) {
             int rank = order++;
             int portRank = input.portRank().applyAsInt(port);
@@ -1567,6 +1709,14 @@ public final class JobPlanner<K, L> {
             FilterMatch filter = Objects.requireNonNull(input.storeFilter().apply(port, key), "storeFilter result");
             if (!filter.allowsStoring())
                 continue;
+            if (holdBackOverflow && portRank < NOT_A_PORT) {
+                if (overflowShut == null)
+                    overflowShut = keptFromABay(input, key);
+                if (overflowShut) {
+                    noteAwaited(survey);
+                    continue;
+                }
+            }
             RackPosition pos = position(port);
             long travel = TravelTimeModel.add(baseTravel,
                     input.travel().travelTicks(fromBranch, fromX, fromY, pos.branch(), pos.x(), pos.y()));
@@ -1587,12 +1737,31 @@ public final class JobPlanner<K, L> {
     }
 
     /**
+     * Whether an available storage location is left out only because it would not keep {@code key} as an item
+     * ({@link PlannerInput#keptAsItem()}) while its filter would take it. Whatever its room is.
+     */
+    private static <K, L> boolean keptFromABay(PlannerInput<K, L> input, K key) {
+        for (L location : input.available().available(input.storageLocations()).locations()) {
+            if (input.keptAsItem().test(location, key) && !input.storeExcluded().test(location, key)
+                    && input.storeFilter().apply(location, key).allowsStoring())
+                return true;
+        }
+        return false;
+    }
+
+    /**
      * The ranking strength of a port rank: its magnitude minus one, so the weakest overflow ({@code -1}) and the weakest
      * diversion ({@code +1}) both rank 0 among their own class. Computed in {@code long} so a rank of
      * {@link Integer#MIN_VALUE} from a broken caller cannot overflow.
      */
     private static int portStrength(int portRank) {
         return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, Math.abs((long) portRank) - 1L));
+    }
+
+    /** A location skipped because the key is awaited as an item and the location would not keep it as one. */
+    private static void noteAwaited(@Nullable StoreSurvey survey) {
+        if (survey != null)
+            survey.awaited = true;
     }
 
     /** Package mode (issue #40, E3): a location skipped only because it is an empty bay without a Package Filter. */
@@ -1789,6 +1958,11 @@ public final class JobPlanner<K, L> {
          */
         private boolean packageExcluded;
         /**
+         * At least one location that would have taken the key was skipped because the key is awaited as an item and
+         * the location would drain it ({@link PlannerInput#keptAsItem()}).
+         */
+        private boolean awaited;
+        /**
          * Collect only (M18, issue #13): at least one item type in the machine behind a collecting port was skipped
          * before any storage candidate was looked at — the port's own filter rejects it, or the live extract handed
          * nothing out. Set at the skip sites in {@link #planCollect}, like {@link #atMaximum} and for the same reason:
@@ -1804,6 +1978,9 @@ public final class JobPlanner<K, L> {
          * filter mismatch.
          */
         NoJobReason reason() {
+            // The one thing a player cannot guess: a fluid bay would take this, and is not given it on purpose.
+            if (awaited && !portRanked)
+                return NoJobReason.AWAITED_AS_ITEM;
             if (storageRanked)
                 return NoJobReason.WAREHOUSE_FULL;
             // Package mode: an empty bay would have taken the box but for a Package Filter, so that is the cure to name
@@ -1840,6 +2017,8 @@ public final class JobPlanner<K, L> {
          * items really did reach its candidates.
          */
         NoJobReason collectReason() {
+            if (awaited)
+                return NoJobReason.AWAITED_AS_ITEM;
             if (storageRanked || otherSkip)
                 return NoJobReason.WAREHOUSE_FULL;
             if (atMaximum)

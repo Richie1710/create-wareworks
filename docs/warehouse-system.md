@@ -763,7 +763,8 @@ This is the crux of the feature and the reason it needed #3 first. A `Candidate`
   back into an input is reversible and exporting them is not, and it converges to the same outcome anyway, because the
   next store plan offers them to the port again. That stage has a live-simulation budget of its own, like the station
   fallback, so a `STORE` reroute makes at most **three** times the budget in live calls (storage, inputs, ports), a
-  `RETRIEVE` two and a `SUPPLY` one. A reroute that lands in a port spends its **pulse token** exactly as a plan does, and
+  `RETRIEVE` two and a `SUPPLY` one (ADR-089 adds one more part, with its own budget, only while a bay is kept out
+  because its container is awaited, and one call at that bay before an export; a `STORE` or `COLLECT` reroute adds one further part, with its own budget, for input stations kept out for the same reason, §3.9.3). A reroute that lands in a port spends its **pulse token** exactly as a plan does, and
   from the kind of the target that was *chosen*: the job still names the target that failed — usually a storage location —
   because the crane's state machine re-targets it only when it receives the answer, so asking the job would have left the
   port armed after exporting a whole trip. **Retrieve and supply leftovers never reach a port** — in both layers: the
@@ -5602,10 +5603,19 @@ factory far away: the recipe travels as a slip in the package.
   the saw, the unpack target and its feed are empty; it sets the filter before the box is opened. A refused box stays
   where it was (port, bee, hand). After a switch the first order fetches one run only while the line is untrusted
   (`selector.remoteProbe`), until the right product has come back.
-* **The return input.** It stores only what the station is making and what its orders in the line make. Anything else
+* **The return input.** It stores only what the station is making, what its orders in the line make and the **empty
+  containers of the station's own fluid ingredients** (the empty bucket of a water cell, also after the order has ended;
+  taken as such it credits no production order, neither as an arrival nor through the rise of the stock level, so a
+  bucket order or a bucket stock rule elsewhere keeps waiting for its own machine; only while the station's selection or
+  an order in its line makes that very item does it count as a product, because the two cannot be told apart).
+  Anything else, a filled bucket included,
   stays in the input and holds the station; click the input with an empty hand to take it out. While the station is
   unloaded, the input stays guarded with what was last seen of it, across a restart too, and no other station may bind
-  it.
+  it. Which containers are expected is read from the station's orders that delivered one and are still listed, and from
+  its offered patterns while it is loaded in local mode: at an unloaded station with neither, the bucket waits in the
+  input without a hold and is stored once the station is loaded. If the pattern was edited or removed and its order has
+  already left the list (30 s after it ended), the late bucket holds the station like any other foreign item. Crafting
+  remainders of item cells are not expected: Create 6.0.10's Basin hands none back (ADR-089 amendment).
 * **Holds.** An order that ends with its ingredients in the line, or an unexpected return, stops the whole station:
   nothing is fetched, nothing switches, no deadline runs. Check the line, then sneak-click the station with an empty
   hand (or press Resume); the release is refused while the buffer, the return input or a Packager still holds
@@ -5627,7 +5637,8 @@ factory far away: the recipe travels as a slip in the package.
   product of an open order are credited; a block in the off hand is no longer placed against a Warehouse Input while
   the main hand is empty (the empty-hand click takes the quarantine out). Decisions and the full list: ADR-085.
 * **Tests.** JUnit `SelectorGateTest`, `ProductionOrdersTest`, `OrderRowWidthsTest`, `PackageOrderBoundaryTest`;
-  GameTests `RecipeSelectorGameTests`, `RecipeSelectorBlockGameTests`, `RecipeSlipGameTests`; visual scenarios
+  GameTests `RecipeSelectorGameTests`, `RecipeSelectorBlockGameTests`, `RecipeSlipGameTests`,
+  `SelectorReturnContainerGameTests`; visual scenarios
   `selector` and `selector-remote` (Robo Bees, `-Pwareworks.cmp`).
 
 ### 3.6 Warehouse Stock Keeper (`content.station`, M15)
@@ -5773,7 +5784,10 @@ What stops an order, in the order the planner tests it (`RestockOutcome`): the r
 (`StockLevels#pipeline()`), which is the whole hysteresis and is why a rule cannot order the same thing twice;
 restocking is **switched off** (`maxRestockOrders` or `maxRestockOrdersPerRule` is 0); this rule already has
 `maxRestockOrdersPerRule` orders open (1 by default, which is "never order while one is open for the same rule"); the
-aisle has reached `maxRestockOrders` or its production queue is full; **no pattern** of the aisle makes the item; the
+aisle has reached `maxRestockOrders` or its production queue is full; **no pattern** of the aisle makes the item (when
+the only ones that do have a fluid cell, which restocking skips on purpose (ADR-089 D8), the controller reports
+`FLUID_PATTERN` instead: "Uses a fluid: not auto-restocked. Order it at the terminal"; a pattern without a fluid for
+the same item is used as ever); the
 rule's own maximum leaves **no room for a whole run** (`NO_ROOM`, below); or the **ingredients are not available to
 automation** — missing, promised elsewhere, held back by a reserve, or called for by another rule's minimum (below). The
 last case is the normal, healthy state of a line that has run out of feedstock: nothing is consumed, no order is
@@ -6154,8 +6168,8 @@ matters, the acknowledgement grows the keys.
   `TerminalRequestPayload`, whose plain click costs one zero byte. `WareworksNetwork.VERSION` is `"5"` for the whole of
   M15: part 1 raised it from `"4"`, `"5"` has never been released, and both parts ship together, so one string covers
   the milestone. Two rules keep that safe — `StockRuleStatus` and `RequestRejection` values go on the wire **by
-  ordinal** and are therefore only ever *appended*, while `RestockOutcome` and `StockRulePause.Cause`, which the
-  controller saves, go by **name**.
+  ordinal** and are therefore only ever *appended* (`RestockOutcome` too: every row of the keeper's screen carries it
+  by ordinal, and it is never saved), while `StockRulePause.Cause`, which the controller saves, goes by **name**.
 * **Config** (defaults and ranges in §9): `stockKeeperRows` (the rows a newly placed keeper offers, world restart),
   `maxStockRules` (rules one aisle applies over all its keepers), `stockRuleIntervalTicks` (how often the controller
   judges its rules **and runs the restock pass**, which is also how often it may start an automatic order at all — at
@@ -7307,6 +7321,33 @@ rather than silent: a warehouse whose only storage is a lava bay answers `NO_MAT
 takes these items, whatever room it has", literally true — where before this gate existed the same arrival was
 reported as `WAREHOUSE_FULL` about a warehouse with 64 buckets free.
 
+**A container something waits for is not poured** (ADR-089, amended). "A bay outranks every shelf" holds only while
+nothing waits for the filled container **itself**. Something does when, counted in whole items and taking the largest:
+an open production order with that result still waits for it (any root, chain step, restock or selector order); open
+item requests or item ingredient lines are owed more of it than the shelves can give; or a Stock Keeper row that counts
+**items** has a minimum of it that is not met (a row counting fluid, the default for a container, does not count). What
+trips already bring to shelves is taken off, so one awaited bucket shelves one bucket and the next is poured. While it
+waits, no bay is offered on any storing path (store, collect, every reroute), and a trip already heading for a bay is
+refused at the drop and rerouted. With no shelf room it stays in its input or machine, whose goggles say "awaited as an
+item: needs shelf room, not a Fluid Bay". While a bay whose filter would take it is passed over this way, the plan
+offers the waiting container **no overflow port** either, whatever room that bay has: the bay outranked the port, so
+passing it over must not export the water (a diversion port outranks storage in a plan and acts as ever there; with no
+such bay an overflow takes the container like any item). **A crane that already carries one** asks, in this order: a
+place that keeps the item in the warehouse (a shelf, and for a store or collect trip an input); then a bay that really
+takes it, followed for such a trip by the inputs that may not let it go again (one that holds it, and any Recipe
+Selector return input other than the trip's source); then what the job type's ladder offers after storage and inputs (§8): the accepting ports, overflow and
+diversion alike, for a store trip, an output that did not ask for it for a retrieve or fill trip. So the wait never
+leaves the crane without a target it would otherwise have, and never sends a container out of the racks while a bay
+could take it. The drop check refuses a bay only while the first step finds a place. If that place is gone by the time
+the crane reroutes and only such an input, a port or an output is left although the refused bay takes the container,
+the crane holds for one retry (`holdRetryTicks`), which offers the bay again. The reroute right after a refused drop
+still counts the container as awaited, even if the wait ended while the arm retracted. The order's deadline keeps running; once nothing waits the
+container is poured. A filled container the warehouse itself puts back on a shelf (the leftover of a cancelled fill,
+retrieve or supply trip) completes no order. Nothing is saved for
+this: it is worked out from orders, requests, rules and crane jobs. Details and limits: ADR-089; classes
+`core.stock.AwaitedItems`, `PlannerInput#keptAsItem`; tests `AwaitedContainerGameTests`, `AwaitedItemsTest`,
+`JobPlannerKeptAsItemTest`.
+
 #### 3.9.4 What the warehouse says it holds (M30 step 10)
 
 **A parallel index, never a union key.** `WarehouseControllerBlockEntity.fluidStock` is a
@@ -7538,7 +7579,7 @@ Every case ends with items and fluid accounted for (§8):
 |---|---|
 | Cancelled before the pick | the job aborts, the empties' reservation is released, nothing moved |
 | Cancelled after the pick, before the fill | the empties are rerouted to a shelf (never to a bay) |
-| Cancelled after the fill | the filled containers are rerouted like a retrieve's leftovers: a dedicated bay drains them, the empties go to a shelf |
+| Cancelled after the fill | the filled containers are rerouted like a retrieve's leftovers: a dedicated bay drains them, the empties go to a shelf. While something waits for that container as an item (§3.9.3) it is shelved instead |
 | Bay emptied by pipes, refilled with another fluid, or refusing the container | the fill is refused, nothing moves, the empties go back to a shelf, and the request stays open and is planned again |
 | Station full on arrival | a terminal is waited at, as for a retrieve; a full warehouse port cancels the trip and a bay drains the filled container |
 | Bay or station broken mid trip | the carry is rerouted (§8) |
@@ -8185,7 +8226,8 @@ buckets**, exactly as the terminal's fluid orders do (§3.9), and the player's o
   dropped it does not decide (north in the spike, east in the scenario), so a sink stands on every free side; the Item Drain (1500 mB) holds a third 1000 mB bucket until the machine has used fluid, and blocks
   everything behind it; an amount that does not divide 1000 mB leaves a rest in drain and Basin that is neither
   credited nor tracked. The empty bucket leaves through the return input or any real sink (a funnel over a chest, a
-  belt) and comes back as ordinary stock.
+  belt) and comes back as ordinary stock. At a Recipe Selector station the return input takes it too (3.5.9, *The
+  return input*).
 * **Tests.** `FluidCellTest`, `ProductionPlannerFluidTest`, `JobPlannerFluidSupplyTest`, `FluidNeedsTest`,
   `PatternLayTest`, `SelectorVerdictOrdinalTest`; GameTests `FluidPatternGameTests`, `FluidSupplyGameTests`, the
   two-crane test in `MultiCraneGameTests`; the visual scenario `fluidpattern` (a real pattern, a real order, the whole
@@ -8789,8 +8831,8 @@ the item census's "no block entity, skip" shortcut loses both cauldrons. GameTes
 | A **fill trip** cancelled, or its station gone (M31) | Before the pick it aborts. After the pick the carry is rerouted like a retrieve's leftovers: empties to a shelf, filled containers to a dedicated bay, which drains them. A full warehouse port cancels the trip in the same way, and a full terminal is waited at. |
 | Target interface or inventory removed | Reroute. |
 | Output station full | Wait at the output (`WAITING_FOR_TARGET`, retry every `retryTicks`, default 20). A job that serves no request at that output (its request was lost, or it was rerouted there) reroutes instead (M3 review: otherwise it could wait for ever). **M17:** a `STORE` job never waits, however delivery-like its target is — waiting is right when somebody is waiting for the items, and a store into an accepting port would park the crane in front of a full overflow and block the whole aisle, so it drops, delivers 0 and reroutes (§3.2.3). Every `RETRIEVE` and `SUPPLY` is unchanged. **M27 (ADR-065):** a `RETRIEVE` into a **warehouse port** does not wait: the crane carries what fits, because the trip is planned for no more than the port takes and only when the whole trip, or one full stack of a larger one, fits, and nothing but this crane fills a port (§3.2.3, "How much the crane brings to a port"). A port with too little room reports `OUTPUT_FULL` at every dispatch, without a back-off, while the crane serves other work. A trip that finds the port taking nothing all the same (planned before a restart that lowered `outputBufferSlots`, or a crane saved waiting before M27) takes its leftovers back into storage at its next retry. A **warehouse terminal** and a **production station** still wait as described here. |
-| Reroute for STORE leftovers | Another storage location **whose filter accepts the items**, else any input station buffer, else `HOLDING`. Storing leftovers is still storing, so a dedicated location never receives what it rejects. `HOLDING` is the documented, recoverable outcome when nothing accepts them (the crane's goggles read "Holding items, no target found" and list the items, and every hold retry re-tries every location with no exclusion); M8 adds one more way to reach it, and that is deliberate — ignoring filters as a last resort would break the binding rule that a dedicated location never gets what its filter rejects. **M16:** this is a storing path, so it goes through the same `selectStorage` and honours the storage priority as well. **M17:** after the input buffers comes one more stage, an **accepting warehouse port** — last, whatever its rank, because putting items back into an input is reversible and exporting them is not, and it converges anyway (the next store plan offers them to the port again). It is a stage of its own with a live-simulation budget of its own, and a port's filter is a hard rule there too (§3.2.3). |
-| Reroute for RETRIEVE leftovers | A storage location, else another output station, else `HOLDING` (M3 scenario hardening: storage first, §7.4). **Store filters are advisory here (M8 review fix):** a location whose filter rejects the items is ranked **last** instead of dropped. These items already came *out* of the warehouse, so putting them back is not choosing where new items live — and without this a location re-dedicated while its stock was inside could not take that stock back, so a fully partitioned aisle whose output failed mid-job would hold for ever, re-opening the failure the M3 review fix above closed. JUnit `aRetrieveRerouteReturnsLeftoversToTheLocationTheyCameFrom`. **M16:** the storage priority is the fourth key here too, i.e. still below the filter class, so a priority can never lift a rejecting location above an accepting one (JUnit `retrieveRerouteKeepsRejectingLocationsLastDespitePriority`). |
+| Reroute for STORE leftovers | Another storage location **whose filter accepts the items**, else any input station buffer, else `HOLDING`. Storing leftovers is still storing, so a dedicated location never receives what it rejects. `HOLDING` is the documented, recoverable outcome when nothing accepts them (the crane's goggles read "Holding items, no target found" and list the items, and every hold retry re-tries every location with no exclusion); M8 adds one more way to reach it, and that is deliberate — ignoring filters as a last resort would break the binding rule that a dedicated location never gets what its filter rejects. **M16:** this is a storing path, so it goes through the same `selectStorage` and honours the storage priority as well. **M17:** after the input buffers comes one more stage, an **accepting warehouse port** — last, whatever its rank, because putting items back into an input is reversible and exporting them is not, and it converges anyway (the next store plan offers them to the port again). It is a stage of its own with a live-simulation budget of its own, and a port's filter is a hard rule there too (§3.2.3). A filled container awaited as an item takes shelves and inputs first, then a bay that takes it, then the ports (§3.9.3). |
+| Reroute for RETRIEVE leftovers | A storage location, else another output station, else `HOLDING` (M3 scenario hardening: storage first, §7.4). **Store filters are advisory here (M8 review fix):** a location whose filter rejects the items is ranked **last** instead of dropped. These items already came *out* of the warehouse, so putting them back is not choosing where new items live — and without this a location re-dedicated while its stock was inside could not take that stock back, so a fully partitioned aisle whose output failed mid-job would hold for ever, re-opening the failure the M3 review fix above closed. JUnit `aRetrieveRerouteReturnsLeftoversToTheLocationTheyCameFrom`. **M16:** the storage priority is the fourth key here too, i.e. still below the filter class, so a priority can never lift a rejecting location above an accepting one (JUnit `retrieveRerouteKeepsRejectingLocationsLastDespitePriority`). A filled container awaited as an item takes shelves first, then a bay that takes it, then another output (§3.9.3), for a fill trip too. |
 | `HOLDING` | Keep the items, show them in goggles, retry reroute every `holdRetryTicks` (default 40). A retry may choose the target that failed before (M3 review). |
 | Controller removed during a job | The crane finishes the job if the target is valid, otherwise it holds. A new controller adopts the crane's job and rebuilds its reservations. |
 | Crane (dock) broken | Grabber contents drop at the dock position. The controller aborts the job and releases reservations. |

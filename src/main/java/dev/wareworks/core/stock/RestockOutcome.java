@@ -14,18 +14,18 @@ import java.util.Locale;
  * <b>Exactly one outcome is reported per rule</b>, in the order {@code RestockPlanner} tests them:
  * {@link #NOT_GOVERNING}, {@link #PAUSED}, {@link #SATISFIED}, {@link #DISABLED}, {@link #ORDER_OPEN},
  * {@link #ORDERS_BUSY}, {@link #NO_PATTERN}, {@link #NO_ROOM}, {@link #WAITING_FOR_INGREDIENTS}, {@link #DEFERRED},
- * {@link #ORDERED}. The structural answers come first because they make every later question meaningless.
+ * {@link #ORDERED}. The structural answers come first because they make every later question meaningless. Two values are
+ * never answered by the planner: the controller puts {@link #PACKAGE_MODE} in place of {@link #DISABLED} and
+ * {@link #FLUID_PATTERN} in place of {@link #NO_PATTERN}.
  * <p>
  * <b>Only {@link #ORDERED} ever spends anything.</b> Every other value is a statement about the world, and a rule that
  * cannot order keeps its lamp, its comparator and its reserve: "waiting for ingredients" is the normal, healthy state
  * of a line that has run out of feedstock, not a fault.
  * <p>
- * <b>Derived state, never serialized.</b> The outcome is recomputed by every restock pass
- * ({@code stockRuleIntervalTicks}) and is neither saved nor written to a client as an ordinal: what travels is the
- * {@link StockRuleStatus} it {@link #refine}s the rule into, plus the outcome's {@link #langKey()} for the one line that
- * names it. The enums with a wire or save contract are {@link StockRuleStatus} (ordinal, append-only) and
- * {@link StockRulePause.Cause} (stable name). The order of the values here is therefore free, and it says what the
- * planner does rather than what any format needs.
+ * <b>Derived state, never saved.</b> The outcome is recomputed by every restock pass
+ * ({@code stockRuleIntervalTicks}). <b>It does travel by ordinal</b>, in every row of the keeper's screen
+ * ({@code StockKeeperScreenState.RowView}): a new value goes at the end, and {@code WareworksNetwork#VERSION} is raised
+ * for it.
  */
 public enum RestockOutcome {
     /** The rule applies nothing at all (shadowed, inert, or without a number), so it orders nothing either. */
@@ -92,7 +92,14 @@ public enum RestockOutcome {
      */
     DEFERRED,
     /** An automatic production order was started for this rule. */
-    ORDERED;
+    ORDERED,
+    /**
+     * The only patterns of the aisle that make this item have a fluid cell, and automatic restocking skips those on
+     * purpose (issue #55, ADR-089 D8): a player orders the item at a terminal. Never answered by the planner, which is
+     * not given such a pattern; the controller turns its {@link #NO_PATTERN} into this. An item that also has a pattern
+     * without a fluid never gets it. Last because it was appended (the ordinal goes on the wire).
+     */
+    FLUID_PATTERN;
 
     private static final String LANG_PREFIX = "gui.keeper.restock.";
 
@@ -116,7 +123,7 @@ public enum RestockOutcome {
      */
     public boolean isBlocked() {
         return this == PAUSED || this == DISABLED || this == PACKAGE_MODE || this == ORDERS_BUSY || this == NO_PATTERN
-                || this == NO_ROOM || this == WAITING_FOR_INGREDIENTS;
+                || this == FLUID_PATTERN || this == NO_ROOM || this == WAITING_FOR_INGREDIENTS;
     }
 
     /**

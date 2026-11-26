@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A recipe that makes a filled bucket no longer gets stuck.** If a production pattern's result was a water bucket,
+  lava bucket or another filled container and a Fluid Bay could take that fluid, the crane poured the returned container
+  into the bay. The order never saw its product, timed out and stopped further production of it. Now the crane looks
+  when it stores the container: while something is waiting for it as an item, it goes onto a shelf. That is a
+  production order that makes it (also as a step of a longer chain or an automatic restock), a request or a recipe
+  that needs it and cannot be served from the shelves, or a Stock Keeper minimum on a row that counts items. Only as
+  many as are awaited are kept; otherwise filled containers are poured into Fluid Bays as before. If no shelf has room,
+  the container waits and the input's goggles say why; it does not leave through an overflow port either. As an order's
+  timeout keeps running meanwhile, give such warehouses a free shelf place. A crane that already carries the container
+  and has to find a new place for it (a cancelled trip, a shelf that filled up) takes a shelf or, after storing or
+  collecting, an input if it can. If not, it pours it into a Fluid Bay that can take it, ahead of any port or output
+  that did not ask for it; if no bay can, the port or output takes it as before, so the wait never leaves the crane
+  stuck with it. An order that already stopped production stays stopped until you resume it.
+
+- **A Stock Keeper no longer says "No production station here makes this" about a recipe with a fluid.** Automatic
+  restocking leaves out production patterns with a fluid cell, on purpose, but a rule for such an item claimed that no
+  station makes it while the terminal offered it. It now says "Uses a fluid: not auto-restocked. Order it at the
+  terminal". What gets ordered has not changed, and an item that also has a pattern without a fluid is restocked as
+  before. As the network version changed with this, update the server and every client together.
+- **A Recipe Selector station no longer stops when its own empty bucket comes back.** With a fluid in a pattern, an
+  empty bucket sent into the selector's return input was treated as an item that does not belong there: the station
+  stopped with "Bucket came back through the return input". Now the return input takes the empty buckets of the
+  station's own fluid ingredients and the crane puts them back into storage, also when they arrive after the order has
+  finished or was cancelled. Everything else that does not belong there still stops the station. One rare case still
+  does: the bucket arrives more than 30 seconds after its order ended and you have changed or removed the pattern in
+  the meantime. If a station is already stopped because of its bucket, resume it after the update (sneak-click it with
+  an empty hand, or click the red "Held" row in its screen).
+
 ## [0.28.0-beta] - 2026-11-25
 
 ### Added

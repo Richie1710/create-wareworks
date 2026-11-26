@@ -90,7 +90,9 @@ teleported: every item you put in or take out is carried by the crane, where you
   **fluid inside it** is what belongs there; leave it unfiltered and it keeps the first fluid that arrives. A tank
   standing beside a rack of the same facing **shares the upright** with it, because a wall is a wall. And the **crane**
   closes the loop: put a bucket of lava into a warehouse input and the warehouse carries the whole container to a bay
-  that takes lava, the bay **drains it**, and the crane shelves the now-empty bucket as ordinary stock — so the
+  that takes lava, the bay **drains it** (unless something is waiting for that filled bucket itself: a production order
+  that makes it, a request or order the shelves cannot cover, or a Stock Keeper minimum counting it as an item; then it
+  is shelved as an item), and the crane shelves the now-empty bucket as ordinary stock — so the
   warehouse holds **lava as a fluid** and **a bucket as stock**, both counted and both readable on the controller's
   goggles and on a display board. Two things are deliberately different from a rack bay, and the game says both before
   you meet them: a **funnel, a chute, a belt or a hopper cannot fill a fluid bay** (it would keep your empty bucket, so
@@ -819,7 +821,8 @@ mB of water. Order the product at the terminal as always:
   jams behind it; use a funnel over a chest, a belt, or the Warehouse Input (the drain pushes the empty bucket out of a side you do not
   choose, so put the sink on every free side). And the drain **stalls on a third bucket**
   until the Mixer has used some of the fluid; the cap of two buckets and an amount that divides 1000 keep it moving.
-  The empty bucket comes back through the return input like any other item.
+  The empty bucket then comes back into the warehouse as ordinary stock; at a **Recipe Selector** station it may also
+  go through the selector's return input (see below) without stopping the station.
 * **Known limits.** Filled buckets that are **left in the station's buffer** after a cancel or a timeout are not taken
   out by the crane: they count against the cap of two, so take them out (the goggles show "Filled containers left in
   the buffer" while no order is open), or the next order of that fluid waits. **Shift-clicking a bucket** from your
@@ -828,13 +831,24 @@ mB of water. Order the product at the terminal as always:
 * **A bucket in the grid is an item.** It is never turned into a fluid, because some recipes use the bucket itself.
   While a fluid cell of the same pattern asks for that fluid too, the bucket's cell is framed in orange with a "!"
   and its tooltip says that an order pays both; if you only need the fluid, clear the bucket's cell.
+* **A filled bucket can be the result.** A pattern may make, say, a water bucket (your Spout fills an empty bucket).
+  While an order waits for it, the crane **shelves** the returned bucket instead of pouring it into a Fluid Bay, and
+  only as many as are awaited. If no shelf has room, it waits in the input and the input's goggles say "awaited as an
+  item: needs shelf room, not a Fluid Bay" (no overflow port takes it past the bay; a diversion port takes incoming
+  items as ever). The order's timeout keeps running meanwhile, and once nothing waits for the bucket it is poured as
+  usual. A crane that already carries such a bucket and has to find a new place for it tries a shelf (after a store or
+  collect trip also an input), then a bay that can take it, and only then a port or an output, as for any carry of that
+  kind. The warehouse cannot tell your machine's bucket from one you drop in yourself. The same
+  goes for a Stock Keeper minimum on the bucket, but only when the row counts **items** (a bucket row starts out
+  counting fluid; click the small "B" beside its name, which then shows "x").
 * **A pattern needs a result.** While a pattern has ingredients but nothing right of the arrow, it is never offered or
   ordered: the empty result cell and its tab show a gold "?", their tooltips and the arrow's say why, and the
   station's goggles name the pattern. Put what the machine makes there (it fills in by itself only for a crafting
   recipe).
 * **What it does not do:** a pattern cannot **make** a fluid, a Crafter Feeder refuses a pattern with a fluid cell
   (a Crafter cannot take one), package mode makes nothing so the cells stay inert, and an automatic stock-rule restock
-  skips such a pattern. JEI's "+" lays a recipe's fluid inputs as fluid cells. **Downgrading** to an older Wareworks
+  skips such a pattern: a Stock Keeper rule that has no other pattern for its item says "Uses a fluid: not
+  auto-restocked. Order it at the terminal". JEI's "+" lays a recipe's fluid inputs as fluid cells. **Downgrading** to an older Wareworks
   loses the cells: a pattern that has only fluid cells is empty after the next save there.
 
 **One machine, several products: the Recipe Selector.** Sneak-click the production station with a **Recipe
@@ -845,9 +859,11 @@ Warehouse Input the products come back through. From then on:
   turn, and the terminal, the station's screen and the goggles say so. The selector sets the saw's filter only once
   nothing of the old product's ingredients is in the buffer, on its way, in the machine or still to come back. A
   waiting order does not time out.
-* **Only the return input completes an order**, and it stores only what the station makes. Anything else that comes
-  back stays in the input and **stops the station**: click the input with an empty hand to take it out, then
-  sneak-click the station (or press Resume in its screen). The same stop follows an order that ended while its
+* **Only the return input completes an order**, and it stores only what the station makes, plus the **empty buckets
+  of the station's own fluid cells** (also ones that arrive after the order has ended; such a bucket completes no order,
+  unless this station is itself making empty buckets right then). Anything
+  else that comes back stays in the input and **stops the station**: click the input with an empty hand to take it out, then
+  sneak-click the station (or click the red "Held" row in its screen). The same stop follows an order that ended while its
   ingredients were still in the line. It never resumes by itself.
 * **Patterns are checked against the machine's real recipes.** A pattern no recipe makes in whole runs, one with
   several possible amounts or one that makes its result only by chance is drawn red with the reason and never ordered

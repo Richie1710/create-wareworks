@@ -25,6 +25,7 @@ import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour;
 
 import dev.wareworks.client.gui.WarehouseProductionScreen;
+import dev.wareworks.client.gui.WarehouseStockKeeperScreen;
 import dev.wareworks.client.gui.WarehouseTerminalScreen;
 import dev.wareworks.content.controller.BranchLayout;
 import dev.wareworks.content.controller.ControllerStatus;
@@ -38,9 +39,14 @@ import dev.wareworks.content.selector.RecipeSelectorBlockEntity;
 import dev.wareworks.content.selector.SelectorRecipeCheck;
 import dev.wareworks.content.station.ProductionGoggleSummary;
 import dev.wareworks.content.station.ProductionMenuLayout;
+import dev.wareworks.content.station.StockKeeperRules;
+import dev.wareworks.content.station.StockKeeperScreenState;
 import dev.wareworks.content.station.WarehouseInputBlock;
+import dev.wareworks.content.station.WarehouseInputBlockEntity;
 import dev.wareworks.content.station.WarehouseProductionBlock;
 import dev.wareworks.content.station.WarehouseProductionBlockEntity;
+import dev.wareworks.content.station.WarehouseStockKeeperBlock;
+import dev.wareworks.content.station.WarehouseStockKeeperBlockEntity;
 import dev.wareworks.content.station.WarehouseTerminalBlock;
 import dev.wareworks.content.station.WarehouseTerminalBlockEntity;
 import dev.wareworks.content.storage.FluidBayBlock;
@@ -49,10 +55,12 @@ import dev.wareworks.content.storage.WarehouseInterfaceBlock;
 import dev.wareworks.core.address.AisleGeometry;
 import dev.wareworks.core.address.RackPosition;
 import dev.wareworks.core.address.Side;
+import dev.wareworks.core.job.NoJobReason;
 import dev.wareworks.core.production.FluidCell;
 import dev.wareworks.core.production.ProductionOrder;
 import dev.wareworks.core.production.ProductionOrderState;
 import dev.wareworks.core.production.SelectorMode;
+import dev.wareworks.core.stock.RestockOutcome;
 import dev.wareworks.registry.WareworksBlockEntityTypes;
 import dev.wareworks.registry.WareworksBlocks;
 import dev.wareworks.util.WareworksLang;
@@ -71,6 +79,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.HopperBlock;
 import net.minecraft.world.level.block.PipeBlock;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -94,7 +103,10 @@ import net.neoforged.neoforge.items.ItemHandlerHelper;
  * Every step is a real one: the pattern is written with real clicks through {@link ScreenInput} (dirt and mud as items,
  * a held water bucket as the fluid cell, the wheel from 1000 down to 250 mB), the order is a click on the terminal's
  * stock cell, the funnels' filters are set on their behaviours, and the second round places a Recipe Selector on the
- * Basin with sneak-clicks. The census is <b>exact on every server tick</b> ({@link ServerTickWatch}): the item census
+ * Basin with sneak-clicks. In that round the two sink chests become a hopper line <b>into the selector's bound return
+ * input</b>, which also takes the mud: every empty bucket comes back through it while the order is open and after it,
+ * the station is never held (checked on every tick), the buckets are stored again and a further order runs. A Stock
+ * Keeper with a minimum for the mud then says why nothing restocks it (a fluid pattern). The census is <b>exact on every server tick</b> ({@link ServerTickWatch}): the item census
  * (water buckets in flight, empty buckets short by the same number, dirt turned into mud) and the fluid census (water
  * leaves only by the mixer, 250 mB per mud) are matched against one ledger, and at most two filled buckets are ever on
  * their way. Mid order the world is saved, quit and joined again.
@@ -168,7 +180,10 @@ public final class FluidPatternVisualScenario implements VisualScenario {
     private static final int DIRT_STOCK = 64;
     private static final int BAY_BUCKETS = 8;
     private static final int FIRST_ORDER = 8;
-    private static final int SECOND_ORDER = 4;
+    private static final int SECOND_ORDER = 8;
+    private static final int THIRD_ORDER = 4;
+    private static final RackPosition KEEPER = RackPosition.of(4, 0, Side.LEFT);
+    private static final int KEEPER_MINIMUM = 64;
     private static final int MAX_IN_FLIGHT = 2;
 
     private static final int HOTBAR_DIRT = 0;
@@ -192,11 +207,23 @@ public final class FluidPatternVisualScenario implements VisualScenario {
     private static final int CLICK_GAP_TICKS = 3;
     private static final long RUN_TIMEOUT_MILLIS = 16L * 60L * 1000L;
 
+    /**
+     * The selector round's way back: hoppers from under both catching funnels round to the south side of the Input,
+     * which is the selector's bound return input. Each with the side it pushes to, the far end last.
+     */
+    private static final List<Map.Entry<BlockPos, Direction>> RETURN_LINE = List.of(
+            Map.entry(new BlockPos(1, 0, -2), Direction.NORTH), Map.entry(new BlockPos(2, 0, -2), Direction.WEST),
+            Map.entry(new BlockPos(3, 0, -2), Direction.WEST), Map.entry(new BlockPos(3, 0, -3), Direction.SOUTH),
+            Map.entry(new BlockPos(3, 0, -4), Direction.SOUTH), Map.entry(CHEST_EAST, Direction.SOUTH),
+            Map.entry(new BlockPos(3, 0, -6), Direction.SOUTH), Map.entry(CHEST_NORTH, Direction.EAST));
+    private static final CameraView RETURN_VIEW = CameraView.of("return", 7.5, 4.5, 1.5, 2.0, 0.4, -4.0);
+    private static final CameraView AT_KEEPER = CameraView.of("keeper", 1.8, 2.3, -3.5, -0.5, 0.6, -3.5);
     private static final CameraView OVERVIEW = CameraView.of("overview", 9.5, 5.5, 0.5, 2.0, 1.5, -4.0);
     private static final CameraView MACHINE_VIEW = CameraView.of("machine", 7.0, 4.0, -1.5, 2.2, 1.5, -4.5);
     private static final CameraView BASIN_VIEW = CameraView.of("basin", 5.5, 3.6, -7.8, 1.6, 1.6, -4.5);
     private static final CameraView DRAIN_VIEW = CameraView.of("drain", 5.5, 2.8, -2.2, 2.5, 1.0, -5.0);
     private static final CameraView AT_STATION = CameraView.of("station", -0.8, 3.6, -4.5, 1.2, 2.5, -4.5);
+    private static final CameraView AT_INPUT = CameraView.of("input", -0.8, 2.75, -2.5, 1.2, 0.7, -2.5);
     private static final CameraView AT_TERMINAL = CameraView.of("terminal", 0.5, 2.3, -1.6, -0.5, 0.6, -2.5);
 
     private final VisualLanguage language = new VisualLanguage(LANGUAGE_TIMEOUT_TICKS, SETTLE_TICKS);
@@ -216,6 +243,16 @@ public final class FluidPatternVisualScenario implements VisualScenario {
     private volatile boolean sawWaterInBasin;
     private volatile String englishFluidAmount = "";
     private volatile String englishGoggleLine = "";
+    private volatile String englishKeeperLine = "";
+    private volatile String englishAwaitedLine = "";
+    private volatile long bayBeforeAwaited;
+    private int awaitedPolls;
+    /** The selector round with the hopper line: from here on the station must never be held. */
+    private volatile boolean returnLeg;
+    /** Empty buckets that entered the bound return input, and how many of them while a mud order was open. */
+    private volatile long returned;
+    private volatile long returnedWhileOpen;
+    private volatile long lastInInput;
 
     @Override
     public String name() {
@@ -249,6 +286,7 @@ public final class FluidPatternVisualScenario implements VisualScenario {
         patternChapter(script);
         firstOrderChapter(script);
         selectorChapter(script);
+        keeperChapter(script);
         germanChapter(script);
         script.server("fluidpattern: stop the per-tick ledger", (server, context) -> {
             ServerTickWatch running = watch;
@@ -257,11 +295,15 @@ public final class FluidPatternVisualScenario implements VisualScenario {
                 running.stop();
             }
             watch = null;
-        }).client("fluidpattern: every check passed",
+        });
+        awaitedChapter(script);
+        script.client("fluidpattern: every check passed",
                 context -> LOGGER.info(PREFIX + "fluidpattern: ALL CHECKS PASSED in English and German (pattern with a "
                         + "fluid cell written with real clicks, order from the terminal, the crane's bucket through "
                         + "funnel, drain, pump and pipes into the Basin, mud through the input, exact item and fluid "
-                        + "ledger on every tick, a save and rejoin mid order, the Recipe Selector on the Basin)"));
+                        + "ledger on every tick, a save and rejoin mid order, the Recipe Selector on the Basin with the "
+                        + "empty buckets going back through its bound return input and no hold, the Stock Keeper's "
+                        + "fluid pattern line, the input's awaited-as-an-item goggle line)"));
     }
 
     @Override
@@ -535,6 +577,7 @@ public final class FluidPatternVisualScenario implements VisualScenario {
                         throw new VisualTestException(away + " filled buckets are away from the store, the cap is "
                                 + MAX_IN_FLIGHT);
                     observe(level);
+                    observeReturn(level);
                     return;
                 }
             }
@@ -580,6 +623,42 @@ public final class FluidPatternVisualScenario implements VisualScenario {
             sawBucketInDrain = true;
         if (water(level, dock.offset(BASIN)) > 0)
             sawWaterInBasin = true;
+    }
+
+    /** The selector round, on every tick: no hold, and the empty buckets that arrive in the bound return input. */
+    private void observeReturn(ServerLevel level) {
+        BlockPos dock = originOf(level);
+        if (!returnLeg || dock == null)
+            return;
+        station(level, dock).selectorHold().ifPresent(hold -> {
+            throw new VisualTestException("the Recipe Selector station is held: " + hold);
+        });
+        long now = inInput(level, dock);
+        if (now > lastInInput) {
+            long arrived = now - lastInInput;
+            returned += arrived;
+            boolean open = controller(level, dock).productionOrders().stream().anyMatch(ProductionOrder::isOpen);
+            if (open)
+                returnedWhileOpen += arrived;
+            LOGGER.info(PREFIX + "fluidpattern: {} empty bucket(s) entered the bound return input ({} so far, order "
+                    + "open: {})", arrived, returned, open);
+        }
+        lastInInput = now;
+    }
+
+    private static long inInput(ServerLevel level, BlockPos dock) {
+        WarehouseInputBlockEntity input = WareworksBlockEntityTypes.WAREHOUSE_INPUT.getNullable(level,
+                dock.offset(INPUT_REL));
+        if (input == null)
+            throw new VisualTestException("the return input is missing");
+        return input.bufferedItems().count(BUCKET);
+    }
+
+    private static long inReturnLine(ServerLevel level, BlockPos dock) {
+        long total = 0;
+        for (Map.Entry<BlockPos, Direction> hopper : RETURN_LINE)
+            total += count(level, dock.offset(hopper.getKey()), Items.BUCKET);
+        return total;
     }
 
     @Nullable
@@ -765,31 +844,193 @@ public final class FluidPatternVisualScenario implements VisualScenario {
         });
         GoggleShots.reach(script, NAME, 0.0);
         script.camera(BASIN_VIEW).shot("fluidpattern-selector")
-                .camera(AT_TERMINAL)
+                .server("fluidpattern: turn the sink chests into a hopper line into the bound return input",
+                        this::buildReturnLine)
+                .serverUntil("fluidpattern: the old empty buckets come back through the bound return input and are "
+                        + "stored", this::allEmptiesStored, ORDER_TIMEOUT_TICKS)
+                .server("fluidpattern: CHECK the buckets of the finished order did not hold the station",
+                        (server, context) -> checkReturned(server, context, "after the first order", 1, 0));
+        terminalOrder(script, SECOND_ORDER);
+        script.serverUntil("fluidpattern: freeze with an empty bucket at the return input, the order open",
+                        this::freezeOnReturn, ORDER_TIMEOUT_TICKS)
+                .until("fluidpattern: the client sees the frozen return line",
+                        context -> context.minecraft().level != null
+                                && context.minecraft().level.tickRateManager().isFrozen(), SCREEN_TIMEOUT_TICKS)
+                .camera(RETURN_VIEW)
+                .shot("fluidpattern-return")
+                .freeze(false)
+                .serverUntil("fluidpattern: wait until the second order is made and in the terminal",
+                        (server, context) -> orderDone(server, context, SECOND_ORDER), ORDER_TIMEOUT_TICKS)
+                .serverUntil("fluidpattern: every empty bucket is stored again", this::allEmptiesStored,
+                        ORDER_TIMEOUT_TICKS)
+                .server("fluidpattern: CHECK the second order ran with its buckets coming back through the return input",
+                        (server, context) -> {
+                            if (!sawWaterInBasin || mostInFlight < 1)
+                                throw new VisualTestException("the selector round did not use the bucket route");
+                            checkReturned(server, context, "during the second order", 2, 1);
+                        })
+                .server("fluidpattern: a new baseline for one more order", (server, context) -> {
+                    check();
+                    ledgerOn = false;
+                    resetBaseline(server.overworld(), THIRD_ORDER);
+                    returned = 0;
+                    returnedWhileOpen = 0;
+                    ledgerOn = true;
+                });
+        terminalOrder(script, THIRD_ORDER);
+        script.serverUntil("fluidpattern: wait until the third order is made and in the terminal",
+                        (server, context) -> orderDone(server, context, THIRD_ORDER), ORDER_TIMEOUT_TICKS)
+                .serverUntil("fluidpattern: the third order's bucket is stored again", this::allEmptiesStored,
+                        ORDER_TIMEOUT_TICKS)
+                .server("fluidpattern: CHECK the station kept running", (server, context) ->
+                        checkReturned(server, context, "the station keeps running (third order)", 1, 0));
+        script.camera(RETURN_VIEW).shot("fluidpattern-selector-done");
+    }
+
+    private void terminalOrder(VisualScript script, int amount) {
+        script.camera(AT_TERMINAL)
                 .server("fluidpattern: open the terminal screen", FluidPatternVisualScenario::openTerminalScreen)
                 .until("fluidpattern: wait until the terminal offers the mud",
                         context -> context.minecraft().screen instanceof WarehouseTerminalScreen terminal
                                 && terminal.hasStock() && terminal.entry(MUD).isPresent(), SCREEN_TIMEOUT_TICKS)
                 .waitTicks(SETTLE_TICKS)
-                .client("fluidpattern: scroll the requested amount to " + SECOND_ORDER,
-                        context -> TerminalOrder.scrollAmount(context, NAME, SECOND_ORDER))
+                .client("fluidpattern: scroll the requested amount to " + amount,
+                        context -> TerminalOrder.scrollAmount(context, NAME, amount))
                 .waitTicks(SETTLE_TICKS)
                 .client("fluidpattern: click the mud cell", context -> TerminalOrder.clickCell(context, NAME, MUD))
-                .serverUntil("fluidpattern: wait until the second order is in",
-                        (server, context) -> orderIn(server, context, SECOND_ORDER), SCREEN_TIMEOUT_TICKS)
+                .serverUntil("fluidpattern: wait until the order of " + amount + " is in",
+                        (server, context) -> orderIn(server, context, amount), SCREEN_TIMEOUT_TICKS)
                 .client("fluidpattern: close the terminal screen", FluidPatternVisualScenario::closeScreen)
                 .until("fluidpattern: wait until the terminal screen is closed",
-                        context -> context.minecraft().screen == null, SCREEN_TIMEOUT_TICKS)
-                .serverUntil("fluidpattern: wait until the second order is made and in the terminal",
-                        (server, context) -> orderDone(server, context, SECOND_ORDER), ORDER_TIMEOUT_TICKS)
-                .server("fluidpattern: check the end of the second order", (server, context) -> {
-                    check();
-                    if (!sawWaterInBasin || mostInFlight < 1)
-                        throw new VisualTestException("the selector round did not use the bucket route");
-                    LOGGER.info(PREFIX + "fluidpattern: CHECK PASS the second order of {} mud ran with the Recipe "
-                            + "Selector on the Basin, census exact on every tick", SECOND_ORDER);
-                });
-        script.camera(BASIN_VIEW).shot("fluidpattern-selector-done");
+                        context -> context.minecraft().screen == null, SCREEN_TIMEOUT_TICKS);
+    }
+
+    /** Both sink chests and six more hoppers become one line into the Input; the buckets in the chests go along. */
+    private void buildReturnLine(MinecraftServer server, VisualContext context) {
+        check();
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        long carried = count(level, dock.offset(CHEST_NORTH), Items.BUCKET)
+                + count(level, dock.offset(CHEST_EAST), Items.BUCKET);
+        if (carried < 1)
+            throw new VisualTestException("the sink chests hold no empty bucket to send back");
+        returned = 0;
+        returnedWhileOpen = 0;
+        lastInInput = inInput(level, dock);
+        returnLeg = true;
+        for (Map.Entry<BlockPos, Direction> hopper : RETURN_LINE) {
+            BlockPos pos = dock.offset(hopper.getKey());
+            List<ItemStack> kept = new java.util.ArrayList<>();
+            if (level.getBlockEntity(pos) instanceof net.minecraft.world.Container container) {
+                for (int slot = 0; slot < container.getContainerSize(); slot++)
+                    if (!container.getItem(slot).isEmpty())
+                        kept.add(container.getItem(slot).copy());
+                container.clearContent();
+            }
+            level.setBlockAndUpdate(pos, Blocks.HOPPER.defaultBlockState().setValue(HopperBlock.FACING,
+                    hopper.getValue()));
+            for (ItemStack stack : kept)
+                insertInto(level, pos, stack);
+        }
+        LOGGER.info(PREFIX + "fluidpattern: the return line stands, carrying {} empty bucket(s) of the first order",
+                carried);
+    }
+
+    private boolean allEmptiesStored(MinecraftServer server, VisualContext context) {
+        check();
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        return inReturnLine(level, dock) == 0 && inInput(level, dock) == 0
+                && controller(level, dock).countOf(BUCKET) == EMPTY_BUCKETS;
+    }
+
+    private void checkReturned(MinecraftServer server, VisualContext context, String when, long atLeast,
+            long atLeastOpen) {
+        check();
+        WarehouseProductionBlockEntity station = station(server.overworld(), context.origin());
+        if (returned < atLeast || returnedWhileOpen < atLeastOpen)
+            throw new VisualTestException(when + ": " + returned + " bucket(s) came through the return input, "
+                    + returnedWhileOpen + " while an order was open; expected " + atLeast + " and " + atLeastOpen);
+        if (station.selectorHold().isPresent())
+            throw new VisualTestException(when + ": the station is held: " + station.selectorHold());
+        LOGGER.info(PREFIX + "fluidpattern: CHECK PASS {}: {} empty bucket(s) came back through the bound return input "
+                + "({} while an order was open), all {} are stored again, no hold on the station", when, returned,
+                returnedWhileOpen, EMPTY_BUCKETS);
+    }
+
+    private boolean freezeOnReturn(MinecraftServer server, VisualContext context) {
+        check();
+        ServerLevel level = server.overworld();
+        BlockPos dock = context.origin();
+        boolean open = controller(level, dock).productionOrders().stream().anyMatch(ProductionOrder::isOpen);
+        long last = count(level, dock.offset(RETURN_LINE.getFirst().getKey()), Items.BUCKET) + inInput(level, dock);
+        if (!open || last < 1)
+            return false;
+        server.tickRateManager().setFrozen(true);
+        LOGGER.info(PREFIX + "fluidpattern: CHECK PASS an empty bucket is at the return input while the order is open; "
+                + "ticks frozen");
+        return true;
+    }
+
+    // --- chapter 3b: the Stock Keeper's words about a fluid pattern -------------------------------------------------
+
+    private void keeperChapter(VisualScript script) {
+        script.server("fluidpattern: a Stock Keeper with a minimum for the mud", (server, context) -> {
+            check();
+            ServerLevel level = server.overworld();
+            BranchLayout layout = layout(context.origin());
+            level.setBlockAndUpdate(layout.rackPos(KEEPER), WareworksBlocks.WAREHOUSE_STOCK_KEEPER.getDefaultState()
+                    .setValue(WarehouseStockKeeperBlock.FACING, inward(layout, KEEPER)));
+            WarehouseStockKeeperBlockEntity keeper = keeper(level, context.origin());
+            if (!keeper.editRule(0, StockKeeperRules.FIELD_ITEM, MUD, 0L).changed()
+                    || !keeper.editRule(0, StockKeeperRules.FIELD_MINIMUM, null, KEEPER_MINIMUM).changed())
+                throw new VisualTestException("the keeper refused the mud rule");
+        });
+        keeperShot(script, "fluidpattern-keeper", false);
+    }
+
+    private void keeperShot(VisualScript script, String label, boolean german) {
+        script.camera(AT_KEEPER)
+                .waitTicks(20)
+                .server("fluidpattern: open the stock keeper's screen", (server, context) -> {
+                    if (!keeper(server.overworld(), context.origin()).openScreen(context.serverPlayer(server)))
+                        throw new VisualTestException("the stock keeper screen could not be opened");
+                })
+                .until("fluidpattern: the keeper's row says that the pattern uses a fluid",
+                        context -> context.minecraft().screen instanceof WarehouseStockKeeperScreen screen
+                                && screen.state().row(0).map(StockKeeperScreenState.RowView::restock)
+                                        .filter(outcome -> outcome == RestockOutcome.FLUID_PATTERN).isPresent(),
+                        MACHINE_TIMEOUT_TICKS)
+                .client("fluidpattern: rest the cursor on the mud rule",
+                        context -> ScreenInput.hover(context.minecraft(), ScreenInput.keeperItemCell(
+                                (WarehouseStockKeeperScreen) context.minecraft().screen, 0)))
+                .waitTicks(SETTLE_TICKS)
+                .client("fluidpattern: CHECK the keeper's tooltip", context -> {
+                    WarehouseStockKeeperScreen screen = (WarehouseStockKeeperScreen) context.minecraft().screen;
+                    List<String> tooltip = ScreenInput.keeperTooltip(screen, ScreenInput.keeperItemCell(screen, 0))
+                            .stream().map(Component::getString).toList();
+                    String line = WareworksLang.translateDirect(
+                            WareworksLang.keeperRestockKey(RestockOutcome.FLUID_PATTERN)).getString();
+                    if (german)
+                        requireTranslated(line, englishKeeperLine);
+                    else
+                        englishKeeperLine = line;
+                    if (!tooltip.contains(line))
+                        throw new VisualTestException("the keeper's tooltip " + tooltip + " lacks '" + line + "'");
+                    LOGGER.info(PREFIX + "fluidpattern: CHECK PASS the Stock Keeper's tooltip reads {}", tooltip);
+                })
+                .shot(label)
+                .client("fluidpattern: close the keeper screen", FluidPatternVisualScenario::closeScreen)
+                .until("fluidpattern: wait until the keeper screen is closed",
+                        context -> context.minecraft().screen == null, SCREEN_TIMEOUT_TICKS);
+    }
+
+    private static WarehouseStockKeeperBlockEntity keeper(ServerLevel level, BlockPos dock) {
+        WarehouseStockKeeperBlockEntity keeper = WareworksBlockEntityTypes.WAREHOUSE_STOCK_KEEPER.getNullable(level,
+                layout(dock).rackPos(KEEPER));
+        if (keeper == null)
+            throw new VisualTestException("the stock keeper of the aisle is missing");
+        return keeper;
     }
 
     // --- chapter 4: German ------------------------------------------------------------------------------------------
@@ -832,7 +1073,120 @@ public final class FluidPatternVisualScenario implements VisualScenario {
                     LOGGER.info(PREFIX + "fluidpattern: CHECK PASS the station's goggles in German: {}", lines);
                 });
         GoggleShots.reach(script, NAME, 0.0);
+        keeperShot(script, "fluidpattern-keeper-de", true);
         language.switchTo(script, "fluidpattern: ", "en_us");
+    }
+
+    // --- chapter 5: the input's line for an awaited container -------------------------------------------------------
+
+    /**
+     * The Stock Keeper's first row becomes an item-counting minimum of one water bucket, which no pattern makes, the
+     * two shelf chests are filled up and a water bucket arrives in the Input: it waits there although the Fluid Bay has
+     * room, and the Input's goggles say why. Shot with the ticks frozen in English, German and Spanish. Runs after the
+     * per-tick ledger has stopped; the production station and the Recipe Selector go first, so the Input is no return
+     * input any more.
+     */
+    private void awaitedChapter(VisualScript script) {
+        script.server("fluidpattern: no station or Recipe Selector, a water bucket minimum and full shelf chests",
+                (server, context) -> {
+                    ledgerOn = false;
+                    ServerLevel level = server.overworld();
+                    BlockPos dock = context.origin();
+                    // The station goes too: it is what makes the Input a Recipe Selector's return input.
+                    level.setBlockAndUpdate(dock.offset(STATION_REL), Blocks.AIR.defaultBlockState());
+                    level.setBlockAndUpdate(dock.offset(SELECTOR_REL), Blocks.AIR.defaultBlockState());
+                    WarehouseStockKeeperBlockEntity keeper = keeper(level, dock);
+                    if (!keeper.editRule(0, StockKeeperRules.FIELD_ITEM, WATER_BUCKET, 0L).changed())
+                        throw new VisualTestException("the keeper refused the water bucket rule");
+                    keeper.editRule(0, StockKeeperRules.FIELD_UNIT, null, 0L);
+                    keeper.editRule(0, StockKeeperRules.FIELD_MINIMUM, null, 1L);
+                    BranchLayout layout = layout(dock);
+                    for (RackPosition rack : List.of(EMPTIES, DIRT_STORE)) {
+                        if (!(level.getBlockEntity(chestOf(layout, rack))
+                                instanceof net.minecraft.world.Container chest))
+                            throw new VisualTestException("the shelf chest at " + rack + " is missing");
+                        for (int slot = 0; slot < chest.getContainerSize(); slot++)
+                            if (chest.getItem(slot).isEmpty())
+                                chest.setItem(slot, new ItemStack(Items.COBBLESTONE, 64));
+                        chest.setChanged();
+                    }
+                }).waitTicks(200)
+                .server("fluidpattern: a water bucket arrives in the Input", (server, context) -> {
+                    ServerLevel level = server.overworld();
+                    BlockPos dock = context.origin();
+                    bayBeforeAwaited = bay(level, dock).millibuckets();
+                    insertInto(level, dock.offset(INPUT_REL), new ItemStack(Items.WATER_BUCKET));
+                }).waitTicks(120)
+                .server("fluidpattern: CHECK the awaited bucket waits in the Input, the bay untouched",
+                        (server, context) -> {
+                            ServerLevel level = server.overworld();
+                            BlockPos dock = context.origin();
+                            WarehouseInputBlockEntity input = WareworksBlockEntityTypes.WAREHOUSE_INPUT
+                                    .getNullable(level, dock.offset(INPUT_REL));
+                            long waiting = input == null ? -1 : input.bufferedItems().count(WATER_BUCKET);
+                            long inBay = bay(level, dock).millibuckets();
+                            boolean awaited = controller(level, dock).awaitsAsItem(WATER_BUCKET);
+                            if (waiting != 1 || inBay != bayBeforeAwaited || !awaited)
+                                throw new VisualTestException("the Input holds " + waiting + " water bucket(s), the bay "
+                                        + inBay + " mB (before " + bayBeforeAwaited + "), awaited " + awaited);
+                            Optional<NoJobReason> refusal = controller(level, dock)
+                                    .storeRefusalAt(dock.offset(INPUT_REL));
+                            if (!refusal.equals(Optional.of(NoJobReason.AWAITED_AS_ITEM)))
+                                throw new VisualTestException("the controller's reason for the Input is " + refusal
+                                        + ", last plan reason " + controller(level, dock).lastPlanReason()
+                                        + ", backing off " + controller(level, dock).isBackingOff(level.getGameTime())
+                                        + ", status " + controller(level, dock).status() + ", crane job "
+                                        + WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock).currentJob()
+                                        + ", crane " + WareworksBlockEntityTypes.STACKER_CRANE.getNullable(level, dock)
+                                                .craneState());
+                            LOGGER.info(PREFIX + "fluidpattern: CHECK PASS the awaited water bucket waits in the Input, "
+                                    + "the bay stays at {} mB, the controller's reason is {}", inBay, refusal);
+                        });
+        GoggleShots.reach(script, NAME, GoggleShots.vanillaReach());
+        script.client("fluidpattern: clear the toasts", context -> context.minecraft().getToasts().clear())
+                .camera(AT_INPUT)
+                // The goggle numbers are only sent while the overlay, a GUI layer, looks at the block: before freezing.
+                .client("fluidpattern: show the GUI so the Input's goggles are asked for",
+                        context -> context.minecraft().options.hideGui = false)
+                .until("fluidpattern: the reason reached the Input's goggles", context -> {
+                    List<String> lines = GoggleShots.lines(context, inputPos(context.origin()));
+                    if (++awaitedPolls % 100 == 0)
+                        LOGGER.info(PREFIX + "fluidpattern: waiting for the reason,{} lines {}",
+                                GoggleShots.describeHover(context), lines);
+                    return lines.stream().anyMatch(line -> line.contains(awaitedLine()));
+                }, SCREEN_TIMEOUT_TICKS)
+                .freeze(true);
+        awaitedShot(script, "input-awaited-goggles", "en_us");
+        language.switchTo(script, "fluidpattern: ", "de_de");
+        awaitedShot(script, "input-awaited-goggles-de", "de_de");
+        language.switchTo(script, "fluidpattern: ", "es_es");
+        awaitedShot(script, "input-awaited-goggles-es", "es_es");
+        language.switchTo(script, "fluidpattern: ", "en_us");
+        script.freeze(false);
+        GoggleShots.reach(script, NAME, 0.0);
+    }
+
+    private void awaitedShot(VisualScript script, String label, String code) {
+        GoggleShots.shot(script, NAME, AT_INPUT, label, pos -> inputPos(pos), context -> true, context -> {
+            List<String> lines = GoggleShots.lines(context, inputPos(context.origin()));
+            String line = awaitedLine();
+            if (code.equals("en_us"))
+                englishAwaitedLine = line;
+            else if (line.isBlank() || line.equals(englishAwaitedLine))
+                throw new VisualTestException("'" + line + "' is no " + code + " translation");
+            GoggleShots.requireLine(lines, line);
+            LOGGER.info(PREFIX + "fluidpattern: CHECK PASS the Input's goggles in {} (screen {} GUI px wide, scale {}, "
+                    + "line {} px): {}", code, context.minecraft().getWindow().getGuiScaledWidth(),
+                    context.minecraft().getWindow().getGuiScale(), context.minecraft().font.width(line), lines);
+        });
+    }
+
+    private static String awaitedLine() {
+        return WareworksLang.translateDirect(WareworksLang.noJobReasonKey(NoJobReason.AWAITED_AS_ITEM)).getString();
+    }
+
+    private static BlockPos inputPos(BlockPos dock) {
+        return dock.offset(INPUT_REL);
     }
 
     private static void requireTranslated(String german, String english) {

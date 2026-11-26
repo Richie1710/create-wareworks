@@ -45,6 +45,7 @@ import dev.wareworks.content.station.HomePointStatus;
 import dev.wareworks.content.station.PackageHandover;
 import dev.wareworks.content.selector.RecipeSlip;
 import dev.wareworks.content.station.PatternFilterCells;
+import dev.wareworks.content.station.PatternFluids;
 import dev.wareworks.content.station.ProductionPatterns;
 import dev.wareworks.content.station.ProductionScreenState;
 import dev.wareworks.content.station.SelectorHold;
@@ -131,6 +132,7 @@ import dev.wareworks.core.stock.RuleUnit;
 import dev.wareworks.content.station.KeeperRule;
 import dev.wareworks.core.stock.PackageRules;
 import dev.wareworks.core.stock.PriorityBreakdown;
+import dev.wareworks.core.stock.AwaitedItems;
 import dev.wareworks.core.stock.StockAccess;
 import dev.wareworks.core.stock.StockAvailability;
 import dev.wareworks.core.stock.StockLevels;
@@ -178,9 +180,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.Fluid;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
 
@@ -2717,6 +2721,11 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return selectors.storeHeld(input, key);
     }
 
+    /** Whether the input at {@code input} is the return input of a Recipe Selector station of this aisle. */
+    boolean isSelectorReturnInput(RackPosition input) {
+        return level != null && !level.isClientSide && selectors.stationReturningAt(input).isPresent();
+    }
+
     /**
      * The planner's hold on an input's items ({@code PlannerInput#storeHeld}): the Recipe Selector's quarantine
      * ({@link #selectorStoreHeld}, ADR-085) or package mode's backstop ({@link #packageModeHolds}). With package mode
@@ -2750,8 +2759,22 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         return packageDrain.remaining(productionOrders.view(), key, this::emptyContainerOf);
     }
 
+    /**
+     * The empty container the crane fills to deliver the fluid {@code fluidId} to a production station (ADR-089), as
+     * {@link ControllerFluidSupply} delivers it, whatever the bays hold right now; empty for a fluid that cannot be
+     * delivered.
+     */
+    Optional<ItemKey> emptyContainerOfFluid(String fluidId) {
+        Optional<Fluid> fluid = PatternFluids.resolve(fluidId);
+        if (fluid.isEmpty() || fluid.get().getBucket() == Items.AIR)
+            return Optional.empty();
+        FluidKey fluidKey = FluidKey.of(fluid.get());
+        return fillRecipe(ItemKey.of(fluid.get().getBucket())).filter(recipe -> recipe.fluid().equals(fluidKey))
+                .map(FillLedger.Recipe::emptyKey);
+    }
+
     /** The empty form of the filled container {@code key} (a water bucket's bucket), read once per key. */
-    private Optional<ItemKey> emptyContainerOf(ItemKey key) {
+    Optional<ItemKey> emptyContainerOf(ItemKey key) {
         Optional<ItemKey> known = packageContainerReturns.get(key);
         if (known != null)
             return known;
@@ -3151,6 +3174,16 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 onProductionOrderFinished(order);
         }
         setChanged();
+    }
+
+    /**
+     * Server: {@code delivered} items of {@code key} were stored that are <b>nobody's product</b>, a returned empty
+     * container (ADR-089): the stock-level channel must not count their rise either, or an open order for that item
+     * would complete without its machine. Only noted while such an order is open; the next observation uses it up.
+     */
+    private void discountStockRise(ItemKey key, int delivered) {
+        if (productionOrders.open().stream().anyMatch(order -> order.result().equals(key)))
+            storedCredits.merge(key, (long) delivered, Long::sum);
     }
 
     /**
@@ -4897,6 +4930,30 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
     }
 
     /**
+     * Server: whether something is still waiting for the filled container {@code key} <b>as an item</b>, so the crane
+     * must not pour it into a fluid bay (ADR-089 amendment; the rule over these numbers is {@link AwaitedItems}): an open
+     * production order whose result it is, an open request or an order's item ingredient the shelves cannot cover, or a
+     * stock keeper minimum of the item that is not met. False for everything that carries no fluid.
+     * <p>
+     * Derived from the saved orders, requests and rules and the cranes' jobs on every question, never saved. One pass
+     * over the orders, the request queue and the reservation ledger, asked once per key per planner input and only when
+     * a fluid bay is a candidate, and once at a drop into a bay.
+     */
+    public boolean awaitsAsItem(ItemKey key) {
+        Objects.requireNonNull(key, "key");
+        if (level == null || level.isClientSide || !FluidContainers.carriesFluid(key))
+            return false;
+        long held = RelocationStock.counted(stock.count(key), dispatch.relocatingInFlight(key));
+        // The terms of availableStock without its clamp: what the shelves can hand out, and what is promised of it.
+        long free = held - dispatch.reservations().reservedStockNotBackingRequests(key);
+        long promised = Math.max(0L, requests.remainingOf(key) + productionOrders.outstandingIngredient(key)
+                - dispatch.reservations().inTransitBackingRequests(key));
+        long minimum = stockRules().ruleFor(key).filter(StockRule::hasMinimum).map(StockRule::minimum).orElse(0L);
+        return AwaitedItems.owed(productionOrders.outstandingResult(key), promised, free, minimum, held,
+                dispatch.boundForShelves(key, true), dispatch.boundForShelves(key, false)) > 0L;
+    }
+
+    /**
      * Millibuckets of {@code fluid} the given taker may still be promised (M31): {@link #availableFluid} for a
      * {@link StockAccess#PLAYER}, and what is left above a governing fluid rule's reserve for
      * {@link StockAccess#AUTOMATION} — {@link #availableTo} for fluid, with M15's meaning unchanged.
@@ -5685,8 +5742,14 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // Resolved once for the whole pass, and only when an order could actually come of it.
         // A pattern with a fluid cell is never restocked automatically (issue #55, ADR-089): an automatic order is built
         // from the pattern alone and would forget its fluid. The terminal and the ports plan it ({@code planProduction}).
-        List<AislePattern> patterns = anyShort && limits.enabled()
-                ? aislePatterns().stream().filter(candidate -> !candidate.pattern().hasFluids()).toList() : List.of();
+        List<AislePattern> offered = anyShort && limits.enabled() ? aislePatterns() : List.of();
+        List<AislePattern> patterns = offered.stream().filter(candidate -> !candidate.pattern().hasFluids()).toList();
+        // What was skipped only for its fluid: a rule left without a pattern says so (RestockOutcome.FLUID_PATTERN).
+        Set<ItemKey> fluidResults = new HashSet<>();
+        for (AislePattern candidate : offered) {
+            if (candidate.pattern().hasFluids())
+                fluidResults.add(candidate.pattern().result().key());
+        }
         Map<ItemKey, List<ProductionPattern<ItemKey>>> byResult = patternsByResult(patterns);
         ToLongFunction<ItemKey> available = patterns.isEmpty() ? key -> 0L
                 : StockAvailability.of(stockRules(), StockAccess.AUTOMATION, availabilityLookup());
@@ -5705,7 +5768,7 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
         // The order pays its filter cells as the decision measured them: without the kinds another rule calls for.
         IngredientChoices<ItemKey> payWith = choices.excluding(RestockPlanner.calledFor(inputs));
         plan.order().ifPresent(decision -> startRestockOrder(decision, patterns, available, payWith));
-        applyRestockOutcomes(plan, limits == RestockLimits.OFF && PackageModeGate.enabled());
+        applyRestockOutcomes(plan, limits == RestockLimits.OFF && PackageModeGate.enabled(), fluidResults);
     }
 
     /** The patterns of {@code patterns} grouped by the item they make, in aisle order. */
@@ -5810,13 +5873,18 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
      * ({@link RestockOutcome#NOT_GOVERNING}, {@link RestockOutcome#SATISFIED}) are left out, so a warehouse whose
      * rules are all met holds an empty map, and the map instance is only replaced when something really changed —
      * which is what keeps the per-tick evaluation cache valid.
+     *
+     * @param fluidResults items an aisle pattern with a fluid cell makes; such a pattern was kept from the planner, so
+     *                     its {@link RestockOutcome#NO_PATTERN} about one of them is {@link RestockOutcome#FLUID_PATTERN}
      */
-    private void applyRestockOutcomes(RestockPlan<ItemKey> plan, boolean packageMode) {
+    private void applyRestockOutcomes(RestockPlan<ItemKey> plan, boolean packageMode, Set<ItemKey> fluidResults) {
         Map<ItemKey, RestockOutcome> next = new LinkedHashMap<>();
         Map<ItemKey, ItemKey> missing = new LinkedHashMap<>();
         for (RestockDecision<ItemKey> decision : plan.decisions()) {
             RestockOutcome outcome = packageMode && decision.outcome() == RestockOutcome.DISABLED
                     ? RestockOutcome.PACKAGE_MODE : decision.outcome();
+            if (outcome == RestockOutcome.NO_PATTERN && fluidResults.contains(decision.key()))
+                outcome = RestockOutcome.FLUID_PATTERN;
             if (outcome != RestockOutcome.NOT_GOVERNING && outcome != RestockOutcome.SATISFIED)
                 next.put(decision.key(), outcome);
             decision.missingIngredient().ifPresent(item -> missing.put(decision.key(), item));
@@ -6718,11 +6786,23 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
                 || job.targetKind() == LocationKind.OUTPUT) && PackageModeGate.enabled()
                 && !PackageModeGate.isPackage(job.key()))
             packageDrain.consume(productionOrders.view(), job.key(), delivered, this::emptyContainerOf);
-        if (job.type().bringsItemsIn() && job.targetKind() == LocationKind.STORAGE && delivered > 0)
+        if (job.type().bringsItemsIn() && job.targetKind() == LocationKind.STORAGE && delivered > 0) {
             // A Recipe Selector order counts only what came out of its own return input (ADR-085, design §3.5), so the
             // store job says where from; a collected arrival never completes one.
-            onResultStored(job.key(), delivered,
-                    job.type() == JobType.STORE ? Optional.of(job.source()) : Optional.empty());
+            Optional<RackPosition> source = job.type() == JobType.STORE ? Optional.of(job.source()) : Optional.empty();
+            // The empty bucket of a selector station's fluid cell, back through its return input, is no product.
+            if (source.filter(input -> selectors.returnedContainer(input, job.key())).isPresent())
+                discountStockRise(job.key(), delivered);
+            else
+                onResultStored(job.key(), delivered, source);
+        }
+        // A filled container the warehouse itself puts back on a shelf, the leftover of a fill, retrieve or supply trip
+        // (ADR-089 amendment), is nobody's product: its rise of the stock level completes no production order. Without
+        // this the bucket kept off the bay because an order awaits it would complete that very order. It can still
+        // serve a waiting request from the shelf.
+        if (!job.type().bringsItemsIn() && job.type() != JobType.RELOCATE && job.targetKind() == LocationKind.STORAGE
+                && delivered > 0 && FluidContainers.carriesFluid(job.key()))
+            discountStockRise(job.key(), delivered);
         // The mirror image: items the warehouse handed over through an accepting port instead of storing them (M17).
         // onResultStored above is deliberately not reached by them — a product diverted out was never stored, so no
         // restock order may count it, and ADR-027's safety stop is what catches the rule that keeps ordering.
@@ -6809,6 +6889,18 @@ public class WarehouseControllerBlockEntity extends SmartBlockEntity
             dispatch.forgetJob(crane);
             markChunkKeepDirty(); // M19
         }
+    }
+
+    /**
+     * Whether the crane must not pour the {@code amount} containers it brought to the fluid bay at {@code bay} (ADR-089
+     * amendment): something {@linkplain #awaitsAsItem awaits them as an item} <b>and</b> there is a place that keeps
+     * them one, a shelf or for a store or collect trip an input. Without such a place a bay ranks ahead of every port
+     * and output ({@code JobPlanner#planReroute}), so they are poured here.
+     */
+    public boolean keepsOffFluidBay(StackerCraneBlockEntity crane, TransportJob<ItemKey, RackPosition> job,
+            RackPosition bay, int amount) {
+        return acceptsReportsFrom(crane) && awaitsAsItem(job.key())
+                && dispatch.hasPlaceKeepingItem(level, layout, crane, job, bay, amount);
     }
 
     /**

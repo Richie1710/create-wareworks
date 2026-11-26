@@ -257,8 +257,12 @@ public final class WareworksNetwork {
      * ordinal, appended). The production station's goggle data may carry a count of patterns with a fluid. Saves gained
      * the optional {@code FluidCells} list on a pattern slot; an older build ignores it, so a pattern that has only fluid
      * cells and an item result loses its fluid on the next save.
+     * <p>
+     * <b>{@code "32"} is the unreleased version after 0.28.0-beta</b>: {@code RestockOutcome} grew {@code FLUID_PATTERN}
+     * at its end, and every row of {@code StockKeeperScreenState} carries the outcome by ordinal, so an older client
+     * would read it as "this rule applies nothing".
      */
-    public static final String VERSION = "31";
+    public static final String VERSION = "32";
 
     private WareworksNetwork() {
     }

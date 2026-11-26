@@ -184,6 +184,21 @@ import dev.wareworks.core.inventory.StockView;
  *                             location ({@code JobPlanner#collectStorage}), only for a location that may take the key.
  *                             The default is 0 everywhere, which makes an input built without it <b>literally</b> the
  *                             input the planner received before
+ * @param keptAsItem           whether a storage location must not take a key because it would not keep it as an item:
+ *                             a fluid bay drains a filled container, and something still waits for that container
+ *                             itself ({@code core.stock.AwaitedItems}, ADR-089 amendment). Asked by every path that
+ *                             stores into a location ({@code JobPlanner#collectStorage}: the store and collect plans
+ *                             and every reroute into storage, one with advisory filters included; a reroute offers
+ *                             such a location after the places that keep the item and before every port or output
+ *                             that did not ask for it, {@code JobPlanner#planReroute}). A reroute asks it about input
+ *                             stations too: one it names comes after those locations ({@code COLLECT} and
+ *                             {@code STORE} reroutes; a plan never targets an input). While one that the filter
+ *                             allows exists, the store plan offers the key no overflow port either. Asked after the
+ *                             store filter and before the estimate, so it
+ *                             costs no live call and is never remembered as a refusal. An input or collect plan that
+ *                             skipped a location for it and planned nothing reports
+ *                             {@link NoJobReason#AWAITED_AS_ITEM}. The default keeps nothing out, which makes an input
+ *                             built without it <b>literally</b> the input the planner received before
  * @param liveSimulationBudget maximum number of live callback calls per planner run (bounds the cost of a full
  *                             warehouse or a long fall-through)
  * @param <K>                  item key type
@@ -204,7 +219,8 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         ToIntFunction<? super L> portRank, ToLongFunction<? super K> storeHeadroom, FillSupply<K, L> fillSupply,
         List<RelocateNeed<K>> relocations, BiPredicate<? super L, ? super K> relocateTarget,
         BiPredicate<? super L, ? super K> storeHeld, BiPredicate<? super L, ? super K> storeExcluded,
-        ToLongBiFunction<? super L, ? super K> heldAsContents, int liveSimulationBudget) {
+        ToLongBiFunction<? super L, ? super K> heldAsContents, BiPredicate<? super L, ? super K> keptAsItem,
+        int liveSimulationBudget) {
     /**
      * The store headroom of a warehouse no stock rule governs: every key may always be stored (M15, issue #3). It is
      * the builder's default, so an aisle without rules plans exactly as it did before M15.
@@ -301,6 +317,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         Objects.requireNonNull(storeHeld, "storeHeld");
         Objects.requireNonNull(storeExcluded, "storeExcluded");
         Objects.requireNonNull(heldAsContents, "heldAsContents");
+        Objects.requireNonNull(keptAsItem, "keptAsItem");
         if (liveSimulationBudget < 0)
             throw new IllegalArgumentException("liveSimulationBudget must not be negative: " + liveSimulationBudget);
     }
@@ -563,6 +580,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
         private BiPredicate<? super L, ? super K> storeHeld = (location, key) -> false;
         private BiPredicate<? super L, ? super K> storeExcluded = (location, key) -> false;
         private ToLongBiFunction<? super L, ? super K> heldAsContents = (location, key) -> 0L;
+        private BiPredicate<? super L, ? super K> keptAsItem = (location, key) -> false;
         private int liveSimulationBudget = JobPlanner.DEFAULT_LIVE_SIMULATION_BUDGET;
 
         private Builder(StockView<K, L> stock, ReservationView<K, L> reservations) {
@@ -812,6 +830,15 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
             return this;
         }
 
+        /**
+         * Which storage locations would not keep a key as an item and must not take it now
+         * ({@link PlannerInput#keptAsItem()}). Left out, none is.
+         */
+        public Builder<K, L> keptAsItem(BiPredicate<? super L, ? super K> keptAsItem) {
+            this.keptAsItem = keptAsItem;
+            return this;
+        }
+
         public Builder<K, L> liveSimulationBudget(int liveSimulationBudget) {
             this.liveSimulationBudget = liveSimulationBudget;
             return this;
@@ -835,7 +862,7 @@ public record PlannerInput<K, L>(int craneBranch, double craneX, double craneY, 
                     insertEstimate, liveExtract, liveInsert, insertRefused, extractRefused, allOrNothing, roomBound,
                     stackSize, storeFilter, storePriority,
                     portRank, storeHeadroom, fillSupply, relocations, relocateTarget, storeHeld, storeExcluded,
-                    heldAsContents, liveSimulationBudget);
+                    heldAsContents, keptAsItem, liveSimulationBudget);
         }
     }
 }

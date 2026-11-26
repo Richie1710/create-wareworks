@@ -7,6 +7,14 @@ package dev.wareworks.core.job;
  */
 public enum NoJobReason {
     /**
+     * A filled container an input station or a collecting port holds is <b>awaited as an item</b> (ADR-089 amendment):
+     * a production order, a request or a stock keeper minimum waits for it, so a fluid bay, which would drain it, is not
+     * offered it, and no other storage location takes it now. The cure is room on a shelf; once nothing waits any more
+     * the container is poured as usual. Declared first because it names what a player cannot guess from a bay with room
+     * standing beside the input. Arms the back-off like {@link #WAREHOUSE_FULL}: it is reached after the same walk.
+     */
+    AWAITED_AS_ITEM,
+    /**
      * An input station holds items and the storage locations that may take them have no room (back off
      * {@code fullBackoffTicks}). More space or a retrieval relieves it.
      */
@@ -132,8 +140,8 @@ public enum NoJobReason {
      * port's own "Ready: 0" already says better.
      */
     public boolean refusesCollecting() {
-        return this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER || this == NO_LOCATION_FOR_TYPE
-                || this == AT_MAXIMUM;
+        return this == AWAITED_AS_ITEM || this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER
+                || this == NO_LOCATION_FOR_TYPE || this == AT_MAXIMUM;
     }
 
     /**
@@ -142,7 +150,8 @@ public enum NoJobReason {
      * wait. Every other reason is about a request, an output, a machine or the run as a whole.
      */
     public boolean refusesStoring() {
-        return this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER || this == NO_LOCATION_FOR_TYPE
-                || this == PACKAGE_BAY_NEEDS_FILTER || this == PORT_FULL || this == AT_MAXIMUM;
+        return this == AWAITED_AS_ITEM || this == WAREHOUSE_FULL || this == NO_MATCHING_FILTER
+                || this == NO_LOCATION_FOR_TYPE || this == PACKAGE_BAY_NEEDS_FILTER || this == PORT_FULL
+                || this == AT_MAXIMUM;
     }
 }
